@@ -30,7 +30,6 @@ export const CurrencyInput = forwardRef<HTMLInputElement, CurrencyInputProps>(
         ref={ref}
         type="text"
         inputMode="numeric"
-        pattern="[0-9]*"
         autoComplete="off"
         placeholder={placeholder}
         value={valueCents > 0 ? formatCentsDisplay(valueCents) : ""}

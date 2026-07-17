@@ -16,7 +16,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CurrencyInput } from "@/components/forms/currency-input";
 import {
+  FormField,
   FormInput,
   FormSelect,
 } from "@/components/forms/form-controls";
@@ -115,6 +117,14 @@ const typeMap = {
     iconClass: "bg-muted text-muted-foreground",
   },
 } as const;
+
+function amountStringToCents(value: string): number {
+  const parsed = Number(value.replace(",", "."));
+
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+
+  return Math.round(parsed * 100);
+}
 
 function getDefaultCategoryId(type: TransactionType, categories: Category[]) {
   const match =
@@ -655,23 +665,21 @@ function LancamentosPageContent() {
               />
 
               <div className="grid gap-5 sm:grid-cols-2">
-                <FormInput
-                  id="amount"
-                  label="Valor"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  inputMode="decimal"
-                  value={form.amount}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      amount: event.target.value,
-                    }))
-                  }
-                  placeholder="0,00"
-                  required
-                />
+                <FormField id="amount" label="Valor">
+                  <CurrencyInput
+                    id="amount"
+                    valueCents={amountStringToCents(form.amount)}
+                    onValueCentsChange={(nextCents) =>
+                      setForm((current) => ({
+                        ...current,
+                        amount: nextCents > 0 ? String(nextCents / 100) : "",
+                      }))
+                    }
+                    placeholder="0,00"
+                    required
+                    className="h-10 w-full min-w-0 rounded-lg border border-input bg-surface-sunken/60 px-2.5 py-1 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/40"
+                  />
+                </FormField>
 
                 <FormInput
                   id="date"

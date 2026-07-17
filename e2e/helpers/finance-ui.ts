@@ -75,7 +75,7 @@ export async function createExpenseViaUI(
   await expect(page.getByTestId("transaction-form")).toBeVisible();
 
   await page.locator("#description").fill(description);
-  await page.locator("#amount").fill(String(amount));
+  await page.locator("#amount").fill(String(Math.round(amount * 100)));
   await page.locator("#category").selectOption({ label: categoryName });
 
   if (accountName) {
@@ -103,7 +103,7 @@ export async function createIncomeViaUI(
 
   await page.locator("#type").selectOption("income");
   await page.locator("#description").fill(description);
-  await page.locator("#amount").fill(String(amount));
+  await page.locator("#amount").fill(String(Math.round(amount * 100)));
   await page.getByTestId("save-transaction-button").click();
 
   await expect(page.getByText("Lançamento salvo.")).toBeVisible();
