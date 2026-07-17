@@ -64,6 +64,7 @@ import {
 import { createTransaction } from "@/lib/finance/create-transaction";
 import { createRecurrence } from "@/lib/finance/create-recurrence";
 import { endRecurrence } from "@/lib/finance/end-recurrence";
+import { updateRecurrence } from "@/lib/finance/update-recurrence";
 import {
   centsToAmount,
   isPositiveCents,
@@ -74,6 +75,7 @@ import {
   getCreatePredictionValidationError,
   setPredictionProjection,
   settlePrediction,
+  updatePrediction,
 } from "@/lib/finance/predictions";
 import {
   getPredictionDiff,
@@ -155,7 +157,7 @@ type PendingPrediction = {
   scheduledDate: string;
   amount: number;
   description: string;
-  type: TransactionType;
+  type: "expense" | "income";
   accountId: string | null;
   categoryId: string | null;
   includeInProjection: boolean;
@@ -168,7 +170,7 @@ type PendingPredictionRow = {
   scheduled_date: string;
   amount: number;
   description: string;
-  type: TransactionType;
+  type: "expense" | "income";
   account_id: string | null;
   category_id: string | null;
   include_in_projection: boolean;
@@ -350,6 +352,9 @@ function LancamentosPageContent() {
   const [settling, setSettling] = useState(false);
   const [predictionOpen, setPredictionOpen] = useState(false);
   const [predictionSaving, setPredictionSaving] = useState(false);
+  const [editingPredictionId, setEditingPredictionId] = useState<string | null>(
+    null,
+  );
   const [predictionForm, setPredictionForm] = useState<PredictionFormState>({
     description: "",
     amount: "",
@@ -361,6 +366,9 @@ function LancamentosPageContent() {
   });
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingRecurrenceId, setEditingRecurrenceId] = useState<string | null>(
+    null,
+  );
   const [period, setPeriod] = useState<PeriodFilter>(() =>
     parsePeriodFromSearchParams(searchParams),
   );
@@ -696,6 +704,7 @@ function LancamentosPageContent() {
   const listTitle =
     period.mode === "all" ? "Todo o histórico" : "Lançamentos do mês";
   const isEditing = editingId !== null;
+  const isEditingRecurrence = editingRecurrenceId !== null;
   const openedFromQuery = useRef(false);
 
   const normalizedCategories = useMemo(
@@ -735,6 +744,7 @@ function LancamentosPageContent() {
   );
 
   function resetPredictionForm() {
+    setEditingPredictionId(null);
     setPredictionForm({
       description: "",
       amount: "",
@@ -746,7 +756,23 @@ function LancamentosPageContent() {
     });
   }
 
-  async function handleCreatePrediction(event: FormEvent<HTMLFormElement>) {
+  function openEditPrediction(prediction: PendingPrediction) {
+    if (prediction.recurrenceId) return;
+
+    setEditingPredictionId(prediction.id);
+    setPredictionForm({
+      description: prediction.description,
+      amount: String(prediction.amount),
+      type: prediction.type,
+      scheduledDate: prediction.scheduledDate,
+      categoryId: prediction.categoryId ?? "",
+      accountId: prediction.accountId ?? "",
+      includeInProjection: prediction.includeInProjection,
+    });
+    setPredictionOpen(true);
+  }
+
+  async function handleSavePrediction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!user || predictionSaving) return;
@@ -776,8 +802,7 @@ function LancamentosPageContent() {
 
     setPredictionSaving(true);
 
-    const result = await createPrediction(supabase, {
-      ownerUserId: user.id,
+    const sharedInput = {
       familyId: selectedAccount?.family_id ?? null,
       accountId: selectedAccount?.id ?? null,
       categoryId: predictionForm.categoryId || null,
@@ -786,7 +811,16 @@ function LancamentosPageContent() {
       amount,
       scheduledDate: predictionForm.scheduledDate,
       includeInProjection: predictionForm.includeInProjection,
-    });
+    };
+    const result = editingPredictionId
+      ? await updatePrediction(supabase, {
+          predictionId: editingPredictionId,
+          ...sharedInput,
+        })
+      : await createPrediction(supabase, {
+          ownerUserId: user.id,
+          ...sharedInput,
+        });
 
     if (!result.ok) {
       toast.error(result.message);
@@ -800,11 +834,14 @@ function LancamentosPageContent() {
     setPredictionOpen(false);
     setPredictionSaving(false);
     updatePeriod({ mode: "month", monthKey: predictionMonth });
-    toast.success("Previsão criada.");
+    toast.success(
+      editingPredictionId ? "Previsão atualizada." : "Previsão criada.",
+    );
   }
 
   function resetForm() {
     setEditingId(null);
+    setEditingRecurrenceId(null);
     setForm({
       description: "",
       amount: "",
@@ -820,6 +857,30 @@ function LancamentosPageContent() {
       autoConfirm: false,
       includeInProjection: true,
     });
+  }
+
+  function openEditRecurrence(recurrence: TransactionRecurrence) {
+    setEditingId(null);
+    setEditingRecurrenceId(recurrence.id);
+    setForm({
+      description: recurrence.description,
+      amount: String(recurrence.amount),
+      type: recurrence.type,
+      categoryId: recurrence.categoryId ?? "",
+      accountId: recurrence.accountId,
+      date: recurrence.startDate,
+      isRecurring: true,
+      frequency: recurrence.frequency,
+      endType: recurrence.endType,
+      endDate: recurrence.endDate ?? "",
+      occurrencesLimit:
+        recurrence.occurrencesLimit !== null
+          ? String(recurrence.occurrencesLimit)
+          : "",
+      autoConfirm: recurrence.autoConfirm,
+      includeInProjection: recurrence.includeInProjection,
+    });
+    setOpen(true);
   }
 
   function handleOpenNew() {
@@ -850,6 +911,7 @@ function LancamentosPageContent() {
   }
 
   function handleEdit(transaction: Transaction) {
+    setEditingRecurrenceId(null);
     setEditingId(transaction.id);
     setForm({
       description: transaction.description,
@@ -1130,7 +1192,7 @@ function LancamentosPageContent() {
 
     const parsedOccurrencesLimit = Number(form.occurrencesLimit);
     const recurrenceValidationError =
-      !isEditing && form.isRecurring
+      isEditingRecurrence || (!isEditing && form.isRecurring)
         ? getRecurrenceEndValidationError({
             startDate: form.date,
             endType: form.endType,
@@ -1171,6 +1233,75 @@ function LancamentosPageContent() {
       created_by: user.id,
       family_id: selectedAccount.family_id,
     };
+
+    if (isEditingRecurrence && editingRecurrenceId) {
+      const result = await updateRecurrence(supabase, {
+        recurrenceId: editingRecurrenceId,
+        description: payload.description,
+        amount: payload.amount,
+        type: payload.type,
+        categoryId: payload.category_id,
+        accountId: payload.account_id,
+        familyId: selectedAccount.family_id,
+        frequency: form.frequency,
+        startDate: form.date,
+        endType: form.endType,
+        endDate: form.endType === "until_date" ? form.endDate : null,
+        occurrencesLimit:
+          form.endType === "occurrences_count"
+            ? parsedOccurrencesLimit
+            : null,
+        autoConfirm: form.autoConfirm,
+        includeInProjection: form.includeInProjection,
+      });
+
+      if (!result.ok) {
+        toast.error(result.message);
+        setSaving(false);
+        return;
+      }
+
+      await loadData();
+      resetForm();
+      setOpen(false);
+      setSaving(false);
+
+      const syncParts: string[] = [];
+      if (result.updatedPredictions > 0) {
+        syncParts.push(
+          `${result.updatedPredictions} ${
+            result.updatedPredictions === 1
+              ? "previsão pendente atualizada"
+              : "previsões pendentes atualizadas"
+          }`,
+        );
+      }
+      if (result.canceledPredictions > 0) {
+        syncParts.push(
+          `${result.canceledPredictions} ${
+            result.canceledPredictions === 1
+              ? "ocorrência fora da regra cancelada"
+              : "ocorrências fora da regra canceladas"
+          }`,
+        );
+      }
+      if (result.createdPredictions > 0) {
+        syncParts.push(
+          `${result.createdPredictions} ${
+            result.createdPredictions === 1
+              ? "nova previsão gerada"
+              : "novas previsões geradas"
+          }`,
+        );
+      }
+
+      toast.success(
+        syncParts.length > 0
+          ? `Recorrência atualizada. ${syncParts.join(" · ")}.`
+          : "Recorrência atualizada.",
+      );
+      return;
+    }
 
     if (isEditing) {
       const { error } = await supabase
@@ -1297,14 +1428,18 @@ function LancamentosPageContent() {
           data-testid="prediction-form-sheet"
         >
           <SheetHeader className="pb-1">
-            <SheetTitle>Nova previsão</SheetTitle>
+            <SheetTitle>
+              {editingPredictionId ? "Editar previsão" : "Nova previsão"}
+            </SheetTitle>
             <SheetDescription>
-              Planeje uma receita ou despesa sem criar um lançamento real.
+              {editingPredictionId
+                ? "Corrija os dados desta previsão avulsa pendente."
+                : "Planeje uma receita ou despesa sem criar um lançamento real."}
             </SheetDescription>
           </SheetHeader>
 
           <form
-            onSubmit={handleCreatePrediction}
+            onSubmit={handleSavePrediction}
             className="flex flex-col gap-5 px-4 pt-2"
             data-testid="prediction-form"
           >
@@ -1406,6 +1541,7 @@ function LancamentosPageContent() {
                 {postableAccounts.map((account) => (
                   <option key={account.id} value={account.id}>
                     {account.name}
+                    {account.account_mode === "forecast" ? " (provisão)" : ""}
                     {account.is_family_shared ? " (familiar)" : " (pessoal)"}
                   </option>
                 ))}
@@ -1462,7 +1598,9 @@ function LancamentosPageContent() {
                       Salvando...
                     </>
                   ) : (
-                    "Salvar previsão"
+                    editingPredictionId
+                      ? "Salvar alterações"
+                      : "Salvar previsão"
                   )}
                 </Button>
               </div>
@@ -1481,14 +1619,20 @@ function LancamentosPageContent() {
         <SheetContent side="right" className="flex w-full flex-col p-0 sm:max-w-xl">
           <SheetHeader>
             <SheetTitle>
-              {isEditing ? "Editar lançamento" : "Novo lançamento"}
+              {isEditingRecurrence
+                ? "Editar recorrência"
+                : isEditing
+                  ? "Editar lançamento"
+                  : "Novo lançamento"}
             </SheetTitle>
             <SheetDescription>
-              {isEditing
-                ? "Atualize os dados do lançamento selecionado."
-                : form.isRecurring
-                  ? "Crie um modelo e gere as próximas ocorrências previstas."
-                  : "Registre uma receita, despesa ou transferência."}
+              {isEditingRecurrence
+                ? "Altera a regra da recorrência e atualiza as previsões pendentes dela. Liquidadas e canceladas não mudam."
+                : isEditing
+                  ? "Atualize os dados do lançamento selecionado."
+                  : form.isRecurring
+                    ? "Crie um modelo e gere as próximas ocorrências previstas."
+                    : "Registre uma receita, despesa ou transferência."}
             </SheetDescription>
           </SheetHeader>
 
@@ -1545,7 +1689,11 @@ function LancamentosPageContent() {
 
                 <FormInput
                   id="date"
-                  label={form.isRecurring ? "Data inicial" : "Data"}
+                  label={
+                    isEditingRecurrence || form.isRecurring
+                      ? "Data inicial"
+                      : "Data"
+                  }
                   type="date"
                   value={form.date}
                   onChange={(event) =>
@@ -1592,7 +1740,7 @@ function LancamentosPageContent() {
                     <option key={account.id} value={account.id}>
                       {account.name}
                       {account.account_mode === "forecast"
-                        ? " (previsão)"
+                        ? " (provisão)"
                         : ""}
                       {account.is_family_shared ? " (familiar)" : " (pessoal)"}
                     </option>
@@ -1600,31 +1748,48 @@ function LancamentosPageContent() {
                 </FormSelect>
               </div>
 
-              {!isEditing ? (
+              {!isEditing || isEditingRecurrence ? (
                 <div className="space-y-4 rounded-xl border border-border/50 bg-muted/20 p-4">
-                  <div className="flex items-start gap-3">
-                    <input
-                      id="is-recurring"
-                      type="checkbox"
-                      checked={form.isRecurring}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          isRecurring: event.target.checked,
-                        }))
-                      }
-                      className="mt-0.5 size-4 rounded border-input accent-primary"
-                    />
+                  {isEditingRecurrence ? (
                     <div className="space-y-1">
-                      <Label htmlFor="is-recurring">Recorrente</Label>
+                      <p className="text-sm font-medium">Regra da recorrência</p>
                       <p className="text-sm text-muted-foreground">
-                        Salva um modelo e cria ocorrências previstas.
+                        As previsões pendentes desta recorrência serão
+                        atualizadas. Datas que deixarem de fazer parte da regra
+                        serão canceladas.
                       </p>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="flex items-start gap-3">
+                      <input
+                        id="is-recurring"
+                        type="checkbox"
+                        checked={form.isRecurring}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            isRecurring: event.target.checked,
+                          }))
+                        }
+                        className="mt-0.5 size-4 rounded border-input accent-primary"
+                      />
+                      <div className="space-y-1">
+                        <Label htmlFor="is-recurring">Recorrente</Label>
+                        <p className="text-sm text-muted-foreground">
+                          Salva um modelo e cria ocorrências previstas.
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
-                  {form.isRecurring ? (
-                    <div className="grid gap-5 border-t border-border/50 pt-4">
+                  {isEditingRecurrence || form.isRecurring ? (
+                    <div
+                      className={`grid gap-5 ${
+                        isEditingRecurrence
+                          ? ""
+                          : "border-t border-border/50 pt-4"
+                      }`}
+                    >
                       <div className="grid gap-5 sm:grid-cols-2">
                         <FormSelect
                           id="recurrence-frequency"
@@ -1772,7 +1937,7 @@ function LancamentosPageContent() {
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Salvando...
                     </>
-                  ) : isEditing ? (
+                  ) : isEditingRecurrence || isEditing ? (
                     "Salvar alterações"
                   ) : form.isRecurring ? (
                     "Salvar recorrência"
@@ -1858,6 +2023,7 @@ function LancamentosPageContent() {
                 {postableAccounts.map((account) => (
                   <option key={account.id} value={account.id}>
                     {account.name}
+                    {account.account_mode === "forecast" ? " (provisão)" : ""}
                     {account.is_family_shared ? " (familiar)" : " (pessoal)"}
                   </option>
                 ))}
@@ -2163,6 +2329,17 @@ function LancamentosPageContent() {
                         </label>
                         <Button
                           type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          disabled={endingRecurrenceId !== null}
+                          onClick={() => openEditRecurrence(recurrence)}
+                          aria-label={`Editar recorrência ${recurrence.description}`}
+                          data-testid={`edit-recurrence-${recurrence.id}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
                           size="sm"
                           variant="outline"
                           disabled={endingRecurrenceId !== null}
@@ -2285,7 +2462,7 @@ function LancamentosPageContent() {
                           {prediction.recurrenceId ? (
                             <>
                               <span aria-hidden> · </span>
-                              Recorrente
+                              Recorrente · edite no card de Recorrências
                             </>
                           ) : null}
                         </p>
@@ -2323,6 +2500,19 @@ function LancamentosPageContent() {
                             ? "Atualizando..."
                             : "Projetar"}
                         </label>
+                        {!prediction.recurrenceId ? (
+                          <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="ghost"
+                            disabled={settlingPredictionId !== null}
+                            onClick={() => openEditPrediction(prediction)}
+                            aria-label={`Editar previsão ${prediction.description}`}
+                            data-testid={`edit-prediction-${prediction.id}`}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        ) : null}
                         <Button
                           type="button"
                           size="sm"

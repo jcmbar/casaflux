@@ -6,6 +6,7 @@ import {
   createPrediction,
   getCreatePredictionValidationError,
   setPredictionProjection,
+  updatePrediction,
 } from "./predictions";
 
 describe("createPrediction", () => {
@@ -109,6 +110,79 @@ describe("getCreatePredictionValidationError", () => {
         scheduledDate: "20/07/2026",
       }),
     ).toBe("Informe uma data agendada válida.");
+  });
+});
+
+describe("updatePrediction", () => {
+  it("updates only a standalone pending prediction and feeds aggregates with the new values", async () => {
+    const row = {
+      id: "prediction-1",
+      recurrence_id: null,
+      owner_user_id: "user-1",
+      family_id: null,
+      account_id: "account-1",
+      category_id: "category-1",
+      type: "income",
+      description: "Bônus corrigido",
+      amount: 250,
+      scheduled_date: "2026-08-10",
+      status: "predicted",
+      include_in_projection: false,
+      settled_transaction_id: null,
+      settled_date: null,
+      settled_amount: null,
+      created_at: "2026-07-17T12:00:00Z",
+      updated_at: "2026-07-17T13:00:00Z",
+    };
+    const single = vi.fn().mockResolvedValue({ data: row, error: null });
+    const select = vi.fn(() => ({ single }));
+    const builder = {
+      eq: vi.fn(),
+      is: vi.fn(),
+      select,
+    };
+    builder.eq.mockReturnValue(builder);
+    builder.is.mockReturnValue(builder);
+    const update = vi.fn(() => builder);
+    const from = vi.fn(() => ({ update }));
+
+    const result = await updatePrediction(
+      { from } as unknown as SupabaseClient,
+      {
+        predictionId: "prediction-1",
+        familyId: null,
+        accountId: "account-1",
+        categoryId: "category-1",
+        type: "income",
+        description: "  Bônus corrigido  ",
+        amount: 250,
+        scheduledDate: "2026-08-10",
+        includeInProjection: false,
+      },
+    );
+
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: "Bônus corrigido",
+        amount: 250,
+        scheduled_date: "2026-08-10",
+        include_in_projection: false,
+      }),
+    );
+    expect(builder.eq).toHaveBeenCalledWith("id", "prediction-1");
+    expect(builder.eq).toHaveBeenCalledWith("status", "predicted");
+    expect(builder.is).toHaveBeenCalledWith("recurrence_id", null);
+    expect(result.ok).toBe(true);
+
+    if (result.ok) {
+      expect(
+        getMonthlyPredictionAggregates([result.prediction], "2026-08"),
+      ).toEqual({
+        predicted: 250,
+        realized: 0,
+        delta: -250,
+      });
+    }
   });
 });
 

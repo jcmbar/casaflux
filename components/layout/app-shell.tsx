@@ -24,7 +24,10 @@ export function AppShell({ children }: AppShellProps) {
           <div className="flex min-w-0 flex-1 flex-col">
             <AppHeader />
 
-            <main className="relative flex-1 overflow-auto pb-[calc(3.5rem+env(safe-area-inset-bottom,0px))] lg:pb-0">
+            {/* Bottom padding reserves scroll clearance for the bottom nav and
+                the quick-add FAB, so trailing list items (and their action
+                menus) can always scroll above the floating button. */}
+            <main className="relative flex-1 overflow-auto pb-[calc(8.5rem+env(safe-area-inset-bottom,0px))] lg:pb-24">
               <div
                 aria-hidden
                 className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,var(--tw-gradient-stops))] from-primary/[0.06] via-transparent to-transparent dark:from-primary/[0.08]"

@@ -330,7 +330,7 @@ export default function ContasPage() {
 
   return (
     <div className="space-y-6 md:space-y-8">
-      <PageIntro description="Contas reais e previsões para organizar seus saldos." />
+      <PageIntro description="Contas do dia a dia e provisões para organizar seus saldos." />
 
       <div className="flex justify-stretch sm:justify-end">
         <Button onClick={handleOpenNew} className="w-full shadow-sm sm:w-auto">
@@ -389,9 +389,17 @@ export default function ContasPage() {
               >
                 <option value="real">Real — saldo disponível</option>
                 <option value="forecast">
-                  Previsão — provisionamento futuro
+                  Provisão — reserva para planejamento
                 </option>
               </FormSelect>
+
+              {form.accountMode === "forecast" ? (
+                <p className="-mt-3 text-xs text-muted-foreground">
+                  Contas de provisão só separam um valor reservado e ficam fora
+                  do saldo real. Para registrar uma receita ou despesa futura,
+                  use “Nova previsão” em Lançamentos.
+                </p>
+              ) : null}
 
               <FormInput
                 id="name"
@@ -551,7 +559,7 @@ export default function ContasPage() {
               {forecastAccounts.length > 0 ? (
                 <div className="border-l border-border/60 pl-5 text-left sm:text-right">
                   <p className="text-xs text-muted-foreground">
-                    Saldo previsto
+                    Saldo provisionado
                   </p>
                   <p className="text-xl font-semibold tracking-tight text-sky-700 tabular-nums dark:text-sky-300">
                     {formatCurrency(forecastBalance)}
@@ -621,7 +629,7 @@ export default function ContasPage() {
                               className="border-sky-300/70 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300"
                             >
                               <CalendarClock className="mr-1 h-3 w-3" />
-                              Previsão
+                              Provisão
                             </Badge>
                           ) : null}
                           <Badge variant="outline" className="border-border/60">
@@ -646,7 +654,7 @@ export default function ContasPage() {
                     <div className="flex items-center justify-between gap-3 sm:justify-end">
                       <div className="text-left sm:text-right">
                         <p className="text-xs text-muted-foreground">
-                          {isForecast ? "Previsto" : "Saldo"}
+                          {isForecast ? "Provisionado" : "Saldo"}
                         </p>
                         <p
                           className={`text-lg font-semibold tabular-nums ${

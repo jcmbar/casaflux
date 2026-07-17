@@ -88,6 +88,68 @@ export async function createPrediction(
   };
 }
 
+export type UpdatePredictionInput = Pick<
+  CreatePredictionInput,
+  | "familyId"
+  | "accountId"
+  | "categoryId"
+  | "type"
+  | "description"
+  | "amount"
+  | "scheduledDate"
+  | "includeInProjection"
+> & {
+  predictionId: string;
+};
+
+export type UpdatePredictionResult =
+  | { ok: true; prediction: FinancialPrediction }
+  | { ok: false; message: string };
+
+/** Updates a standalone prediction while it is still pending. */
+export async function updatePrediction(
+  supabase: SupabaseClient,
+  input: UpdatePredictionInput,
+): Promise<UpdatePredictionResult> {
+  const validationError = getCreatePredictionValidationError(input);
+
+  if (validationError) {
+    return { ok: false, message: validationError };
+  }
+
+  const { data, error } = await supabase
+    .from("financial_predictions")
+    .update({
+      family_id: input.familyId,
+      account_id: input.accountId,
+      category_id: input.categoryId,
+      type: input.type,
+      description: input.description.trim(),
+      amount: input.amount,
+      scheduled_date: input.scheduledDate,
+      include_in_projection: input.includeInProjection,
+    })
+    .eq("id", input.predictionId)
+    .eq("status", "predicted")
+    .is("recurrence_id", null)
+    .select("*")
+    .single();
+
+  if (error || !data) {
+    console.error(error);
+    return {
+      ok: false,
+      message: "Não foi possível atualizar a previsão avulsa pendente.",
+    };
+  }
+
+  notifyRecurrencesChanged();
+  return {
+    ok: true,
+    prediction: mapFinancialPrediction(data as FinancialPredictionRow),
+  };
+}
+
 export type SettlePredictionInput = {
   predictionId: string;
   /** Real account used for the payment/receipt. */

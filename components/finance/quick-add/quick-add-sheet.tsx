@@ -628,7 +628,7 @@ export function QuickAddSheet() {
                     >
                       {account.name}
                       {account.account_mode === "forecast"
-                        ? " · Previsão"
+                        ? " · Provisão"
                         : ""}
                     </button>
                   );

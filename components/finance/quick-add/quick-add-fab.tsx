@@ -21,7 +21,7 @@ export function QuickAddFab({ disabled = false }: QuickAddFabProps) {
         type="button"
         size="icon-lg"
         className={cn(
-          "fixed right-4 z-50 size-14 rounded-full shadow-lg",
+          "fixed right-4 z-40 size-14 rounded-full shadow-lg",
           "bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)+0.75rem)]",
           "lg:bottom-6 lg:right-6",
           open && "pointer-events-none opacity-0",
