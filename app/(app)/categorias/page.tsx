@@ -1,5 +1,7 @@
 "use client";
 
+export const dynamic = "force-dynamic";
+
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
