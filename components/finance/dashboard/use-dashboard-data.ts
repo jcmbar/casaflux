@@ -24,11 +24,10 @@ import {
 import {
   filterAccountsByFinanceScope,
   getFinanceViewScope,
-  getScopedAccountIds,
 } from "@/lib/finance/finance-scope";
 import { TRANSACTIONS_SELECT } from "@/lib/finance/transactions-query";
 import { createClient } from "@/lib/supabase/client";
-import type { Account } from "@/types/account";
+import { filterRealAccounts, type Account } from "@/types/account";
 import { mapTransaction, type TransactionRow } from "@/types/transaction";
 
 type FamilyMemberRow = {
@@ -116,18 +115,16 @@ export function useDashboardData(): DashboardData {
       (accountsRes.data ?? []) as Account[],
       scope,
     );
-    const scopedAccountIds = getScopedAccountIds(
-      (accountsRes.data ?? []) as Account[],
-      scope,
-    );
+    const realAccounts = filterRealAccounts(scopedAccounts);
+    const realAccountIds = realAccounts.map((account) => account.id);
 
     let rows: TransactionRow[] = [];
 
-    if (scopedAccountIds.length > 0) {
+    if (realAccountIds.length > 0) {
       const transactionsRes = await supabase
         .from("transactions")
         .select(TRANSACTIONS_SELECT)
-        .in("account_id", scopedAccountIds)
+        .in("account_id", realAccountIds)
         .order("transaction_date", { ascending: false })
         .order("created_at", { ascending: false });
 
@@ -142,7 +139,7 @@ export function useDashboardData(): DashboardData {
     }
 
     setTransactionRows(rows);
-    setAccounts(scopedAccounts);
+    setAccounts(realAccounts);
     setCategoryNames(
       new Map(
         (categoriesRes.data ?? []).map((category) => [

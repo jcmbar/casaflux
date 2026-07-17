@@ -60,8 +60,17 @@ import {
 import { createTransaction } from "@/lib/finance/create-transaction";
 import { createRecurrence } from "@/lib/finance/create-recurrence";
 import {
-  confirmRecurrenceOccurrence,
-} from "@/lib/finance/confirm-recurrence-occurrence";
+  centsToAmount,
+  isPositiveCents,
+} from "@/lib/finance/currency-input";
+import {
+  cancelPrediction,
+  settlePrediction,
+} from "@/lib/finance/predictions";
+import {
+  getPredictionDiff,
+  type PredictionDiff,
+} from "@/lib/finance/prediction-diff";
 import { getRecurrenceEndValidationError } from "@/lib/finance/recurrence-validation";
 import { CATEGORIES_CHANGED_EVENT } from "@/lib/finance/category-events";
 import {
@@ -112,28 +121,28 @@ type FormState = {
   autoConfirm: boolean;
 };
 
-type PredictedOccurrence = {
+type PendingPrediction = {
   id: string;
-  recurrenceId: string;
+  recurrenceId: string | null;
+  ownerUserId: string;
   scheduledDate: string;
   amount: number;
   description: string;
   type: TransactionType;
-  accountId: string;
+  accountId: string | null;
   categoryId: string | null;
 };
 
-type PredictedOccurrenceRow = {
+type PendingPredictionRow = {
   id: string;
-  recurrence_id: string;
+  recurrence_id: string | null;
+  owner_user_id: string;
   scheduled_date: string;
   amount: number;
-  transaction_recurrences: {
-    description: string;
-    type: TransactionType;
-    account_id: string;
-    category_id: string | null;
-  };
+  description: string;
+  type: TransactionType;
+  account_id: string | null;
+  category_id: string | null;
 };
 
 const typeMap = {
@@ -159,6 +168,62 @@ const typeMap = {
     iconClass: "bg-muted text-muted-foreground",
   },
 } as const;
+
+function PredictionDiffLine({
+  diff,
+  note,
+  className = "",
+}: {
+  diff: PredictionDiff;
+  note?: string;
+  className?: string;
+}) {
+  if (diff.kind === "equal") {
+    return (
+      <p className={`text-xs text-muted-foreground ${className}`}>
+        Igual ao previsto{note ? ` ${note}` : "."}
+      </p>
+    );
+  }
+
+  const Icon = diff.kind === "above" ? ArrowUpRight : ArrowDownLeft;
+  const tone =
+    diff.kind === "above"
+      ? "text-amber-600 dark:text-amber-400"
+      : "text-primary";
+
+  return (
+    <p
+      className={`flex items-center gap-1 text-xs font-medium ${tone} ${className}`}
+    >
+      <Icon className="size-3.5 shrink-0" aria-hidden />
+      {formatCurrency(diff.amount)}{" "}
+      {diff.kind === "above" ? "acima" : "abaixo"} do previsto
+    </p>
+  );
+}
+
+function SettlementDiffHint({
+  predictedAmount,
+  amountCents,
+}: {
+  predictedAmount: number;
+  amountCents: number;
+}) {
+  const isEmpty = amountCents <= 0;
+  const diff = getPredictionDiff(
+    predictedAmount,
+    isEmpty ? predictedAmount : amountCents / 100,
+  );
+
+  return (
+    <PredictionDiffLine
+      diff={diff}
+      className="-mt-2"
+      note={isEmpty ? "— deixe em branco para usar o valor previsto." : undefined}
+    />
+  );
+}
 
 function amountStringToCents(value: string): number {
   const parsed = Number(value.replace(",", "."));
@@ -201,9 +266,12 @@ function LancamentosPageContent() {
   const confirm = useConfirm();
   const { user, activeFamily, isFamilyAdmin } = useAppContext();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [predictedOccurrences, setPredictedOccurrences] = useState<
-    PredictedOccurrence[]
+  const [pendingPredictions, setPendingPredictions] = useState<
+    PendingPrediction[]
   >([]);
+  const [settledDiffByTransactionId, setSettledDiffByTransactionId] = useState<
+    Map<string, PredictionDiff>
+  >(new Map());
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryVisibility, setCategoryVisibility] =
@@ -212,9 +280,18 @@ function LancamentosPageContent() {
     });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [confirmingOccurrenceId, setConfirmingOccurrenceId] = useState<
+  const [settlingPredictionId, setSettlingPredictionId] = useState<
     string | null
   >(null);
+  const [settleTarget, setSettleTarget] = useState<PendingPrediction | null>(
+    null,
+  );
+  const [settleForm, setSettleForm] = useState({
+    accountId: "",
+    date: new Date().toISOString().slice(0, 10),
+    amountCents: 0,
+  });
+  const [settling, setSettling] = useState(false);
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [period, setPeriod] = useState<PeriodFilter>(() =>
@@ -287,10 +364,11 @@ function LancamentosPageContent() {
     );
 
     let transactionRows: TransactionRow[] = [];
-    let occurrenceRows: PredictedOccurrenceRow[] = [];
+    let predictionRows: PendingPredictionRow[] = [];
+    const settledDiffs = new Map<string, PredictionDiff>();
 
     if (scopedAccountIds.length > 0) {
-      const [transactionsRes, occurrencesRes] = await Promise.all([
+      const [transactionsRes, predictionsRes, settledRes] = await Promise.all([
         supabase
           .from("transactions")
           .select(TRANSACTIONS_SELECT)
@@ -298,26 +376,18 @@ function LancamentosPageContent() {
           .order("transaction_date", { ascending: false })
           .order("created_at", { ascending: false }),
         supabase
-          .from("transaction_recurrence_occurrences")
+          .from("financial_predictions")
           .select(
-            `
-              id,
-              recurrence_id,
-              scheduled_date,
-              amount,
-              transaction_recurrences!inner (
-                description,
-                type,
-                account_id,
-                category_id
-              )
-            `,
+            "id, recurrence_id, owner_user_id, scheduled_date, amount, description, type, account_id, category_id",
           )
           .eq("status", "predicted")
-          .in("transaction_recurrences.account_id", scopedAccountIds)
-          .gte("scheduled_date", new Date().toISOString().slice(0, 10))
           .order("scheduled_date", { ascending: true })
           .limit(20),
+        supabase
+          .from("financial_predictions")
+          .select("amount, settled_amount, settled_transaction_id")
+          .eq("status", "settled")
+          .not("settled_transaction_id", "is", null),
       ]);
 
       if (transactionsRes.error) {
@@ -326,11 +396,37 @@ function LancamentosPageContent() {
         transactionRows = (transactionsRes.data ?? []) as TransactionRow[];
       }
 
-      if (occurrencesRes.error) {
-        console.error(occurrencesRes.error);
+      if (predictionsRes.error) {
+        console.error(predictionsRes.error);
       } else {
-        occurrenceRows = (occurrencesRes.data ??
-          []) as unknown as PredictedOccurrenceRow[];
+        const scopedIds = new Set(scopedAccountIds);
+        predictionRows = (
+          (predictionsRes.data ?? []) as PendingPredictionRow[]
+        ).filter(
+          (row) =>
+            row.account_id
+              ? scopedIds.has(row.account_id)
+              : row.owner_user_id === user?.id,
+        );
+      }
+
+      if (settledRes.error) {
+        console.error(settledRes.error);
+      } else {
+        for (const row of (settledRes.data ?? []) as {
+          amount: number | string;
+          settled_amount: number | string | null;
+          settled_transaction_id: string | null;
+        }[]) {
+          if (!row.settled_transaction_id) continue;
+          const predicted = Number(row.amount);
+          const actual =
+            row.settled_amount === null ? predicted : Number(row.settled_amount);
+          settledDiffs.set(
+            row.settled_transaction_id,
+            getPredictionDiff(predicted, actual),
+          );
+        }
       }
     }
 
@@ -356,16 +452,18 @@ function LancamentosPageContent() {
     setCategoryVisibility(visibility);
 
     setTransactions(transactionRows.map((row) => mapTransaction(row)));
-    setPredictedOccurrences(
-      occurrenceRows.map((row) => ({
+    setSettledDiffByTransactionId(settledDiffs);
+    setPendingPredictions(
+      predictionRows.map((row) => ({
         id: row.id,
         recurrenceId: row.recurrence_id,
+        ownerUserId: row.owner_user_id,
         scheduledDate: row.scheduled_date,
         amount: Number(row.amount),
-        description: row.transaction_recurrences.description,
-        type: row.transaction_recurrences.type,
-        accountId: row.transaction_recurrences.account_id,
-        categoryId: row.transaction_recurrences.category_id,
+        description: row.description,
+        type: row.type,
+        accountId: row.account_id,
+        categoryId: row.category_id,
       })),
     );
 
@@ -629,24 +727,87 @@ function LancamentosPageContent() {
     toast.success("Lançamento excluído.");
   }
 
-  async function handleConfirmOccurrence(occurrence: PredictedOccurrence) {
-    if (confirmingOccurrenceId) return;
+  function openSettleDialog(prediction: PendingPrediction) {
+    if (postableAccounts.length === 0) {
+      toast.error("Nenhuma conta disponível para liquidar a previsão.");
+      return;
+    }
 
-    setConfirmingOccurrenceId(occurrence.id);
-    const result = await confirmRecurrenceOccurrence(
-      supabase,
-      occurrence.id,
+    const predictedAccountIsPostable = postableAccounts.some(
+      (account) => account.id === prediction.accountId,
     );
+
+    setSettleForm({
+      accountId: predictedAccountIsPostable
+        ? prediction.accountId!
+        : postableAccounts[0].id,
+      date: new Date().toISOString().slice(0, 10),
+      amountCents: 0,
+    });
+    setSettleTarget(prediction);
+  }
+
+  function closeSettleDialog() {
+    setSettleTarget(null);
+    setSettling(false);
+  }
+
+  async function handleConfirmSettlement(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!settleTarget || settling) return;
+
+    if (!settleForm.accountId || !settleForm.date) {
+      toast.error("Informe a conta e a data da liquidação.");
+      return;
+    }
+
+    setSettling(true);
+
+    const result = await settlePrediction(supabase, {
+      predictionId: settleTarget.id,
+      accountId: settleForm.accountId,
+      settledDate: settleForm.date,
+      amount: isPositiveCents(settleForm.amountCents)
+        ? centsToAmount(settleForm.amountCents)
+        : undefined,
+    });
 
     if (!result.ok) {
       toast.error(result.message);
-      setConfirmingOccurrenceId(null);
+      setSettling(false);
       return;
     }
 
     await loadData();
-    setConfirmingOccurrenceId(null);
-    toast.success("Ocorrência confirmada e lançamento criado.");
+    closeSettleDialog();
+    toast.success("Previsão liquidada e lançamento criado.");
+  }
+
+  async function handleCancelPrediction(prediction: PendingPrediction) {
+    if (settlingPredictionId) return;
+
+    const confirmed = await confirm({
+      title: "Cancelar previsão",
+      description: `Cancelar a previsão "${prediction.description}"? Nenhum lançamento será criado.`,
+      confirmLabel: "Cancelar previsão",
+      destructive: true,
+    });
+
+    if (!confirmed) return;
+
+    setSettlingPredictionId(prediction.id);
+    const result = await cancelPrediction(supabase, prediction.id);
+
+    if (!result.ok) {
+      toast.error(result.message);
+      setSettlingPredictionId(null);
+      return;
+    }
+
+    await loadData();
+    setSettlingPredictionId(null);
+    toast.success("Previsão cancelada.");
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -921,6 +1082,9 @@ function LancamentosPageContent() {
                   {postableAccounts.map((account) => (
                     <option key={account.id} value={account.id}>
                       {account.name}
+                      {account.account_mode === "forecast"
+                        ? " (previsão)"
+                        : ""}
                       {account.is_family_shared ? " (familiar)" : " (pessoal)"}
                     </option>
                   ))}
@@ -1090,6 +1254,159 @@ function LancamentosPageContent() {
         </SheetContent>
       </Sheet>
 
+      <Sheet
+        open={settleTarget !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) closeSettleDialog();
+        }}
+      >
+        <SheetContent
+          side="bottom"
+          className="max-h-[92dvh] overflow-y-auto rounded-t-2xl pb-[calc(env(safe-area-inset-bottom,0px)+0.5rem)] sm:mx-auto sm:max-w-lg"
+          data-testid="settle-prediction-sheet"
+        >
+          <SheetHeader className="pb-1">
+            <SheetTitle>Liquidar previsão</SheetTitle>
+            <SheetDescription>
+              Informe como o {settleTarget?.type === "income"
+                ? "recebimento"
+                : "pagamento"}{" "}
+              aconteceu de verdade.
+            </SheetDescription>
+          </SheetHeader>
+
+          {settleTarget ? (
+            <form
+              onSubmit={handleConfirmSettlement}
+              className="flex flex-col gap-5 px-4 pt-2"
+            >
+              <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">
+                      {settleTarget.description}
+                    </p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Previsto para {formatDate(settleTarget.scheduledDate)}
+                      <span aria-hidden> · </span>
+                      {settleTarget.categoryId
+                        ? categoryMap.get(settleTarget.categoryId)?.name ??
+                          "Sem categoria"
+                        : "Sem categoria"}
+                    </p>
+                    <p className="mt-0.5 text-sm text-muted-foreground">
+                      Conta prevista:{" "}
+                      {settleTarget.accountId
+                        ? accountMap.get(settleTarget.accountId)?.name ??
+                          "Conta"
+                        : "a definir"}
+                    </p>
+                  </div>
+                  <span
+                    className={`shrink-0 font-semibold tabular-nums ${typeMap[settleTarget.type].valueClass}`}
+                  >
+                    {settleTarget.type === "expense" ? "-" : ""}
+                    {formatCurrency(settleTarget.amount)}
+                  </span>
+                </div>
+              </div>
+
+              <FormSelect
+                id="settle-account"
+                label="Conta utilizada"
+                value={settleForm.accountId}
+                onChange={(event) =>
+                  setSettleForm((current) => ({
+                    ...current,
+                    accountId: event.target.value,
+                  }))
+                }
+                required
+              >
+                {postableAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                    {account.is_family_shared ? " (familiar)" : " (pessoal)"}
+                  </option>
+                ))}
+              </FormSelect>
+
+              <div className="grid gap-5 sm:grid-cols-2">
+                <FormInput
+                  id="settle-date"
+                  label={
+                    settleTarget.type === "income"
+                      ? "Data do recebimento"
+                      : "Data do pagamento"
+                  }
+                  type="date"
+                  value={settleForm.date}
+                  onChange={(event) =>
+                    setSettleForm((current) => ({
+                      ...current,
+                      date: event.target.value,
+                    }))
+                  }
+                  required
+                />
+
+                <FormField id="settle-amount" label="Valor real (opcional)">
+                  <CurrencyInput
+                    id="settle-amount"
+                    valueCents={settleForm.amountCents}
+                    onValueCentsChange={(nextCents) =>
+                      setSettleForm((current) => ({
+                        ...current,
+                        amountCents: nextCents,
+                      }))
+                    }
+                    placeholder={formatCurrency(settleTarget.amount)}
+                    className="h-10 w-full min-w-0 rounded-lg border border-input bg-surface-sunken/60 px-2.5 py-1 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/40"
+                    data-testid="settle-amount-input"
+                  />
+                </FormField>
+              </div>
+
+              <SettlementDiffHint
+                predictedAmount={settleTarget.amount}
+                amountCents={settleForm.amountCents}
+              />
+
+              <SheetFooter className="px-0 pb-2">
+                <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={closeSettleDialog}
+                    disabled={settling}
+                  >
+                    Voltar
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="shadow-sm"
+                    disabled={settling}
+                    data-testid="confirm-settlement-button"
+                  >
+                    {settling ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Liquidando...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="h-4 w-4" />
+                        Confirmar liquidação
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </SheetFooter>
+            </form>
+          ) : null}
+        </SheetContent>
+      </Sheet>
+
       <Card
         className="animate-enter-delayed border-border/50 shadow-sm"
         data-testid="lancamentos-summary"
@@ -1140,39 +1457,43 @@ function LancamentosPageContent() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 font-semibold">
             <CalendarClock className="size-5 text-primary" />
-            Próximos recorrentes
+            Previsões pendentes
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           {loading ? (
             <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Carregando ocorrências...
+              Carregando previsões...
             </div>
-          ) : predictedOccurrences.length === 0 ? (
+          ) : pendingPredictions.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 px-6 py-8 text-center">
               <p className="text-sm font-medium">
-                Nenhuma ocorrência prevista
+                Nenhuma previsão pendente
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                As próximas ocorrências de modelos recorrentes aparecerão aqui.
+                Previsões avulsas e ocorrências de recorrências aparecerão aqui.
               </p>
             </div>
           ) : (
             <div className="divide-y divide-border/60">
-              {predictedOccurrences.map((occurrence) => {
-                const config = typeMap[occurrence.type];
+              {pendingPredictions.map((prediction) => {
+                const config = typeMap[prediction.type];
                 const Icon = config.icon;
-                const account = accountMap.get(occurrence.accountId);
-                const category = occurrence.categoryId
-                  ? categoryMap.get(occurrence.categoryId)
+                const account = prediction.accountId
+                  ? accountMap.get(prediction.accountId)
                   : null;
-                const isConfirming =
-                  confirmingOccurrenceId === occurrence.id;
+                const category = prediction.categoryId
+                  ? categoryMap.get(prediction.categoryId)
+                  : null;
+                const isBusy = settlingPredictionId === prediction.id;
+                const isOverdue =
+                  prediction.scheduledDate <
+                  new Date().toISOString().slice(0, 10);
 
                 return (
                   <div
-                    key={occurrence.id}
+                    key={prediction.id}
                     className="flex flex-col gap-3 py-4 first:pt-2 last:pb-2 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div className="flex min-w-0 items-start gap-3">
@@ -1183,15 +1504,26 @@ function LancamentosPageContent() {
                       </div>
                       <div className="min-w-0">
                         <p className="font-medium">
-                          {occurrence.description}
+                          {prediction.description}
                         </p>
                         <p className="mt-1 text-sm text-muted-foreground">
-                          {formatDate(occurrence.scheduledDate)}
+                          {formatDate(prediction.scheduledDate)}
                           <span aria-hidden> · </span>
                           {category?.name ?? "Sem categoria"}
                           <span aria-hidden> · </span>
-                          {account?.name ?? "Conta"}
+                          {account?.name ?? "Conta a definir"}
+                          {prediction.recurrenceId ? (
+                            <>
+                              <span aria-hidden> · </span>
+                              Recorrente
+                            </>
+                          ) : null}
                         </p>
+                        {isOverdue ? (
+                          <p className="mt-1 text-xs font-medium text-muted-foreground">
+                            Ainda não realizado
+                          </p>
+                        ) : null}
                       </div>
                     </div>
 
@@ -1199,23 +1531,38 @@ function LancamentosPageContent() {
                       <span
                         className={`font-semibold tabular-nums ${config.valueClass}`}
                       >
-                        {occurrence.type === "expense" ? "-" : ""}
-                        {formatCurrency(occurrence.amount)}
+                        {prediction.type === "expense" ? "-" : ""}
+                        {formatCurrency(prediction.amount)}
                       </span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={confirmingOccurrenceId !== null}
-                        onClick={() => void handleConfirmOccurrence(occurrence)}
-                      >
-                        {isConfirming ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Check className="h-4 w-4" />
-                        )}
-                        Confirmar
-                      </Button>
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={settlingPredictionId !== null}
+                          onClick={() => openSettleDialog(prediction)}
+                          data-testid={`settle-prediction-${prediction.id}`}
+                        >
+                          {isBusy ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Check className="h-4 w-4" />
+                          )}
+                          Liquidar
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          disabled={settlingPredictionId !== null}
+                          onClick={() =>
+                            void handleCancelPrediction(prediction)
+                          }
+                          aria-label={`Cancelar previsão ${prediction.description}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -1261,6 +1608,9 @@ function LancamentosPageContent() {
                   ? categoryMap.get(transaction.categoryId)
                   : null;
                 const manageable = canManageTransaction(transaction);
+                const settledDiff = settledDiffByTransactionId.get(
+                  transaction.id,
+                );
 
                 return (
                   <div
@@ -1288,6 +1638,12 @@ function LancamentosPageContent() {
                             {transaction.familyId ? "Compartilhado" : "Pessoal"}
                           </span>
                         </div>
+                        {settledDiff ? (
+                          <PredictionDiffLine
+                            diff={settledDiff}
+                            className="mt-1.5"
+                          />
+                        ) : null}
                       </div>
                     </div>
 

@@ -5,10 +5,13 @@ export type AccountType =
   | "credit_card"
   | "investment";
 
+export type AccountMode = "real" | "forecast";
+
 export interface Account {
   id: string;
   name: string;
   type: AccountType;
+  account_mode: AccountMode;
   balance: number;
   color: string | null;
   owner_user_id: string | null;
@@ -27,6 +30,26 @@ export interface Account {
 
 export function isPersonalAccount(account: Pick<Account, "is_family_shared">) {
   return !account.is_family_shared;
+}
+
+export function isRealAccount(account: Pick<Account, "account_mode">) {
+  return account.account_mode === "real";
+}
+
+export function isForecastAccount(account: Pick<Account, "account_mode">) {
+  return account.account_mode === "forecast";
+}
+
+export function filterRealAccounts<T extends Pick<Account, "account_mode">>(
+  accounts: T[],
+): T[] {
+  return accounts.filter(isRealAccount);
+}
+
+export function filterForecastAccounts<
+  T extends Pick<Account, "account_mode">,
+>(accounts: T[]): T[] {
+  return accounts.filter(isForecastAccount);
 }
 
 export function canPostToAccount(

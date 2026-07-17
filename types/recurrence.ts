@@ -4,8 +4,6 @@ export type RecurrenceFrequency = "weekly" | "biweekly" | "monthly" | "yearly";
 
 export type RecurrenceEndType = "never" | "until_date" | "occurrences_count";
 
-export type RecurrenceOccurrenceStatus = "predicted" | "confirmed" | "skipped";
-
 export type TransactionRecurrence = {
   id: string;
   familyId: string | null;
@@ -46,28 +44,6 @@ export type TransactionRecurrenceRow = {
   updated_at: string;
 };
 
-export type TransactionRecurrenceOccurrence = {
-  id: string;
-  recurrenceId: string;
-  scheduledDate: string;
-  amount: number;
-  status: RecurrenceOccurrenceStatus;
-  sourceTransactionId: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type TransactionRecurrenceOccurrenceRow = {
-  id: string;
-  recurrence_id: string;
-  scheduled_date: string;
-  amount: number;
-  status: RecurrenceOccurrenceStatus;
-  source_transaction_id: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
 export function mapTransactionRecurrence(
   row: TransactionRecurrenceRow,
 ): TransactionRecurrence {
@@ -87,21 +63,6 @@ export function mapTransactionRecurrence(
     occurrencesLimit: row.occurrences_limit,
     autoConfirm: row.auto_confirm,
     isActive: row.is_active,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-export function mapTransactionRecurrenceOccurrence(
-  row: TransactionRecurrenceOccurrenceRow,
-): TransactionRecurrenceOccurrence {
-  return {
-    id: row.id,
-    recurrenceId: row.recurrence_id,
-    scheduledDate: row.scheduled_date,
-    amount: Number(row.amount),
-    status: row.status,
-    sourceTransactionId: row.source_transaction_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

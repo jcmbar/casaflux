@@ -624,6 +624,9 @@ export function QuickAddSheet() {
                       data-testid={`quick-add-account-${account.id}`}
                     >
                       {account.name}
+                      {account.account_mode === "forecast"
+                        ? " · Previsão"
+                        : ""}
                     </button>
                   );
                 })}

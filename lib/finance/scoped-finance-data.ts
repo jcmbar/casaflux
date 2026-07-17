@@ -1,10 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { Account } from "@/types/account";
+import { filterRealAccounts, type Account } from "@/types/account";
 
 import {
   filterAccountsByFinanceScope,
-  getScopedAccountIds,
   type FinanceViewScope,
 } from "./finance-scope";
 
@@ -19,6 +18,7 @@ export async function fetchScopedFinanceData<TRow extends { account_id: string }
   supabase: SupabaseClient,
   scope: FinanceViewScope,
   transactionsSelect: string,
+  options: { includeForecastAccounts?: boolean } = {},
 ): Promise<FetchScopedFinanceDataResult<TRow>> {
   const accountsRes = await supabase.from("accounts").select("*").order("name");
 
@@ -33,11 +33,14 @@ export async function fetchScopedFinanceData<TRow extends { account_id: string }
 
   const allAccounts = (accountsRes.data ?? []) as Account[];
   const scopedAccounts = filterAccountsByFinanceScope(allAccounts, scope);
-  const scopedAccountIds = getScopedAccountIds(allAccounts, scope);
+  const includedAccounts = options.includeForecastAccounts
+    ? scopedAccounts
+    : filterRealAccounts(scopedAccounts);
+  const scopedAccountIds = includedAccounts.map((account) => account.id);
 
   if (scopedAccountIds.length === 0) {
     return {
-      accounts: scopedAccounts,
+      accounts: includedAccounts,
       transactionRows: [],
       accountsError: null,
       transactionsError: null,
@@ -52,7 +55,7 @@ export async function fetchScopedFinanceData<TRow extends { account_id: string }
     .order("created_at", { ascending: false });
 
   return {
-    accounts: scopedAccounts,
+    accounts: includedAccounts,
     transactionRows: (transactionsRes.data ?? []) as unknown as TRow[],
     accountsError: null,
     transactionsError: transactionsRes.error,

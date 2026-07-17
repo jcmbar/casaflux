@@ -81,18 +81,33 @@ export function notifyRecurrencesChanged() {
   }
 }
 
+export type RecurrenceSnapshotFields = Pick<
+  TransactionRecurrence,
+  | "id"
+  | "amount"
+  | "ownerUserId"
+  | "familyId"
+  | "accountId"
+  | "categoryId"
+  | "type"
+  | "description"
+>;
+
 /**
- * Ensures every scheduled date of the recurrence inside the window has an
- * occurrence row, inserting the missing ones with status `predicted`.
+ * Ensures every scheduled date of the recurrence inside the window has a
+ * prediction row, inserting the missing ones with status `predicted`.
+ *
+ * Each prediction stores a snapshot of the recurrence (description, type,
+ * category, expected account), so later edits to the recurrence never
+ * rewrite what was predicted.
  *
  * Idempotent: re-running never duplicates dates (guarded here and by the
  * unique index on (recurrence_id, scheduled_date)) and never modifies
- * existing occurrences, whatever their status.
+ * existing predictions, whatever their status.
  */
 export async function syncPredictedOccurrences(
   supabase: SupabaseClient,
-  recurrence: Pick<TransactionRecurrence, "id" | "amount"> &
-    RecurrencePlanFields,
+  recurrence: RecurrenceSnapshotFields & RecurrencePlanFields,
   options: PlanOccurrencesOptions = {},
 ): Promise<SyncOccurrencesResult> {
   if (!recurrence.isActive) {
@@ -100,7 +115,7 @@ export async function syncPredictedOccurrences(
   }
 
   const { data: existingRows, error: fetchError } = await supabase
-    .from("transaction_recurrence_occurrences")
+    .from("financial_predictions")
     .select("scheduled_date")
     .eq("recurrence_id", recurrence.id);
 
@@ -123,10 +138,16 @@ export async function syncPredictedOccurrences(
   }
 
   const { error: insertError } = await supabase
-    .from("transaction_recurrence_occurrences")
+    .from("financial_predictions")
     .insert(
       missingDates.map((date) => ({
         recurrence_id: recurrence.id,
+        owner_user_id: recurrence.ownerUserId,
+        family_id: recurrence.familyId,
+        account_id: recurrence.accountId,
+        category_id: recurrence.categoryId,
+        type: recurrence.type,
+        description: recurrence.description,
         scheduled_date: date,
         amount: recurrence.amount,
         status: "predicted",

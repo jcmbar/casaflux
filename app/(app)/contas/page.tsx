@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  CalendarClock,
   Landmark,
   Loader2,
   Pencil,
@@ -37,13 +38,17 @@ import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
 import {
   canEditAccount,
+  filterForecastAccounts,
+  filterRealAccounts,
   type Account,
+  type AccountMode,
   type AccountType,
 } from "@/types/account";
 
 type FormState = {
   name: string;
   type: AccountType;
+  accountMode: AccountMode;
   balance: string;
   color: string;
   scope: "personal" | "family";
@@ -55,6 +60,7 @@ type FormState = {
 const defaultForm: FormState = {
   name: "",
   type: "checking",
+  accountMode: "real",
   balance: "",
   color: "#0f766e",
   scope: "personal",
@@ -147,6 +153,7 @@ export default function ContasPage() {
     setForm({
       name: account.name,
       type: account.type,
+      accountMode: account.account_mode,
       balance: String(account.balance),
       color: account.color ?? "#0f766e",
       scope: account.is_family_shared ? "family" : "personal",
@@ -223,6 +230,7 @@ export default function ContasPage() {
         ? {
             name: form.name.trim(),
             type: form.type,
+            account_mode: form.accountMode,
             balance: parsedBalance,
             color: form.color || null,
             owner_user_id: user.id,
@@ -235,6 +243,7 @@ export default function ContasPage() {
         : {
             name: form.name.trim(),
             type: form.type,
+            account_mode: form.accountMode,
             balance: parsedBalance,
             color: form.color || null,
             owner_user_id: null,
@@ -261,6 +270,7 @@ export default function ContasPage() {
       const { error } = await supabase.from("accounts").insert({
         name: form.name.trim(),
         type: form.type,
+        account_mode: form.accountMode,
         balance: parsedBalance,
         color: form.color || null,
         owner_user_id: user.id,
@@ -281,6 +291,7 @@ export default function ContasPage() {
       const { error } = await supabase.from("accounts").insert({
         name: form.name.trim(),
         type: form.type,
+        account_mode: form.accountMode,
         balance: parsedBalance,
         color: form.color || null,
         owner_user_id: null,
@@ -306,14 +317,20 @@ export default function ContasPage() {
     toast.success(editingId ? "Conta atualizada." : "Conta criada.");
   }
 
-  const totalBalance = accounts.reduce(
+  const realAccounts = filterRealAccounts(accounts);
+  const forecastAccounts = filterForecastAccounts(accounts);
+  const totalBalance = realAccounts.reduce(
+    (acc, account) => acc + Number(account.balance),
+    0,
+  );
+  const forecastBalance = forecastAccounts.reduce(
     (acc, account) => acc + Number(account.balance),
     0,
   );
 
   return (
     <div className="space-y-6 md:space-y-8">
-      <PageIntro description="Bancos, carteiras, cartões e saldos disponíveis." />
+      <PageIntro description="Contas reais e previsões para organizar seus saldos." />
 
       <div className="flex justify-stretch sm:justify-end">
         <Button onClick={handleOpenNew} className="w-full shadow-sm sm:w-auto">
@@ -335,7 +352,7 @@ export default function ContasPage() {
               {editingId ? "Editar conta" : "Nova conta"}
             </SheetTitle>
             <SheetDescription>
-              Escolha se a conta é pessoal ou compartilhada com a família.
+              Defina a finalidade, o formato e quem pode acessar a conta.
             </SheetDescription>
           </SheetHeader>
 
@@ -343,7 +360,7 @@ export default function ContasPage() {
             <div className="grid flex-1 gap-5 overflow-y-auto px-6 py-5">
               <FormSelect
                 id="scope"
-                label="Tipo de conta"
+                label="Visibilidade"
                 value={form.scope}
                 onChange={(event) =>
                   setForm((current) => ({
@@ -356,6 +373,23 @@ export default function ContasPage() {
                 <option value="personal">Pessoal (privada)</option>
                 <option value="family" disabled={!activeFamily}>
                   Familiar (compartilhada)
+                </option>
+              </FormSelect>
+
+              <FormSelect
+                id="account-mode"
+                label="Finalidade"
+                value={form.accountMode}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    accountMode: event.target.value as AccountMode,
+                  }))
+                }
+              >
+                <option value="real">Real — saldo disponível</option>
+                <option value="forecast">
+                  Previsão — provisionamento futuro
                 </option>
               </FormSelect>
 
@@ -375,7 +409,7 @@ export default function ContasPage() {
 
               <FormSelect
                 id="type"
-                label="Tipo"
+                label="Formato"
                 value={form.type}
                 onChange={(event) =>
                   setForm((current) => ({
@@ -507,11 +541,23 @@ export default function ContasPage() {
         <CardHeader className="border-b border-border/50">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <CardTitle className="font-semibold">Contas</CardTitle>
-            <div className="text-left sm:text-right">
-              <p className="text-xs text-muted-foreground">Saldo total visível</p>
-              <p className="text-2xl font-semibold tracking-tight tabular-nums sm:text-3xl">
-                {formatCurrency(totalBalance)}
-              </p>
+            <div className="flex flex-wrap gap-5 sm:justify-end">
+              <div className="text-left sm:text-right">
+                <p className="text-xs text-muted-foreground">Saldo real</p>
+                <p className="text-2xl font-semibold tracking-tight tabular-nums sm:text-3xl">
+                  {formatCurrency(totalBalance)}
+                </p>
+              </div>
+              {forecastAccounts.length > 0 ? (
+                <div className="border-l border-border/60 pl-5 text-left sm:text-right">
+                  <p className="text-xs text-muted-foreground">
+                    Saldo previsto
+                  </p>
+                  <p className="text-xl font-semibold tracking-tight text-sky-700 tabular-nums dark:text-sky-300">
+                    {formatCurrency(forecastBalance)}
+                  </p>
+                </div>
+              ) : null}
             </div>
           </div>
         </CardHeader>
@@ -536,13 +582,18 @@ export default function ContasPage() {
             <div className="divide-y divide-border/60">
               {accounts.map((account) => {
                 const config = accountTypeMap[account.type];
-                const Icon = config.icon;
+                const isForecast = account.account_mode === "forecast";
+                const Icon = isForecast ? CalendarClock : config.icon;
                 const editable = canManageAccount(account);
 
                 return (
                   <div
                     key={account.id}
-                    className="group -mx-2 flex flex-col gap-3 rounded-xl px-2 py-4 transition-colors first:pt-2 last:pb-2 hover:bg-muted/40 sm:flex-row sm:items-center sm:justify-between"
+                    className={`group -mx-2 flex flex-col gap-3 rounded-xl border px-2 py-4 transition-colors first:mt-0 last:mb-0 sm:flex-row sm:items-center sm:justify-between ${
+                      isForecast
+                        ? "my-2 border-dashed border-sky-300/60 bg-sky-50/50 hover:bg-sky-50 dark:border-sky-800/60 dark:bg-sky-950/20 dark:hover:bg-sky-950/30"
+                        : "border-transparent hover:bg-muted/40"
+                    }`}
                   >
                     <div className="flex min-w-0 flex-1 items-start gap-3">
                       <div
@@ -564,6 +615,15 @@ export default function ContasPage() {
                           >
                             {config.label}
                           </Badge>
+                          {isForecast ? (
+                            <Badge
+                              variant="outline"
+                              className="border-sky-300/70 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300"
+                            >
+                              <CalendarClock className="mr-1 h-3 w-3" />
+                              Previsão
+                            </Badge>
+                          ) : null}
                           <Badge variant="outline" className="border-border/60">
                             {account.is_family_shared ? (
                               <>
@@ -585,7 +645,9 @@ export default function ContasPage() {
 
                     <div className="flex items-center justify-between gap-3 sm:justify-end">
                       <div className="text-left sm:text-right">
-                        <p className="text-xs text-muted-foreground">Saldo</p>
+                        <p className="text-xs text-muted-foreground">
+                          {isForecast ? "Previsto" : "Saldo"}
+                        </p>
                         <p
                           className={`text-lg font-semibold tabular-nums ${
                             Number(account.balance) >= 0

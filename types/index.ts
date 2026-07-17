@@ -1,4 +1,4 @@
-export type { Account, AccountType } from "./account";
+export type { Account, AccountMode, AccountType } from "./account";
 export type { Budget } from "./budget";
 export type { Category } from "./category";
 export type {
@@ -13,12 +13,14 @@ export type {
 export type { Goal, GoalStatus } from "./goal";
 export type { Profile } from "./profile";
 export type {
+  FinancialPrediction,
+  FinancialPredictionRow,
+  PredictionStatus,
+} from "./prediction";
+export type {
   RecurrenceEndType,
   RecurrenceFrequency,
-  RecurrenceOccurrenceStatus,
   TransactionRecurrence,
-  TransactionRecurrenceOccurrence,
-  TransactionRecurrenceOccurrenceRow,
   TransactionRecurrenceRow,
 } from "./recurrence";
 export type {

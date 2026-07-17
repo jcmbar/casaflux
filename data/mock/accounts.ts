@@ -7,6 +7,7 @@ const mockDefaults = {
   allow_family_view: false,
   allow_family_post: false,
   allow_family_edit: false,
+  account_mode: "real",
   created_at: "2025-01-01T00:00:00.000Z",
 } as const;
 
