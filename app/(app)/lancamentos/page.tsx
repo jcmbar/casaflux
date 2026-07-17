@@ -5,6 +5,8 @@ import {
   ArrowDownLeft,
   ArrowRightLeft,
   ArrowUpRight,
+  CalendarClock,
+  Check,
   Loader2,
   MoreHorizontal,
   Pencil,
@@ -17,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CurrencyInput } from "@/components/forms/currency-input";
+import { Label } from "@/components/ui/label";
 import {
   FormField,
   FormInput,
@@ -55,6 +58,10 @@ import {
   getTransactionBalanceDelta,
 } from "@/lib/finance/account-balance";
 import { createTransaction } from "@/lib/finance/create-transaction";
+import { createRecurrence } from "@/lib/finance/create-recurrence";
+import {
+  confirmRecurrenceOccurrence,
+} from "@/lib/finance/confirm-recurrence-occurrence";
 import { CATEGORIES_CHANGED_EVENT } from "@/lib/finance/category-events";
 import {
   fetchHiddenSystemCategoryIds,
@@ -68,6 +75,10 @@ import { formatCurrency, formatDate } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
 import { canPostToAccount, type Account } from "@/types/account";
+import type {
+  RecurrenceEndType,
+  RecurrenceFrequency,
+} from "@/types/recurrence";
 import {
   mapTransaction,
   type Transaction,
@@ -92,6 +103,36 @@ type FormState = {
   categoryId: string;
   accountId: string;
   date: string;
+  isRecurring: boolean;
+  frequency: RecurrenceFrequency;
+  endType: RecurrenceEndType;
+  endDate: string;
+  occurrencesLimit: string;
+  autoConfirm: boolean;
+};
+
+type PredictedOccurrence = {
+  id: string;
+  recurrenceId: string;
+  scheduledDate: string;
+  amount: number;
+  description: string;
+  type: TransactionType;
+  accountId: string;
+  categoryId: string | null;
+};
+
+type PredictedOccurrenceRow = {
+  id: string;
+  recurrence_id: string;
+  scheduled_date: string;
+  amount: number;
+  transaction_recurrences: {
+    description: string;
+    type: TransactionType;
+    account_id: string;
+    category_id: string | null;
+  };
 };
 
 const typeMap = {
@@ -159,6 +200,9 @@ function LancamentosPageContent() {
   const confirm = useConfirm();
   const { user, activeFamily, isFamilyAdmin } = useAppContext();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [predictedOccurrences, setPredictedOccurrences] = useState<
+    PredictedOccurrence[]
+  >([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryVisibility, setCategoryVisibility] =
@@ -167,6 +211,9 @@ function LancamentosPageContent() {
     });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [confirmingOccurrenceId, setConfirmingOccurrenceId] = useState<
+    string | null
+  >(null);
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [period, setPeriod] = useState<PeriodFilter>(() =>
@@ -179,6 +226,12 @@ function LancamentosPageContent() {
     categoryId: "",
     accountId: "",
     date: new Date().toISOString().slice(0, 10),
+    isRecurring: false,
+    frequency: "monthly",
+    endType: "never",
+    endDate: "",
+    occurrencesLimit: "",
+    autoConfirm: false,
   });
 
   const scope = useMemo(
@@ -233,19 +286,50 @@ function LancamentosPageContent() {
     );
 
     let transactionRows: TransactionRow[] = [];
+    let occurrenceRows: PredictedOccurrenceRow[] = [];
 
     if (scopedAccountIds.length > 0) {
-      const transactionsRes = await supabase
-        .from("transactions")
-        .select(TRANSACTIONS_SELECT)
-        .in("account_id", scopedAccountIds)
-        .order("transaction_date", { ascending: false })
-        .order("created_at", { ascending: false });
+      const [transactionsRes, occurrencesRes] = await Promise.all([
+        supabase
+          .from("transactions")
+          .select(TRANSACTIONS_SELECT)
+          .in("account_id", scopedAccountIds)
+          .order("transaction_date", { ascending: false })
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("transaction_recurrence_occurrences")
+          .select(
+            `
+              id,
+              recurrence_id,
+              scheduled_date,
+              amount,
+              transaction_recurrences!inner (
+                description,
+                type,
+                account_id,
+                category_id
+              )
+            `,
+          )
+          .eq("status", "predicted")
+          .in("transaction_recurrences.account_id", scopedAccountIds)
+          .gte("scheduled_date", new Date().toISOString().slice(0, 10))
+          .order("scheduled_date", { ascending: true })
+          .limit(20),
+      ]);
 
       if (transactionsRes.error) {
         console.error(transactionsRes.error);
       } else {
         transactionRows = (transactionsRes.data ?? []) as TransactionRow[];
+      }
+
+      if (occurrencesRes.error) {
+        console.error(occurrencesRes.error);
+      } else {
+        occurrenceRows = (occurrencesRes.data ??
+          []) as unknown as PredictedOccurrenceRow[];
       }
     }
 
@@ -271,6 +355,18 @@ function LancamentosPageContent() {
     setCategoryVisibility(visibility);
 
     setTransactions(transactionRows.map((row) => mapTransaction(row)));
+    setPredictedOccurrences(
+      occurrenceRows.map((row) => ({
+        id: row.id,
+        recurrenceId: row.recurrence_id,
+        scheduledDate: row.scheduled_date,
+        amount: Number(row.amount),
+        description: row.transaction_recurrences.description,
+        type: row.transaction_recurrences.type,
+        accountId: row.transaction_recurrences.account_id,
+        categoryId: row.transaction_recurrences.category_id,
+      })),
+    );
 
     const activeCategories = filterActiveCategories(
       normalizedCategories,
@@ -304,10 +400,21 @@ function LancamentosPageContent() {
       }
     }
 
-    window.addEventListener("casaflux:transactions-changed", handleTransactionsChanged);
+    window.addEventListener(
+      "casaflux:transactions-changed",
+      handleTransactionsChanged,
+    );
+    window.addEventListener(
+      "casaflux:recurrences-changed",
+      handleTransactionsChanged,
+    );
     return () => {
       window.removeEventListener(
         "casaflux:transactions-changed",
+        handleTransactionsChanged,
+      );
+      window.removeEventListener(
+        "casaflux:recurrences-changed",
         handleTransactionsChanged,
       );
     };
@@ -393,6 +500,12 @@ function LancamentosPageContent() {
       categoryId: getDefaultCategoryId("expense", activeCategories),
       accountId: postableAccounts[0]?.id ?? "",
       date: new Date().toISOString().slice(0, 10),
+      isRecurring: false,
+      frequency: "monthly",
+      endType: "never",
+      endDate: "",
+      occurrencesLimit: "",
+      autoConfirm: false,
     });
   }
 
@@ -432,6 +545,12 @@ function LancamentosPageContent() {
       categoryId: transaction.categoryId ?? "",
       accountId: transaction.accountId,
       date: transaction.date,
+      isRecurring: false,
+      frequency: "monthly",
+      endType: "never",
+      endDate: "",
+      occurrencesLimit: "",
+      autoConfirm: false,
     });
     setOpen(true);
   }
@@ -509,6 +628,26 @@ function LancamentosPageContent() {
     toast.success("Lançamento excluído.");
   }
 
+  async function handleConfirmOccurrence(occurrence: PredictedOccurrence) {
+    if (confirmingOccurrenceId) return;
+
+    setConfirmingOccurrenceId(occurrence.id);
+    const result = await confirmRecurrenceOccurrence(
+      supabase,
+      occurrence.id,
+    );
+
+    if (!result.ok) {
+      toast.error(result.message);
+      setConfirmingOccurrenceId(null);
+      return;
+    }
+
+    await loadData();
+    setConfirmingOccurrenceId(null);
+    toast.success("Ocorrência confirmada e lançamento criado.");
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -517,6 +656,28 @@ function LancamentosPageContent() {
     const parsedAmount = Number(form.amount.replace(",", "."));
 
     if (!form.description.trim() || !parsedAmount || parsedAmount <= 0) {
+      return;
+    }
+
+    if (
+      !isEditing &&
+      form.isRecurring &&
+      form.endType === "until_date" &&
+      (!form.endDate || form.endDate < form.date)
+    ) {
+      toast.error("A data final deve ser igual ou posterior à data inicial.");
+      return;
+    }
+
+    const parsedOccurrencesLimit = Number(form.occurrencesLimit);
+
+    if (
+      !isEditing &&
+      form.isRecurring &&
+      form.endType === "occurrences_count" &&
+      (!Number.isInteger(parsedOccurrencesLimit) || parsedOccurrencesLimit < 1)
+    ) {
+      toast.error("Informe uma quantidade válida de ocorrências.");
       return;
     }
 
@@ -564,6 +725,31 @@ function LancamentosPageContent() {
         setSaving(false);
         return;
       }
+    } else if (form.isRecurring) {
+      const result = await createRecurrence(supabase, {
+        description: payload.description,
+        amount: payload.amount,
+        type: payload.type,
+        categoryId: payload.category_id,
+        accountId: payload.account_id,
+        ownerUserId: user.id,
+        familyId: selectedAccount.family_id,
+        frequency: form.frequency,
+        startDate: form.date,
+        endType: form.endType,
+        endDate: form.endType === "until_date" ? form.endDate : null,
+        occurrencesLimit:
+          form.endType === "occurrences_count"
+            ? parsedOccurrencesLimit
+            : null,
+        autoConfirm: form.autoConfirm,
+      });
+
+      if (!result.ok) {
+        toast.error(result.message);
+        setSaving(false);
+        return;
+      }
     } else {
       const result = await createTransaction(supabase, {
         description: payload.description,
@@ -587,7 +773,13 @@ function LancamentosPageContent() {
     resetForm();
     setOpen(false);
     setSaving(false);
-    toast.success(isEditing ? "Lançamento atualizado." : "Lançamento salvo.");
+    toast.success(
+      isEditing
+        ? "Lançamento atualizado."
+        : form.isRecurring
+          ? "Recorrência salva."
+          : "Lançamento salvo.",
+    );
   }
 
   const categoryMap = new Map(categories.map((item) => [item.id, item]));
@@ -626,7 +818,9 @@ function LancamentosPageContent() {
             <SheetDescription>
               {isEditing
                 ? "Atualize os dados do lançamento selecionado."
-                : "Registre uma receita, despesa ou transferência."}
+                : form.isRecurring
+                  ? "Crie um modelo e gere as próximas ocorrências previstas."
+                  : "Registre uma receita, despesa ou transferência."}
             </SheetDescription>
           </SheetHeader>
 
@@ -683,7 +877,7 @@ function LancamentosPageContent() {
 
                 <FormInput
                   id="date"
-                  label="Data"
+                  label={form.isRecurring ? "Data inicial" : "Data"}
                   type="date"
                   value={form.date}
                   onChange={(event) =>
@@ -734,6 +928,131 @@ function LancamentosPageContent() {
                   ))}
                 </FormSelect>
               </div>
+
+              {!isEditing ? (
+                <div className="space-y-4 rounded-xl border border-border/50 bg-muted/20 p-4">
+                  <div className="flex items-start gap-3">
+                    <input
+                      id="is-recurring"
+                      type="checkbox"
+                      checked={form.isRecurring}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          isRecurring: event.target.checked,
+                        }))
+                      }
+                      className="mt-0.5 size-4 rounded border-input accent-primary"
+                    />
+                    <div className="space-y-1">
+                      <Label htmlFor="is-recurring">Recorrente</Label>
+                      <p className="text-sm text-muted-foreground">
+                        Salva um modelo e cria ocorrências previstas.
+                      </p>
+                    </div>
+                  </div>
+
+                  {form.isRecurring ? (
+                    <div className="grid gap-5 border-t border-border/50 pt-4">
+                      <div className="grid gap-5 sm:grid-cols-2">
+                        <FormSelect
+                          id="recurrence-frequency"
+                          label="Frequência"
+                          value={form.frequency}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              frequency: event.target
+                                .value as RecurrenceFrequency,
+                            }))
+                          }
+                        >
+                          <option value="weekly">Semanal</option>
+                          <option value="biweekly">Quinzenal</option>
+                          <option value="monthly">Mensal</option>
+                          <option value="yearly">Anual</option>
+                        </FormSelect>
+
+                        <FormSelect
+                          id="recurrence-end-type"
+                          label="Término"
+                          value={form.endType}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              endType: event.target.value as RecurrenceEndType,
+                            }))
+                          }
+                        >
+                          <option value="never">Nunca</option>
+                          <option value="until_date">Em uma data</option>
+                          <option value="occurrences_count">
+                            Após uma quantidade
+                          </option>
+                        </FormSelect>
+                      </div>
+
+                      {form.endType === "until_date" ? (
+                        <FormInput
+                          id="recurrence-end-date"
+                          label="Data final"
+                          type="date"
+                          min={form.date}
+                          value={form.endDate}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              endDate: event.target.value,
+                            }))
+                          }
+                          required
+                        />
+                      ) : null}
+
+                      {form.endType === "occurrences_count" ? (
+                        <FormInput
+                          id="recurrence-occurrences-limit"
+                          label="Quantidade de ocorrências"
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={form.occurrencesLimit}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              occurrencesLimit: event.target.value,
+                            }))
+                          }
+                          required
+                        />
+                      ) : null}
+
+                      <div className="flex items-start gap-3">
+                        <input
+                          id="recurrence-auto-confirm"
+                          type="checkbox"
+                          checked={form.autoConfirm}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              autoConfirm: event.target.checked,
+                            }))
+                          }
+                          className="mt-0.5 size-4 rounded border-input accent-primary"
+                        />
+                        <div className="space-y-1">
+                          <Label htmlFor="recurrence-auto-confirm">
+                            Confirmação automática
+                          </Label>
+                          <p className="text-sm text-muted-foreground">
+                            Marca o modelo para confirmação automática futura.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             <SheetFooter>
@@ -761,6 +1080,8 @@ function LancamentosPageContent() {
                     </>
                   ) : isEditing ? (
                     "Salvar alterações"
+                  ) : form.isRecurring ? (
+                    "Salvar recorrência"
                   ) : (
                     "Salvar lançamento"
                   )}
@@ -814,6 +1135,95 @@ function LancamentosPageContent() {
               {formatCurrency(balance)}
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="animate-enter-delayed border-border/50 shadow-sm">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 font-semibold">
+            <CalendarClock className="size-5 text-primary" />
+            Próximos recorrentes
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {loading ? (
+            <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Carregando ocorrências...
+            </div>
+          ) : predictedOccurrences.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 px-6 py-8 text-center">
+              <p className="text-sm font-medium">
+                Nenhuma ocorrência prevista
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                As próximas ocorrências de modelos recorrentes aparecerão aqui.
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border/60">
+              {predictedOccurrences.map((occurrence) => {
+                const config = typeMap[occurrence.type];
+                const Icon = config.icon;
+                const account = accountMap.get(occurrence.accountId);
+                const category = occurrence.categoryId
+                  ? categoryMap.get(occurrence.categoryId)
+                  : null;
+                const isConfirming =
+                  confirmingOccurrenceId === occurrence.id;
+
+                return (
+                  <div
+                    key={occurrence.id}
+                    className="flex flex-col gap-3 py-4 first:pt-2 last:pb-2 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div
+                        className={`flex size-10 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ring-black/5 dark:ring-white/10 ${config.iconClass}`}
+                      >
+                        <Icon className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-medium">
+                          {occurrence.description}
+                        </p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {formatDate(occurrence.scheduledDate)}
+                          <span aria-hidden> · </span>
+                          {category?.name ?? "Sem categoria"}
+                          <span aria-hidden> · </span>
+                          {account?.name ?? "Conta"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 sm:justify-end">
+                      <span
+                        className={`font-semibold tabular-nums ${config.valueClass}`}
+                      >
+                        {occurrence.type === "expense" ? "-" : ""}
+                        {formatCurrency(occurrence.amount)}
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={confirmingOccurrenceId !== null}
+                        onClick={() => void handleConfirmOccurrence(occurrence)}
+                      >
+                        {isConfirming ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Check className="h-4 w-4" />
+                        )}
+                        Confirmar
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -13,6 +13,15 @@ export type {
 export type { Goal, GoalStatus } from "./goal";
 export type { Profile } from "./profile";
 export type {
+  RecurrenceEndType,
+  RecurrenceFrequency,
+  RecurrenceOccurrenceStatus,
+  TransactionRecurrence,
+  TransactionRecurrenceOccurrence,
+  TransactionRecurrenceOccurrenceRow,
+  TransactionRecurrenceRow,
+} from "./recurrence";
+export type {
   Transaction,
   TransactionRow,
   TransactionType,
