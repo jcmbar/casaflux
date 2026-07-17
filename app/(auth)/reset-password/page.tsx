@@ -17,7 +17,7 @@ type ResetState = "loading" | "ready" | "expired" | "success" | "error";
 
 export default function ResetPasswordPage() {
   const router = useRouter();
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [saving, setSaving] = useState(false);

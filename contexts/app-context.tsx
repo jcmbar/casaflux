@@ -38,7 +38,7 @@ type AppContextValue = {
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [families, setFamilies] = useState<FamilyWithMembership[]>([]);

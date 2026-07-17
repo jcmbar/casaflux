@@ -17,7 +17,7 @@ import { createClient } from "@/lib/supabase/client";
 export default function SignupForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const redirectTo = searchParams.get("redirectTo") ?? "/onboarding";
   const invitedEmail = searchParams.get("email") ?? "";
 

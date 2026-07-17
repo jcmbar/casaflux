@@ -145,7 +145,7 @@ function buildLancamentosUrl(period: PeriodFilter, extraParams?: Record<string, 
 function LancamentosPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const confirm = useConfirm();
   const { user, activeFamily, isFamilyAdmin } = useAppContext();
   const [transactions, setTransactions] = useState<Transaction[]>([]);

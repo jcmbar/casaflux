@@ -61,7 +61,7 @@ function CardIcon({ children }: { children: React.ReactNode }) {
 }
 
 export default function FamiliaPage() {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const confirm = useConfirm();
   const { activeFamily, canInvite, refresh } = useAppContext();
   const [members, setMembers] = useState<FamilyMemberWithProfile[]>([]);

@@ -14,7 +14,7 @@ import { createClient } from "@/lib/supabase/client";
 import { getSiteUrl } from "@/lib/supabase/env";
 
 export default function ForgotPasswordPage() {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);

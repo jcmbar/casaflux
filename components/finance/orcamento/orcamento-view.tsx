@@ -66,7 +66,7 @@ function buildOrcamentoUrl(period: PeriodFilter) {
 function OrcamentoPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const confirm = useConfirm();
   const { user, activeFamily, isFamilyAdmin } = useAppContext();
 

@@ -18,7 +18,7 @@ type QuickAddRootProps = {
 };
 
 function QuickAddFabGate() {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const { user, activeFamily } = useAppContext();
   const [hasPostableAccount, setHasPostableAccount] = useState(false);
   const [checked, setChecked] = useState(false);

@@ -31,7 +31,7 @@ import {
 } from "@/types/goal";
 
 export function GoalsHighlight() {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const { user, activeFamily } = useAppContext();
   const [loading, setLoading] = useState(true);
   const [goals, setGoals] = useState<Goal[]>([]);

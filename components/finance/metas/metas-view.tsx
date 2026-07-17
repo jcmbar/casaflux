@@ -62,7 +62,7 @@ const statusLabels: Record<GoalStatus, string> = {
 };
 
 export function MetasView() {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const confirm = useConfirm();
   const { user, activeFamily, isFamilyAdmin } = useAppContext();
 

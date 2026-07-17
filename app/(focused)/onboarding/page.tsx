@@ -14,7 +14,7 @@ import { createClient } from "@/lib/supabase/client";
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const { user, refresh } = useAppContext();
   const [familyName, setFamilyName] = useState("");
   const [loading, setLoading] = useState(false);

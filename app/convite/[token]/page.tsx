@@ -36,7 +36,7 @@ export default function AcceptInvitePage({
   params: Promise<{ token: string }>;
 }) {
   const router = useRouter();
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const { token } = use(params);
   const [preview, setPreview] = useState<FamilyInvitationPreview | null>(null);
   const [state, setState] = useState<PageState>("loading");

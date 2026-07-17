@@ -60,7 +60,7 @@ export type DashboardData = {
 };
 
 export function useDashboardData(): DashboardData {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const { user, activeFamily } = useAppContext();
   const monthKey = useMemo(() => getMonthKey(), []);
 

@@ -99,7 +99,7 @@ const accountTypeMap: Record<
 };
 
 export default function ContasPage() {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const confirm = useConfirm();
   const { user, activeFamily, isFamilyAdmin } = useAppContext();
   const [accounts, setAccounts] = useState<Account[]>([]);

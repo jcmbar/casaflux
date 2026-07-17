@@ -69,7 +69,7 @@ function getTodayIsoDate() {
 }
 
 export function QuickAddSheet() {
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => createClient()!, []);
   const { user, activeFamily } = useAppContext();
   const { open, closeQuickAdd } = useQuickAdd();
 
