@@ -1,6 +1,6 @@
 "use client";
 
-import { LogOut } from "lucide-react";
+import { LogOut, Settings2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { useAppContext } from "@/contexts/app-context";
@@ -88,6 +88,10 @@ export function UserMenu() {
           </DropdownMenuLabel>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => router.push("/configuracoes")}>
+          <Settings2 className="h-4 w-4" />
+          Configurações
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => handleSignOut()}>
           <LogOut className="h-4 w-4" />
           Sair

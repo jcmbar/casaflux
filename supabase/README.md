@@ -19,8 +19,34 @@ Apply these SQL files in order on your Supabase project (SQL Editor or Supabase 
 13. `20250624000013_goal_account_link.sql` — metas vinculadas a contas
 14. `20250624000014_personal_categories.sql` — categorias personalizadas (`owner_user_id`) + RLS de CRUD
 15. `20250624000015_category_lifecycle.sql` — `is_active`, `user_hidden_categories`, anti-delete de padrões
+16. `20250624000016_transaction_recurrences.sql` — modelos de recorrência + ocorrências previstas
+17. `20250624000017_confirm_recurrence_occurrence.sql` — confirmação de ocorrência (legado)
+18. `20250624000018_forecast_accounts.sql` — `account_mode` real/forecast (provisão)
+19. `20250624000019_financial_predictions.sql` — previsões liquidáveis (`financial_predictions`)
+20. `20250624000020_projection_balance.sql` — `include_in_projection` + RPC `set_recurrence_projection`
+21. `20250624000021_cleanup_finance_data.sql` — RPC `cleanup_finance_data` (limpeza seletiva de dados financeiros)
 
-## Legacy accounts (important)
+## Apply pending migrations
+
+Preferred (linked remote project):
+
+```bash
+# Interactive / one-shot
+npx supabase db push
+
+# Or via project helper (requires SUPABASE_ACCESS_TOKEN)
+./scripts/supabase-push.sh
+```
+
+Verify local vs remote:
+
+```bash
+npx supabase migration list
+```
+
+If creating a previsão with “Incluir no saldo projetado” fails with
+“Não foi possível salvar a previsão.”, confirm migration `20` is on
+remote — without `include_in_projection`, the insert payload is rejected.
 
 If migration 007 fails, assign owners manually before re-running push:
 

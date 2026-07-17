@@ -87,3 +87,22 @@ export function getNavItemByPath(pathname: string): NavItem | undefined {
       pathname === item.href || pathname.startsWith(`${item.href}/`),
   );
 }
+
+const pageTitles: Record<string, { title: string; description: string }> = {
+  "/configuracoes": {
+    title: "Configurações",
+    description: "Preferências da conta e limpeza de dados financeiros.",
+  },
+};
+
+export function getPageMeta(pathname: string): {
+  title: string;
+  description?: string;
+} {
+  const navItem = getNavItemByPath(pathname);
+  if (navItem) {
+    return { title: navItem.title, description: navItem.description };
+  }
+
+  return pageTitles[pathname] ?? { title: "CasaFlux" };
+}

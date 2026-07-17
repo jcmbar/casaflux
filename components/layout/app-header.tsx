@@ -9,15 +9,14 @@ import { Button } from "@/components/ui/button";
 
 import { FamilySwitcher } from "./family-switcher";
 import { MobileNav } from "./mobile-nav";
-import { getNavItemByPath } from "./nav-items";
+import { getPageMeta } from "./nav-items";
 import { ThemeToggle } from "./theme-toggle";
 import { UserMenu } from "./user-menu";
 
 export function AppHeader() {
   const pathname = usePathname();
   const { families } = useAppContext();
-  const navItem = getNavItemByPath(pathname);
-  const title = navItem?.title ?? "CasaFlux";
+  const { title } = getPageMeta(pathname);
   const showFamilyRow = families.length > 1;
 
   return (
