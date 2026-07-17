@@ -11,6 +11,7 @@ import {
 import { FamilyOverview } from "@/components/finance/dashboard/family-overview";
 import { GoalsHighlight } from "@/components/finance/dashboard/goals-highlight";
 import { MemberParticipationRow } from "@/components/finance/dashboard/member-participation-row";
+import { PredictionSummary } from "@/components/finance/dashboard/prediction-summary";
 import { RecentTransactions } from "@/components/finance/dashboard/recent-transactions";
 import { SummaryCards } from "@/components/finance/dashboard/summary-cards";
 import { useDashboardData } from "@/components/finance/dashboard/use-dashboard-data";
@@ -30,6 +31,7 @@ export function DashboardView() {
     dailyCashflow,
     sparklines,
     totalAccountBalance,
+    monthlyPredictionAggregates,
   } = useDashboardData();
 
   return (
@@ -70,6 +72,13 @@ export function DashboardView() {
           yearSharePercent={yearExpenseSharePercent}
         />
       </section>
+
+      <PredictionSummary
+        loading={loading}
+        aggregates={monthlyPredictionAggregates}
+        monthKey={monthSummary.monthKey}
+        monthLabel={monthSummary.monthLabel}
+      />
 
       <CashflowChart
         loading={loading}

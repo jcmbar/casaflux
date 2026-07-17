@@ -6,6 +6,7 @@ import {
   ArrowRightLeft,
   ArrowUpRight,
   CalendarClock,
+  CalendarPlus,
   Check,
   Loader2,
   MoreHorizontal,
@@ -45,6 +46,7 @@ import { useAppContext } from "@/contexts/app-context";
 import { PeriodFilterBar } from "@/components/finance/period-filter-bar";
 import {
   filterTransactionsByPeriod,
+  getMonthKey,
   parsePeriodFromSearchParams,
   type PeriodFilter,
 } from "@/lib/finance/period-filter";
@@ -65,12 +67,18 @@ import {
 } from "@/lib/finance/currency-input";
 import {
   cancelPrediction,
+  createPrediction,
+  getCreatePredictionValidationError,
   settlePrediction,
 } from "@/lib/finance/predictions";
 import {
   getPredictionDiff,
   type PredictionDiff,
 } from "@/lib/finance/prediction-diff";
+import {
+  fetchMonthlyPredictionAggregates,
+  type MonthlyPredictionAggregates,
+} from "@/lib/finance/prediction-aggregates";
 import { getRecurrenceEndValidationError } from "@/lib/finance/recurrence-validation";
 import { CATEGORIES_CHANGED_EVENT } from "@/lib/finance/category-events";
 import {
@@ -121,6 +129,15 @@ type FormState = {
   autoConfirm: boolean;
 };
 
+type PredictionFormState = {
+  description: string;
+  amount: string;
+  type: "expense" | "income";
+  scheduledDate: string;
+  categoryId: string;
+  accountId: string;
+};
+
 type PendingPrediction = {
   id: string;
   recurrenceId: string | null;
@@ -143,6 +160,12 @@ type PendingPredictionRow = {
   type: TransactionType;
   account_id: string | null;
   category_id: string | null;
+};
+
+const EMPTY_PREDICTION_AGGREGATES: MonthlyPredictionAggregates = {
+  predicted: 0,
+  realized: 0,
+  delta: 0,
 };
 
 const typeMap = {
@@ -265,10 +288,13 @@ function LancamentosPageContent() {
   const supabase = useMemo(() => createClient()!, []);
   const confirm = useConfirm();
   const { user, activeFamily, isFamilyAdmin } = useAppContext();
+  const currentMonthKey = useMemo(() => getMonthKey(), []);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [pendingPredictions, setPendingPredictions] = useState<
     PendingPrediction[]
   >([]);
+  const [monthlyPredictionAggregates, setMonthlyPredictionAggregates] =
+    useState<MonthlyPredictionAggregates>(EMPTY_PREDICTION_AGGREGATES);
   const [settledDiffByTransactionId, setSettledDiffByTransactionId] = useState<
     Map<string, PredictionDiff>
   >(new Map());
@@ -292,6 +318,16 @@ function LancamentosPageContent() {
     amountCents: 0,
   });
   const [settling, setSettling] = useState(false);
+  const [predictionOpen, setPredictionOpen] = useState(false);
+  const [predictionSaving, setPredictionSaving] = useState(false);
+  const [predictionForm, setPredictionForm] = useState<PredictionFormState>({
+    description: "",
+    amount: "",
+    type: "expense",
+    scheduledDate: new Date().toISOString().slice(0, 10),
+    categoryId: "",
+    accountId: "",
+  });
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [period, setPeriod] = useState<PeriodFilter>(() =>
@@ -331,19 +367,26 @@ function LancamentosPageContent() {
 
   async function loadData() {
     if (!scope) {
+      setMonthlyPredictionAggregates(EMPTY_PREDICTION_AGGREGATES);
       setLoading(false);
       return;
     }
 
     setLoading(true);
 
-    const [accountsRes, categoriesRes, hiddenSystemCategoryIds] =
+    const [
+      accountsRes,
+      categoriesRes,
+      hiddenSystemCategoryIds,
+      monthlyPredictionResult,
+    ] =
       await Promise.all([
       supabase.from("accounts").select("*").order("name"),
       supabase.from("categories").select("*").order("name"),
       user
         ? fetchHiddenSystemCategoryIds(supabase, user.id)
         : Promise.resolve(new Set<string>()),
+      fetchMonthlyPredictionAggregates(supabase, scope, currentMonthKey),
     ]);
 
     if (accountsRes.error) {
@@ -352,6 +395,10 @@ function LancamentosPageContent() {
 
     if (categoriesRes.error) {
       console.error(categoriesRes.error);
+    }
+
+    if (monthlyPredictionResult.error) {
+      console.error(monthlyPredictionResult.error);
     }
 
     const scopedAccounts = filterAccountsByFinanceScope(
@@ -367,66 +414,66 @@ function LancamentosPageContent() {
     let predictionRows: PendingPredictionRow[] = [];
     const settledDiffs = new Map<string, PredictionDiff>();
 
+    const [predictionsRes, settledRes] = await Promise.all([
+      supabase
+        .from("financial_predictions")
+        .select(
+          "id, recurrence_id, owner_user_id, scheduled_date, amount, description, type, account_id, category_id",
+        )
+        .eq("status", "predicted")
+        .order("scheduled_date", { ascending: true }),
+      supabase
+        .from("financial_predictions")
+        .select("amount, settled_amount, settled_transaction_id")
+        .eq("status", "settled")
+        .not("settled_transaction_id", "is", null),
+    ]);
+
     if (scopedAccountIds.length > 0) {
-      const [transactionsRes, predictionsRes, settledRes] = await Promise.all([
-        supabase
-          .from("transactions")
-          .select(TRANSACTIONS_SELECT)
-          .in("account_id", scopedAccountIds)
-          .order("transaction_date", { ascending: false })
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("financial_predictions")
-          .select(
-            "id, recurrence_id, owner_user_id, scheduled_date, amount, description, type, account_id, category_id",
-          )
-          .eq("status", "predicted")
-          .order("scheduled_date", { ascending: true })
-          .limit(20),
-        supabase
-          .from("financial_predictions")
-          .select("amount, settled_amount, settled_transaction_id")
-          .eq("status", "settled")
-          .not("settled_transaction_id", "is", null),
-      ]);
+      const transactionsRes = await supabase
+        .from("transactions")
+        .select(TRANSACTIONS_SELECT)
+        .in("account_id", scopedAccountIds)
+        .order("transaction_date", { ascending: false })
+        .order("created_at", { ascending: false });
 
       if (transactionsRes.error) {
         console.error(transactionsRes.error);
       } else {
         transactionRows = (transactionsRes.data ?? []) as TransactionRow[];
       }
+    }
 
-      if (predictionsRes.error) {
-        console.error(predictionsRes.error);
-      } else {
-        const scopedIds = new Set(scopedAccountIds);
-        predictionRows = (
-          (predictionsRes.data ?? []) as PendingPredictionRow[]
-        ).filter(
-          (row) =>
-            row.account_id
-              ? scopedIds.has(row.account_id)
-              : row.owner_user_id === user?.id,
+    if (predictionsRes.error) {
+      console.error(predictionsRes.error);
+    } else {
+      const scopedIds = new Set(scopedAccountIds);
+      predictionRows = (
+        (predictionsRes.data ?? []) as PendingPredictionRow[]
+      ).filter(
+        (row) =>
+          row.account_id
+            ? scopedIds.has(row.account_id)
+            : row.owner_user_id === user?.id,
+      );
+    }
+
+    if (settledRes.error) {
+      console.error(settledRes.error);
+    } else {
+      for (const row of (settledRes.data ?? []) as {
+        amount: number | string;
+        settled_amount: number | string | null;
+        settled_transaction_id: string | null;
+      }[]) {
+        if (!row.settled_transaction_id) continue;
+        const predicted = Number(row.amount);
+        const actual =
+          row.settled_amount === null ? predicted : Number(row.settled_amount);
+        settledDiffs.set(
+          row.settled_transaction_id,
+          getPredictionDiff(predicted, actual),
         );
-      }
-
-      if (settledRes.error) {
-        console.error(settledRes.error);
-      } else {
-        for (const row of (settledRes.data ?? []) as {
-          amount: number | string;
-          settled_amount: number | string | null;
-          settled_transaction_id: string | null;
-        }[]) {
-          if (!row.settled_transaction_id) continue;
-          const predicted = Number(row.amount);
-          const actual =
-            row.settled_amount === null ? predicted : Number(row.settled_amount);
-          settledDiffs.set(
-            row.settled_transaction_id,
-            getPredictionDiff(predicted, actual),
-          );
-        }
       }
     }
 
@@ -453,6 +500,7 @@ function LancamentosPageContent() {
 
     setTransactions(transactionRows.map((row) => mapTransaction(row)));
     setSettledDiffByTransactionId(settledDiffs);
+    setMonthlyPredictionAggregates(monthlyPredictionResult.aggregates);
     setPendingPredictions(
       predictionRows.map((row) => ({
         id: row.id,
@@ -549,6 +597,17 @@ function LancamentosPageContent() {
     [transactions, period],
   );
 
+  const visiblePendingPredictions = useMemo(
+    () =>
+      period.mode === "all"
+        ? pendingPredictions
+        : pendingPredictions.filter(
+            (prediction) =>
+              prediction.scheduledDate.slice(0, 7) === period.monthKey,
+          ),
+    [pendingPredictions, period],
+  );
+
   const incomes = useMemo(
     () => sumByType(filteredTransactions, "income"),
     [filteredTransactions],
@@ -560,6 +619,12 @@ function LancamentosPageContent() {
   );
 
   const balance = incomes - expenses;
+  const monthlyPredictionDiff = getPredictionDiff(
+    monthlyPredictionAggregates.predicted,
+    monthlyPredictionAggregates.realized,
+  );
+  const showMonthlyPredictionAggregates =
+    period.mode === "month" && period.monthKey === currentMonthKey;
   const summaryScopeLabel =
     period.mode === "all" ? "total" : "do mês";
   const listTitle =
@@ -589,6 +654,86 @@ function LancamentosPageContent() {
       }).filter((category) => category.type === form.type),
     [categoryVisibility, form.categoryId, form.type, normalizedCategories],
   );
+
+  const selectablePredictionCategories = useMemo(
+    () =>
+      getSelectableCategories(normalizedCategories, categoryVisibility, {
+        includeCategoryId: predictionForm.categoryId || null,
+      }).filter((category) => category.type === predictionForm.type),
+    [
+      categoryVisibility,
+      normalizedCategories,
+      predictionForm.categoryId,
+      predictionForm.type,
+    ],
+  );
+
+  function resetPredictionForm() {
+    setPredictionForm({
+      description: "",
+      amount: "",
+      type: "expense",
+      scheduledDate: new Date().toISOString().slice(0, 10),
+      categoryId: "",
+      accountId: "",
+    });
+  }
+
+  async function handleCreatePrediction(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!user || predictionSaving) return;
+
+    const amount = centsToAmount(amountStringToCents(predictionForm.amount));
+    const validationError = getCreatePredictionValidationError({
+      description: predictionForm.description,
+      amount,
+      scheduledDate: predictionForm.scheduledDate,
+    });
+
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
+
+    const selectedAccount = predictionForm.accountId
+      ? postableAccounts.find(
+          (account) => account.id === predictionForm.accountId,
+        )
+      : null;
+
+    if (predictionForm.accountId && !selectedAccount) {
+      toast.error("Selecione uma conta prevista válida.");
+      return;
+    }
+
+    setPredictionSaving(true);
+
+    const result = await createPrediction(supabase, {
+      ownerUserId: user.id,
+      familyId: selectedAccount?.family_id ?? null,
+      accountId: selectedAccount?.id ?? null,
+      categoryId: predictionForm.categoryId || null,
+      type: predictionForm.type,
+      description: predictionForm.description,
+      amount,
+      scheduledDate: predictionForm.scheduledDate,
+    });
+
+    if (!result.ok) {
+      toast.error(result.message);
+      setPredictionSaving(false);
+      return;
+    }
+
+    const predictionMonth = predictionForm.scheduledDate.slice(0, 7);
+    await loadData();
+    resetPredictionForm();
+    setPredictionOpen(false);
+    setPredictionSaving(false);
+    updatePeriod({ mode: "month", monthKey: predictionMonth });
+    toast.success("Previsão criada.");
+  }
 
   function resetForm() {
     setEditingId(null);
@@ -950,7 +1095,20 @@ function LancamentosPageContent() {
 
       <PeriodFilterBar period={period} onChange={updatePeriod} />
 
-      <div className="flex justify-stretch sm:justify-end">
+      <div className="grid gap-2 sm:flex sm:justify-end">
+        <Button
+          variant="outline"
+          className="w-full sm:w-auto"
+          onClick={() => {
+            resetPredictionForm();
+            setPredictionOpen(true);
+          }}
+          disabled={loading}
+          data-testid="new-prediction-button"
+        >
+          <CalendarPlus className="h-4 w-4" />
+          Nova previsão
+        </Button>
         <Button
           className="w-full shadow-sm sm:w-auto"
           onClick={handleOpenNew}
@@ -961,6 +1119,171 @@ function LancamentosPageContent() {
           Novo lançamento
         </Button>
       </div>
+
+      <Sheet
+        open={predictionOpen}
+        onOpenChange={(nextOpen) => {
+          if (predictionSaving) return;
+          setPredictionOpen(nextOpen);
+          if (!nextOpen) resetPredictionForm();
+        }}
+      >
+        <SheetContent
+          side="bottom"
+          className="max-h-[92dvh] overflow-y-auto rounded-t-2xl pb-[calc(env(safe-area-inset-bottom,0px)+0.5rem)] sm:mx-auto sm:max-w-lg"
+          data-testid="prediction-form-sheet"
+        >
+          <SheetHeader className="pb-1">
+            <SheetTitle>Nova previsão</SheetTitle>
+            <SheetDescription>
+              Planeje uma receita ou despesa sem criar um lançamento real.
+            </SheetDescription>
+          </SheetHeader>
+
+          <form
+            onSubmit={handleCreatePrediction}
+            className="flex flex-col gap-5 px-4 pt-2"
+            data-testid="prediction-form"
+          >
+            <FormSelect
+              id="prediction-type"
+              label="Tipo"
+              value={predictionForm.type}
+              onChange={(event) =>
+                setPredictionForm((current) => ({
+                  ...current,
+                  type: event.target.value as "expense" | "income",
+                  categoryId: "",
+                }))
+              }
+            >
+              <option value="expense">Despesa prevista</option>
+              <option value="income">Receita prevista</option>
+            </FormSelect>
+
+            <FormInput
+              id="prediction-description"
+              label="Descrição"
+              type="text"
+              value={predictionForm.description}
+              onChange={(event) =>
+                setPredictionForm((current) => ({
+                  ...current,
+                  description: event.target.value,
+                }))
+              }
+              placeholder="Ex.: IPVA, bônus, manutenção..."
+              required
+            />
+
+            <div className="grid gap-5 sm:grid-cols-2">
+              <FormField id="prediction-amount" label="Valor previsto">
+                <CurrencyInput
+                  id="prediction-amount"
+                  valueCents={amountStringToCents(predictionForm.amount)}
+                  onValueCentsChange={(nextCents) =>
+                    setPredictionForm((current) => ({
+                      ...current,
+                      amount: nextCents > 0 ? String(nextCents / 100) : "",
+                    }))
+                  }
+                  placeholder="0,00"
+                  required
+                  className="h-10 w-full min-w-0 rounded-lg border border-input bg-surface-sunken/60 px-2.5 py-1 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/40"
+                />
+              </FormField>
+
+              <FormInput
+                id="prediction-scheduled-date"
+                label="Data prevista"
+                type="date"
+                value={predictionForm.scheduledDate}
+                onChange={(event) =>
+                  setPredictionForm((current) => ({
+                    ...current,
+                    scheduledDate: event.target.value,
+                  }))
+                }
+                required
+              />
+            </div>
+
+            <div className="grid gap-5 sm:grid-cols-2">
+              <FormSelect
+                id="prediction-category"
+                label="Categoria (opcional)"
+                value={predictionForm.categoryId}
+                onChange={(event) =>
+                  setPredictionForm((current) => ({
+                    ...current,
+                    categoryId: event.target.value,
+                  }))
+                }
+              >
+                <option value="">Sem categoria</option>
+                {selectablePredictionCategories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </FormSelect>
+
+              <FormSelect
+                id="prediction-account"
+                label="Conta prevista (opcional)"
+                value={predictionForm.accountId}
+                onChange={(event) =>
+                  setPredictionForm((current) => ({
+                    ...current,
+                    accountId: event.target.value,
+                  }))
+                }
+              >
+                <option value="">Definir na liquidação</option>
+                {postableAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                    {account.is_family_shared ? " (familiar)" : " (pessoal)"}
+                  </option>
+                ))}
+              </FormSelect>
+            </div>
+
+            <p className="-mt-2 text-xs text-muted-foreground">
+              Sem conta prevista, a previsão será pessoal. A conta real será
+              escolhida ao liquidar.
+            </p>
+
+            <SheetFooter className="px-0 pb-2">
+              <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={predictionSaving}
+                  onClick={() => setPredictionOpen(false)}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="submit"
+                  className="shadow-sm"
+                  disabled={predictionSaving}
+                  data-testid="save-prediction-button"
+                >
+                  {predictionSaving ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Salvando...
+                    </>
+                  ) : (
+                    "Salvar previsão"
+                  )}
+                </Button>
+              </div>
+            </SheetFooter>
+          </form>
+        </SheetContent>
+      </Sheet>
 
       <Sheet
         open={open}
@@ -1453,6 +1776,62 @@ function LancamentosPageContent() {
         </CardContent>
       </Card>
 
+      {showMonthlyPredictionAggregates ? (
+        <Card className="animate-enter-delayed border-border/50 shadow-sm">
+          <CardHeader>
+            <CardTitle className="font-semibold">
+              Previsto vs realizado do mês
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Previsões agendadas neste mês e os valores já liquidados.
+            </p>
+          </CardHeader>
+          <CardContent
+            className="grid gap-4 pt-0 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-border/60"
+            data-testid="monthly-prediction-aggregates"
+          >
+            <div className="space-y-1 sm:px-4 sm:first:pl-0">
+              <p className="text-sm text-muted-foreground">Total previsto</p>
+              <p
+                className="text-xl font-semibold tabular-nums sm:text-2xl"
+                data-testid="monthly-predicted-total"
+              >
+                {formatCurrency(monthlyPredictionAggregates.predicted)}
+              </p>
+            </div>
+
+            <div className="space-y-1 sm:px-4">
+              <p className="text-sm text-muted-foreground">Total realizado</p>
+              <p
+                className="text-xl font-semibold tabular-nums sm:text-2xl"
+                data-testid="monthly-realized-total"
+              >
+                {formatCurrency(monthlyPredictionAggregates.realized)}
+              </p>
+            </div>
+
+            <div className="space-y-1 sm:px-4 sm:last:pr-0">
+              <p className="text-sm text-muted-foreground">Delta do período</p>
+              <p
+                className={`text-xl font-semibold tabular-nums sm:text-2xl ${
+                  monthlyPredictionDiff.kind === "above"
+                    ? "text-amber-600 dark:text-amber-400"
+                    : monthlyPredictionDiff.kind === "below"
+                      ? "text-primary"
+                      : ""
+                }`}
+                data-testid="monthly-prediction-delta"
+              >
+                {formatCurrency(
+                  Math.abs(monthlyPredictionAggregates.delta),
+                )}
+              </p>
+              <PredictionDiffLine diff={monthlyPredictionDiff} />
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card className="animate-enter-delayed border-border/50 shadow-sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 font-semibold">
@@ -1466,7 +1845,7 @@ function LancamentosPageContent() {
               <Loader2 className="h-4 w-4 animate-spin" />
               Carregando previsões...
             </div>
-          ) : pendingPredictions.length === 0 ? (
+          ) : visiblePendingPredictions.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 px-6 py-8 text-center">
               <p className="text-sm font-medium">
                 Nenhuma previsão pendente
@@ -1477,7 +1856,7 @@ function LancamentosPageContent() {
             </div>
           ) : (
             <div className="divide-y divide-border/60">
-              {pendingPredictions.map((prediction) => {
+              {visiblePendingPredictions.map((prediction) => {
                 const config = typeMap[prediction.type];
                 const Icon = config.icon;
                 const account = prediction.accountId

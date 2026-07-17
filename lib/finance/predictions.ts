@@ -25,11 +25,38 @@ export type CreatePredictionResult =
   | { ok: true; prediction: FinancialPrediction }
   | { ok: false; message: string };
 
+export function getCreatePredictionValidationError(
+  input: Pick<
+    CreatePredictionInput,
+    "description" | "amount" | "scheduledDate"
+  >,
+): string | null {
+  if (!input.description.trim()) {
+    return "Informe uma descrição para a previsão.";
+  }
+
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    return "Informe um valor previsto maior que zero.";
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.scheduledDate)) {
+    return "Informe uma data agendada válida.";
+  }
+
+  return null;
+}
+
 /** Creates a standalone prediction (not linked to a recurrence). */
 export async function createPrediction(
   supabase: SupabaseClient,
   input: CreatePredictionInput,
 ): Promise<CreatePredictionResult> {
+  const validationError = getCreatePredictionValidationError(input);
+
+  if (validationError) {
+    return { ok: false, message: validationError };
+  }
+
   const { data, error } = await supabase
     .from("financial_predictions")
     .insert({
@@ -39,7 +66,7 @@ export async function createPrediction(
       account_id: input.accountId,
       category_id: input.categoryId,
       type: input.type,
-      description: input.description,
+      description: input.description.trim(),
       amount: input.amount,
       scheduled_date: input.scheduledDate,
       status: "predicted",

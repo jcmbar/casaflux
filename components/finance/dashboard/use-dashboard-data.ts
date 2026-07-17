@@ -25,6 +25,10 @@ import {
   filterAccountsByFinanceScope,
   getFinanceViewScope,
 } from "@/lib/finance/finance-scope";
+import {
+  fetchMonthlyPredictionAggregates,
+  type MonthlyPredictionAggregates,
+} from "@/lib/finance/prediction-aggregates";
 import { TRANSACTIONS_SELECT } from "@/lib/finance/transactions-query";
 import { createClient } from "@/lib/supabase/client";
 import { filterRealAccounts, type Account } from "@/types/account";
@@ -55,6 +59,7 @@ export type DashboardData = {
     expense: SparklinePoint[];
   };
   totalAccountBalance: number;
+  monthlyPredictionAggregates: MonthlyPredictionAggregates;
   refresh: () => Promise<void>;
 };
 
@@ -79,6 +84,12 @@ export function useDashboardData(): DashboardData {
   const [transactionRows, setTransactionRows] = useState<TransactionRow[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [members, setMembers] = useState<FamilyMemberRow[]>([]);
+  const [monthlyPredictionAggregates, setMonthlyPredictionAggregates] =
+    useState<MonthlyPredictionAggregates>({
+      predicted: 0,
+      realized: 0,
+      delta: 0,
+    });
   const [categoryNames, setCategoryNames] = useState<Map<string, string>>(
     new Map(),
   );
@@ -88,6 +99,11 @@ export function useDashboardData(): DashboardData {
       setTransactionRows([]);
       setAccounts([]);
       setMembers([]);
+      setMonthlyPredictionAggregates({
+        predicted: 0,
+        realized: 0,
+        delta: 0,
+      });
       setLoading(false);
       return;
     }
@@ -95,9 +111,11 @@ export function useDashboardData(): DashboardData {
     setLoading(true);
     setError(null);
 
-    const [accountsRes, categoriesRes] = await Promise.all([
+    const [accountsRes, categoriesRes, predictionAggregatesResult] =
+      await Promise.all([
       supabase.from("accounts").select("*").order("name"),
       supabase.from("categories").select("id, name"),
+      fetchMonthlyPredictionAggregates(supabase, scope, monthKey),
     ]);
 
     if (accountsRes.error) {
@@ -110,6 +128,13 @@ export function useDashboardData(): DashboardData {
     if (categoriesRes.error) {
       console.error(categoriesRes.error);
     }
+
+    if (predictionAggregatesResult.error) {
+      console.error(predictionAggregatesResult.error);
+      setError("Não foi possível carregar os agregados de previsões.");
+    }
+
+    setMonthlyPredictionAggregates(predictionAggregatesResult.aggregates);
 
     const scopedAccounts = filterAccountsByFinanceScope(
       (accountsRes.data ?? []) as Account[],
@@ -196,7 +221,7 @@ export function useDashboardData(): DashboardData {
     }
 
     setLoading(false);
-  }, [activeFamily, scope, supabase]);
+  }, [activeFamily, monthKey, scope, supabase]);
 
   useEffect(() => {
     loadData();
@@ -221,9 +246,14 @@ export function useDashboardData(): DashboardData {
     }
 
     window.addEventListener("casaflux:transactions-changed", handleTransactionsChanged);
+    window.addEventListener("casaflux:recurrences-changed", handleTransactionsChanged);
     return () => {
       window.removeEventListener(
         "casaflux:transactions-changed",
+        handleTransactionsChanged,
+      );
+      window.removeEventListener(
+        "casaflux:recurrences-changed",
         handleTransactionsChanged,
       );
     };
@@ -294,6 +324,7 @@ export function useDashboardData(): DashboardData {
     dailyCashflow,
     sparklines,
     totalAccountBalance,
+    monthlyPredictionAggregates,
     refresh: loadData,
   };
 }
