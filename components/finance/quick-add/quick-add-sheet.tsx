@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import Link from "next/link";
-import { CalendarDays, Loader2, Plus } from "lucide-react";
+import { CalendarDays, Loader2, Plus, Repeat2 } from "lucide-react";
 
 import { CurrencyInput } from "@/components/forms/currency-input";
 import { FormInput } from "@/components/forms/form-controls";
@@ -21,8 +21,12 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useAppContext } from "@/contexts/app-context";
+import { createRecurrence } from "@/lib/finance/create-recurrence";
 import { createTransaction } from "@/lib/finance/create-transaction";
-import { CATEGORIES_CHANGED_EVENT, notifyCategoriesChanged } from "@/lib/finance/category-events";
+import {
+  CATEGORIES_CHANGED_EVENT,
+  notifyCategoriesChanged,
+} from "@/lib/finance/category-events";
 import {
   fetchHiddenSystemCategoryIds,
   filterActiveCategories,
@@ -41,12 +45,17 @@ import {
   getDefaultDescriptionForType,
   suggestTransactionDraft,
 } from "@/lib/finance/transaction-suggestions";
+import { getRecurrenceEndValidationError } from "@/lib/finance/recurrence-validation";
 import { TRANSACTIONS_SELECT } from "@/lib/finance/transactions-query";
 import { formatDate } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { canPostToAccount, type Account } from "@/types/account";
+import type {
+  RecurrenceEndType,
+  RecurrenceFrequency,
+} from "@/types/recurrence";
 import {
   mapTransaction,
   type Transaction,
@@ -66,6 +75,63 @@ type QuickAddCategory = {
 
 function getTodayIsoDate() {
   return new Date().toISOString().slice(0, 10);
+}
+
+const FREQUENCY_OPTIONS: Array<{
+  value: RecurrenceFrequency;
+  label: string;
+  summaryLabel: string;
+}> = [
+  { value: "weekly", label: "Semanal", summaryLabel: "toda semana" },
+  { value: "biweekly", label: "Quinzenal", summaryLabel: "a cada 15 dias" },
+  { value: "monthly", label: "Mensal", summaryLabel: "todo mês" },
+  { value: "yearly", label: "Anual", summaryLabel: "todo ano" },
+];
+
+const END_TYPE_OPTIONS: Array<{
+  value: RecurrenceEndType;
+  label: string;
+}> = [
+  { value: "never", label: "Nunca" },
+  { value: "until_date", label: "Em uma data" },
+  { value: "occurrences_count", label: "Após nº de vezes" },
+];
+
+function formatShortDate(iso: string) {
+  return formatDate(iso, "pt-BR", { day: "2-digit", month: "short" });
+}
+
+function buildRecurrenceSummary({
+  frequency,
+  startDate,
+  endType,
+  endDate,
+  occurrencesLimit,
+  today,
+}: {
+  frequency: RecurrenceFrequency;
+  startDate: string;
+  endType: RecurrenceEndType;
+  endDate: string;
+  occurrencesLimit: string;
+  today: string;
+}): string {
+  const frequencyLabel =
+    FREQUENCY_OPTIONS.find((option) => option.value === frequency)
+      ?.summaryLabel ?? "";
+
+  const start =
+    startDate === today ? "a partir de hoje" : `a partir de ${formatShortDate(startDate)}`;
+
+  if (endType === "until_date" && endDate) {
+    return `Repete ${frequencyLabel} ${start}, até ${formatShortDate(endDate)}`;
+  }
+
+  if (endType === "occurrences_count" && Number(occurrencesLimit) > 0) {
+    return `Repete ${frequencyLabel} ${start}, ${occurrencesLimit}x`;
+  }
+
+  return `Repete ${frequencyLabel} ${start}`;
 }
 
 export function QuickAddSheet() {
@@ -90,6 +156,12 @@ export function QuickAddSheet() {
   const [accountId, setAccountId] = useState("");
   const [date, setDate] = useState(getTodayIsoDate);
   const [showDate, setShowDate] = useState(false);
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [frequency, setFrequency] =
+    useState<RecurrenceFrequency>("monthly");
+  const [endType, setEndType] = useState<RecurrenceEndType>("never");
+  const [endDate, setEndDate] = useState("");
+  const [occurrencesLimit, setOccurrencesLimit] = useState("");
   const [userPickedCategory, setUserPickedCategory] = useState(false);
   const [userPickedAccount, setUserPickedAccount] = useState(false);
   const [showNewCategory, setShowNewCategory] = useState(false);
@@ -120,6 +192,15 @@ export function QuickAddSheet() {
   const today = getTodayIsoDate();
   const isToday = date === today;
 
+  const recurrenceSummary = buildRecurrenceSummary({
+    frequency,
+    startDate: date,
+    endType,
+    endDate,
+    occurrencesLimit,
+    today,
+  });
+
   function resetForm() {
     setType("expense");
     setAmountCents(0);
@@ -129,6 +210,11 @@ export function QuickAddSheet() {
     setAccountId("");
     setDate(getTodayIsoDate());
     setShowDate(false);
+    setIsRecurring(false);
+    setFrequency("monthly");
+    setEndType("never");
+    setEndDate("");
+    setOccurrencesLimit("");
     setUserPickedCategory(false);
     setUserPickedAccount(false);
     setShowNewCategory(false);
@@ -378,18 +464,51 @@ export function QuickAddSheet() {
       selectedCategory?.name ||
       getDefaultDescriptionForType(type);
 
+    const parsedOccurrencesLimit = Number(occurrencesLimit);
+    const recurrenceValidationError = isRecurring
+      ? getRecurrenceEndValidationError({
+          startDate: date,
+          endType,
+          endDate: endDate || null,
+          occurrencesLimit:
+            endType === "occurrences_count" ? parsedOccurrencesLimit : null,
+        })
+      : null;
+
+    if (recurrenceValidationError) {
+      toast.error(recurrenceValidationError);
+      return;
+    }
+
     setSaving(true);
 
-    const result = await createTransaction(supabase, {
-      description: finalDescription,
-      amount: centsToAmount(amountCents),
-      type,
-      categoryId: categoryId || null,
-      accountId: selectedAccount.id,
-      transactionDate: date,
-      userId: user.id,
-      familyId: selectedAccount.family_id,
-    });
+    const result = isRecurring
+      ? await createRecurrence(supabase, {
+          description: finalDescription,
+          amount: centsToAmount(amountCents),
+          type,
+          categoryId: categoryId || null,
+          accountId: selectedAccount.id,
+          ownerUserId: user.id,
+          familyId: selectedAccount.family_id,
+          frequency,
+          startDate: date,
+          endType,
+          endDate: endType === "until_date" ? endDate : null,
+          occurrencesLimit:
+            endType === "occurrences_count" ? parsedOccurrencesLimit : null,
+          autoConfirm: false,
+        })
+      : await createTransaction(supabase, {
+          description: finalDescription,
+          amount: centsToAmount(amountCents),
+          type,
+          categoryId: categoryId || null,
+          accountId: selectedAccount.id,
+          transactionDate: date,
+          userId: user.id,
+          familyId: selectedAccount.family_id,
+        });
 
     setSaving(false);
 
@@ -398,7 +517,7 @@ export function QuickAddSheet() {
       return;
     }
 
-    toast.success("Lançamento salvo.");
+    toast.success(isRecurring ? "Recorrência salva." : "Lançamento salvo.");
     closeQuickAdd();
   }
 
@@ -595,8 +714,164 @@ export function QuickAddSheet() {
             )}
           </div>
 
+          <div
+            className={cn(
+              "mt-4 rounded-xl border transition-colors",
+              isRecurring
+                ? "border-primary/30 bg-primary/[0.04]"
+                : "border-border/60 bg-muted/20",
+            )}
+          >
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isRecurring}
+              onClick={() => setIsRecurring((current) => !current)}
+              className="flex w-full items-center gap-3 p-3 text-left"
+              data-testid="quick-add-recurring"
+            >
+              <Repeat2
+                className={cn(
+                  "size-4 shrink-0",
+                  isRecurring ? "text-primary" : "text-muted-foreground",
+                )}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">Repetir</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {isRecurring
+                    ? recurrenceSummary
+                    : "Transforme em um lançamento recorrente"}
+                </span>
+              </span>
+              <span
+                aria-hidden
+                className={cn(
+                  "relative h-6 w-10 shrink-0 rounded-full transition-colors",
+                  isRecurring ? "bg-primary" : "bg-muted-foreground/25",
+                )}
+              >
+                <span
+                  className={cn(
+                    "absolute left-0.5 top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform",
+                    isRecurring && "translate-x-4",
+                  )}
+                />
+              </span>
+            </button>
+
+            {isRecurring ? (
+              <div className="space-y-4 border-t border-border/50 p-3 pt-3">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Frequência</p>
+                  <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                    {FREQUENCY_OPTIONS.map((option) => {
+                      const selected = frequency === option.value;
+
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setFrequency(option.value)}
+                          className={cn(
+                            "shrink-0 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
+                            selected
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border bg-background text-foreground hover:bg-muted/60",
+                          )}
+                          data-testid={`quick-add-frequency-${option.value}`}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Termina</p>
+                  <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                    {END_TYPE_OPTIONS.map((option) => {
+                      const selected = endType === option.value;
+
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setEndType(option.value)}
+                          className={cn(
+                            "shrink-0 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
+                            selected
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border bg-background text-foreground hover:bg-muted/60",
+                          )}
+                          data-testid={`quick-add-end-type-${option.value}`}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div
+                  className={cn(
+                    "grid gap-3",
+                    endType === "never" ? "grid-cols-1" : "grid-cols-2",
+                  )}
+                >
+                  <FormInput
+                    id="quick-add-start-date"
+                    label="Começa em"
+                    type="date"
+                    value={date}
+                    onChange={(event) => setDate(event.target.value)}
+                    required
+                  />
+
+                  {endType === "until_date" ? (
+                    <FormInput
+                      id="quick-add-end-date"
+                      label="Termina em"
+                      type="date"
+                      min={date}
+                      value={endDate}
+                      onChange={(event) => setEndDate(event.target.value)}
+                      required
+                    />
+                  ) : null}
+
+                  {endType === "occurrences_count" ? (
+                    <FormInput
+                      id="quick-add-occurrences-limit"
+                      label="Nº de vezes"
+                      type="number"
+                      min="1"
+                      step="1"
+                      inputMode="numeric"
+                      placeholder="Ex.: 12"
+                      value={occurrencesLimit}
+                      onChange={(event) =>
+                        setOccurrencesLimit(event.target.value)
+                      }
+                      required
+                    />
+                  ) : null}
+                </div>
+
+                <Link
+                  href="/lancamentos?new=1"
+                  className="inline-block text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
+                  onClick={() => closeQuickAdd()}
+                >
+                  Mais opções no lançamento completo
+                </Link>
+              </div>
+            ) : null}
+          </div>
+
           <div className="mt-4 pb-2">
-            {showDate ? (
+            {isRecurring ? null : showDate ? (
               <FormInput
                 id="quick-add-date"
                 label="Data"
@@ -634,7 +909,7 @@ export function QuickAddSheet() {
                   Salvando…
                 </>
               ) : (
-                "Salvar lançamento"
+                isRecurring ? "Salvar recorrência" : "Salvar lançamento"
               )}
             </Button>
           </SheetFooter>

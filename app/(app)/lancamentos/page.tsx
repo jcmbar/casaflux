@@ -62,6 +62,7 @@ import { createRecurrence } from "@/lib/finance/create-recurrence";
 import {
   confirmRecurrenceOccurrence,
 } from "@/lib/finance/confirm-recurrence-occurrence";
+import { getRecurrenceEndValidationError } from "@/lib/finance/recurrence-validation";
 import { CATEGORIES_CHANGED_EVENT } from "@/lib/finance/category-events";
 import {
   fetchHiddenSystemCategoryIds,
@@ -659,25 +660,22 @@ function LancamentosPageContent() {
       return;
     }
 
-    if (
-      !isEditing &&
-      form.isRecurring &&
-      form.endType === "until_date" &&
-      (!form.endDate || form.endDate < form.date)
-    ) {
-      toast.error("A data final deve ser igual ou posterior à data inicial.");
-      return;
-    }
-
     const parsedOccurrencesLimit = Number(form.occurrencesLimit);
+    const recurrenceValidationError =
+      !isEditing && form.isRecurring
+        ? getRecurrenceEndValidationError({
+            startDate: form.date,
+            endType: form.endType,
+            endDate: form.endDate || null,
+            occurrencesLimit:
+              form.endType === "occurrences_count"
+                ? parsedOccurrencesLimit
+                : null,
+          })
+        : null;
 
-    if (
-      !isEditing &&
-      form.isRecurring &&
-      form.endType === "occurrences_count" &&
-      (!Number.isInteger(parsedOccurrencesLimit) || parsedOccurrencesLimit < 1)
-    ) {
-      toast.error("Informe uma quantidade válida de ocorrências.");
+    if (recurrenceValidationError) {
+      toast.error(recurrenceValidationError);
       return;
     }
 
