@@ -32,6 +32,7 @@ export function DashboardView() {
     sparklines,
     totalAccountBalance,
     monthlyPredictionAggregates,
+    monthlyProjectionDelta,
   } = useDashboardData();
 
   return (
@@ -61,6 +62,7 @@ export function DashboardView() {
           loading={loading}
           monthSummary={monthSummary}
           totalAccountBalance={totalAccountBalance}
+          monthlyProjectionDelta={monthlyProjectionDelta}
           sparklines={sparklines}
         />
 

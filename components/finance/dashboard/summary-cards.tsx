@@ -4,6 +4,7 @@ import { Loader2, Wallet } from "lucide-react";
 import { MiniSparkline } from "@/components/finance/dashboard/mini-sparkline";
 import { CardContent } from "@/components/ui/card";
 import type { MonthSummary, SparklinePoint } from "@/lib/finance/dashboard-stats";
+import { getProjectedMonthlyBalance } from "@/lib/finance/prediction-aggregates";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +12,7 @@ type SummaryCardsProps = {
   loading: boolean;
   monthSummary: MonthSummary;
   totalAccountBalance: number;
+  monthlyProjectionDelta: number;
   sparklines: {
     net: SparklinePoint[];
     income: SparklinePoint[];
@@ -27,22 +29,28 @@ type KpiCard = {
   sparkVariant: "income" | "expense" | "neutral" | "inverted";
   surface: "income" | "expense" | "neutral";
   testId: string;
+  wide?: boolean;
 };
 
 export function SummaryCards({
   loading,
   monthSummary,
   totalAccountBalance,
+  monthlyProjectionDelta,
   sparklines,
 }: SummaryCardsProps) {
   const netChangeLabel =
     monthSummary.netChangePercent === null
       ? "Sem base no mês anterior"
       : `${monthSummary.netChangePercent >= 0 ? "+" : ""}${formatPercent(monthSummary.netChangePercent / 100)} vs mês passado`;
+  const projectedBalance = getProjectedMonthlyBalance(
+    monthSummary.netBalance,
+    monthlyProjectionDelta,
+  );
 
   const cards: KpiCard[] = [
     {
-      title: "Saldo do mês",
+      title: "Saldo real do mês",
       value: formatCurrency(monthSummary.netBalance),
       change: netChangeLabel,
       tone: monthSummary.netBalance >= 0 ? "income" : "expense",
@@ -87,6 +95,22 @@ export function SummaryCards({
       surface: "neutral",
       testId: "kpi-accounts",
     },
+    {
+      title: "Saldo projetado do mês",
+      value: formatCurrency(projectedBalance),
+      change:
+        monthlyProjectionDelta === 0
+          ? "Sem previsões pendentes marcadas"
+          : `${monthlyProjectionDelta > 0 ? "+" : "-"}${formatCurrency(
+              Math.abs(monthlyProjectionDelta),
+            )} em previsões pendentes marcadas`,
+      tone: projectedBalance >= 0 ? "income" : "expense",
+      sparkline: null,
+      sparkVariant: "neutral",
+      surface: "neutral",
+      testId: "kpi-projected",
+      wide: true,
+    },
   ];
 
   return (
@@ -116,6 +140,7 @@ export function SummaryCards({
                 card.surface === "income" && "dashboard-kpi-hero",
                 card.surface === "expense" && "dashboard-kpi-expense",
                 card.surface === "neutral" && "dashboard-kpi-subtle bg-card",
+                card.wide && "sm:col-span-2",
               )}
               style={{ animationDelay: `${index * 70}ms` }}
             >

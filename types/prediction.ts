@@ -14,6 +14,7 @@ export type FinancialPrediction = {
   amount: number;
   scheduledDate: string;
   status: PredictionStatus;
+  includeInProjection: boolean;
   settledTransactionId: string | null;
   settledDate: string | null;
   settledAmount: number | null;
@@ -33,6 +34,7 @@ export type FinancialPredictionRow = {
   amount: number;
   scheduled_date: string;
   status: PredictionStatus;
+  include_in_projection: boolean;
   settled_transaction_id: string | null;
   settled_date: string | null;
   settled_amount: number | null;
@@ -55,6 +57,7 @@ export function mapFinancialPrediction(
     amount: Number(row.amount),
     scheduledDate: row.scheduled_date,
     status: row.status,
+    includeInProjection: row.include_in_projection,
     settledTransactionId: row.settled_transaction_id,
     settledDate: row.settled_date,
     settledAmount:

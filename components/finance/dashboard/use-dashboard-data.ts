@@ -60,6 +60,7 @@ export type DashboardData = {
   };
   totalAccountBalance: number;
   monthlyPredictionAggregates: MonthlyPredictionAggregates;
+  monthlyProjectionDelta: number;
   refresh: () => Promise<void>;
 };
 
@@ -90,6 +91,7 @@ export function useDashboardData(): DashboardData {
       realized: 0,
       delta: 0,
     });
+  const [monthlyProjectionDelta, setMonthlyProjectionDelta] = useState(0);
   const [categoryNames, setCategoryNames] = useState<Map<string, string>>(
     new Map(),
   );
@@ -104,6 +106,7 @@ export function useDashboardData(): DashboardData {
         realized: 0,
         delta: 0,
       });
+      setMonthlyProjectionDelta(0);
       setLoading(false);
       return;
     }
@@ -135,6 +138,7 @@ export function useDashboardData(): DashboardData {
     }
 
     setMonthlyPredictionAggregates(predictionAggregatesResult.aggregates);
+    setMonthlyProjectionDelta(predictionAggregatesResult.projectionDelta);
 
     const scopedAccounts = filterAccountsByFinanceScope(
       (accountsRes.data ?? []) as Account[],
@@ -325,6 +329,7 @@ export function useDashboardData(): DashboardData {
     sparklines,
     totalAccountBalance,
     monthlyPredictionAggregates,
+    monthlyProjectionDelta,
     refresh: loadData,
   };
 }

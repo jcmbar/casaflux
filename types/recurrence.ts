@@ -19,6 +19,7 @@ export type TransactionRecurrence = {
   endDate: string | null;
   occurrencesLimit: number | null;
   autoConfirm: boolean;
+  includeInProjection: boolean;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -39,6 +40,7 @@ export type TransactionRecurrenceRow = {
   end_date: string | null;
   occurrences_limit: number | null;
   auto_confirm: boolean;
+  include_in_projection: boolean;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -62,6 +64,7 @@ export function mapTransactionRecurrence(
     endDate: row.end_date,
     occurrencesLimit: row.occurrences_limit,
     autoConfirm: row.auto_confirm,
+    includeInProjection: row.include_in_projection,
     isActive: row.is_active,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

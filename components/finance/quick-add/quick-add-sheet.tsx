@@ -162,6 +162,7 @@ export function QuickAddSheet() {
   const [endType, setEndType] = useState<RecurrenceEndType>("never");
   const [endDate, setEndDate] = useState("");
   const [occurrencesLimit, setOccurrencesLimit] = useState("");
+  const [includeInProjection, setIncludeInProjection] = useState(true);
   const [userPickedCategory, setUserPickedCategory] = useState(false);
   const [userPickedAccount, setUserPickedAccount] = useState(false);
   const [showNewCategory, setShowNewCategory] = useState(false);
@@ -215,6 +216,7 @@ export function QuickAddSheet() {
     setEndType("never");
     setEndDate("");
     setOccurrencesLimit("");
+    setIncludeInProjection(true);
     setUserPickedCategory(false);
     setUserPickedAccount(false);
     setShowNewCategory(false);
@@ -498,6 +500,7 @@ export function QuickAddSheet() {
           occurrencesLimit:
             endType === "occurrences_count" ? parsedOccurrencesLimit : null,
           autoConfirm: false,
+          includeInProjection,
         })
       : await createTransaction(supabase, {
           description: finalDescription,
@@ -861,6 +864,26 @@ export function QuickAddSheet() {
                     />
                   ) : null}
                 </div>
+
+                <label className="flex items-start gap-3 rounded-lg border border-border/50 bg-background/60 p-3">
+                  <input
+                    type="checkbox"
+                    checked={includeInProjection}
+                    onChange={(event) =>
+                      setIncludeInProjection(event.target.checked)
+                    }
+                    className="mt-0.5 size-4 rounded border-input accent-primary"
+                    data-testid="quick-add-include-in-projection"
+                  />
+                  <span className="space-y-0.5">
+                    <span className="block text-sm font-medium">
+                      Incluir no saldo projetado
+                    </span>
+                    <span className="block text-xs text-muted-foreground">
+                      Considera as próximas ocorrências enquanto pendentes.
+                    </span>
+                  </span>
+                </label>
 
                 <Link
                   href="/lancamentos?new=1"

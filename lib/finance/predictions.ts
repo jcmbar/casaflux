@@ -19,6 +19,7 @@ export type CreatePredictionInput = {
   description: string;
   amount: number;
   scheduledDate: string;
+  includeInProjection: boolean;
 };
 
 export type CreatePredictionResult =
@@ -70,6 +71,7 @@ export async function createPrediction(
       amount: input.amount,
       scheduled_date: input.scheduledDate,
       status: "predicted",
+      include_in_projection: input.includeInProjection,
     })
     .select("*")
     .single();
@@ -152,6 +154,34 @@ export async function cancelPrediction(
     return {
       ok: false,
       message: "Apenas previsões pendentes podem ser canceladas.",
+    };
+  }
+
+  notifyRecurrencesChanged();
+  return { ok: true };
+}
+
+export type SetPredictionProjectionResult =
+  | { ok: true }
+  | { ok: false; message: string };
+
+export async function setPredictionProjection(
+  supabase: SupabaseClient,
+  predictionId: string,
+  includeInProjection: boolean,
+): Promise<SetPredictionProjectionResult> {
+  const { data, error } = await supabase
+    .from("financial_predictions")
+    .update({ include_in_projection: includeInProjection })
+    .eq("id", predictionId)
+    .eq("status", "predicted")
+    .select("id");
+
+  if (error || !data || data.length === 0) {
+    console.error(error);
+    return {
+      ok: false,
+      message: "Não foi possível atualizar o saldo projetado.",
     };
   }
 

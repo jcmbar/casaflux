@@ -5,6 +5,7 @@ import { getMonthlyPredictionAggregates } from "./prediction-aggregates";
 import {
   createPrediction,
   getCreatePredictionValidationError,
+  setPredictionProjection,
 } from "./predictions";
 
 describe("createPrediction", () => {
@@ -21,6 +22,7 @@ describe("createPrediction", () => {
       amount: 120,
       scheduled_date: "2026-07-25",
       status: "predicted",
+      include_in_projection: true,
       settled_transaction_id: null,
       settled_date: null,
       settled_amount: null,
@@ -42,6 +44,7 @@ describe("createPrediction", () => {
       description: "  Seguro anual  ",
       amount: 120,
       scheduledDate: "2026-07-25",
+      includeInProjection: true,
     });
 
     expect(result.ok).toBe(true);
@@ -77,6 +80,7 @@ describe("createPrediction", () => {
         description: " ",
         amount: 0,
         scheduledDate: "",
+        includeInProjection: true,
       },
     );
 
@@ -105,5 +109,32 @@ describe("getCreatePredictionValidationError", () => {
         scheduledDate: "20/07/2026",
       }),
     ).toBe("Informe uma data agendada válida.");
+  });
+});
+
+describe("setPredictionProjection", () => {
+  it("updates only a pending prediction", async () => {
+    const select = vi.fn().mockResolvedValue({
+      data: [{ id: "prediction-1" }],
+      error: null,
+    });
+    const builder = {
+      eq: vi.fn(),
+      select,
+    };
+    builder.eq.mockReturnValue(builder);
+    const update = vi.fn(() => builder);
+    const from = vi.fn(() => ({ update }));
+
+    const result = await setPredictionProjection(
+      { from } as unknown as SupabaseClient,
+      "prediction-1",
+      true,
+    );
+
+    expect(update).toHaveBeenCalledWith({ include_in_projection: true });
+    expect(builder.eq).toHaveBeenCalledWith("id", "prediction-1");
+    expect(builder.eq).toHaveBeenCalledWith("status", "predicted");
+    expect(result).toEqual({ ok: true });
   });
 });

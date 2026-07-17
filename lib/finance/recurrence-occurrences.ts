@@ -91,6 +91,7 @@ export type RecurrenceSnapshotFields = Pick<
   | "categoryId"
   | "type"
   | "description"
+  | "includeInProjection"
 >;
 
 /**
@@ -151,6 +152,7 @@ export async function syncPredictedOccurrences(
         scheduled_date: date,
         amount: recurrence.amount,
         status: "predicted",
+        include_in_projection: recurrence.includeInProjection,
       })),
     );
 

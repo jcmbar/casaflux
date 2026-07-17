@@ -8,10 +8,12 @@ import {
   CalendarClock,
   CalendarPlus,
   Check,
+  ChevronDown,
   Loader2,
   MoreHorizontal,
   Pencil,
   Plus,
+  Repeat2,
   Trash2,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -61,6 +63,7 @@ import {
 } from "@/lib/finance/account-balance";
 import { createTransaction } from "@/lib/finance/create-transaction";
 import { createRecurrence } from "@/lib/finance/create-recurrence";
+import { endRecurrence } from "@/lib/finance/end-recurrence";
 import {
   centsToAmount,
   isPositiveCents,
@@ -69,6 +72,7 @@ import {
   cancelPrediction,
   createPrediction,
   getCreatePredictionValidationError,
+  setPredictionProjection,
   settlePrediction,
 } from "@/lib/finance/predictions";
 import {
@@ -80,6 +84,7 @@ import {
   type MonthlyPredictionAggregates,
 } from "@/lib/finance/prediction-aggregates";
 import { getRecurrenceEndValidationError } from "@/lib/finance/recurrence-validation";
+import { setRecurrenceProjection } from "@/lib/finance/set-recurrence-projection";
 import { CATEGORIES_CHANGED_EVENT } from "@/lib/finance/category-events";
 import {
   fetchHiddenSystemCategoryIds,
@@ -93,9 +98,12 @@ import { formatCurrency, formatDate } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
 import { canPostToAccount, type Account } from "@/types/account";
-import type {
-  RecurrenceEndType,
-  RecurrenceFrequency,
+import {
+  mapTransactionRecurrence,
+  type RecurrenceEndType,
+  type RecurrenceFrequency,
+  type TransactionRecurrence,
+  type TransactionRecurrenceRow,
 } from "@/types/recurrence";
 import {
   mapTransaction,
@@ -127,6 +135,7 @@ type FormState = {
   endDate: string;
   occurrencesLimit: string;
   autoConfirm: boolean;
+  includeInProjection: boolean;
 };
 
 type PredictionFormState = {
@@ -136,6 +145,7 @@ type PredictionFormState = {
   scheduledDate: string;
   categoryId: string;
   accountId: string;
+  includeInProjection: boolean;
 };
 
 type PendingPrediction = {
@@ -148,6 +158,7 @@ type PendingPrediction = {
   type: TransactionType;
   accountId: string | null;
   categoryId: string | null;
+  includeInProjection: boolean;
 };
 
 type PendingPredictionRow = {
@@ -160,6 +171,7 @@ type PendingPredictionRow = {
   type: TransactionType;
   account_id: string | null;
   category_id: string | null;
+  include_in_projection: boolean;
 };
 
 const EMPTY_PREDICTION_AGGREGATES: MonthlyPredictionAggregates = {
@@ -191,6 +203,13 @@ const typeMap = {
     iconClass: "bg-muted text-muted-foreground",
   },
 } as const;
+
+const frequencyLabels: Record<RecurrenceFrequency, string> = {
+  weekly: "Semanal",
+  biweekly: "Quinzenal",
+  monthly: "Mensal",
+  yearly: "Anual",
+};
 
 function PredictionDiffLine({
   diff,
@@ -293,6 +312,15 @@ function LancamentosPageContent() {
   const [pendingPredictions, setPendingPredictions] = useState<
     PendingPrediction[]
   >([]);
+  const [recurrences, setRecurrences] = useState<TransactionRecurrence[]>([]);
+  const [recurrencesExpanded, setRecurrencesExpanded] = useState(false);
+  const [predictionsExpanded, setPredictionsExpanded] = useState(false);
+  const [endingRecurrenceId, setEndingRecurrenceId] = useState<string | null>(
+    null,
+  );
+  const [updatingProjectionId, setUpdatingProjectionId] = useState<
+    string | null
+  >(null);
   const [monthlyPredictionAggregates, setMonthlyPredictionAggregates] =
     useState<MonthlyPredictionAggregates>(EMPTY_PREDICTION_AGGREGATES);
   const [settledDiffByTransactionId, setSettledDiffByTransactionId] = useState<
@@ -309,6 +337,8 @@ function LancamentosPageContent() {
   const [settlingPredictionId, setSettlingPredictionId] = useState<
     string | null
   >(null);
+  const [updatingPredictionProjectionId, setUpdatingPredictionProjectionId] =
+    useState<string | null>(null);
   const [settleTarget, setSettleTarget] = useState<PendingPrediction | null>(
     null,
   );
@@ -327,6 +357,7 @@ function LancamentosPageContent() {
     scheduledDate: new Date().toISOString().slice(0, 10),
     categoryId: "",
     accountId: "",
+    includeInProjection: true,
   });
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -346,6 +377,7 @@ function LancamentosPageContent() {
     endDate: "",
     occurrencesLimit: "",
     autoConfirm: false,
+    includeInProjection: true,
   });
 
   const scope = useMemo(
@@ -414,11 +446,11 @@ function LancamentosPageContent() {
     let predictionRows: PendingPredictionRow[] = [];
     const settledDiffs = new Map<string, PredictionDiff>();
 
-    const [predictionsRes, settledRes] = await Promise.all([
+    const [predictionsRes, settledRes, recurrencesRes] = await Promise.all([
       supabase
         .from("financial_predictions")
         .select(
-          "id, recurrence_id, owner_user_id, scheduled_date, amount, description, type, account_id, category_id",
+          "id, recurrence_id, owner_user_id, scheduled_date, amount, description, type, account_id, category_id, include_in_projection",
         )
         .eq("status", "predicted")
         .order("scheduled_date", { ascending: true }),
@@ -427,6 +459,11 @@ function LancamentosPageContent() {
         .select("amount, settled_amount, settled_transaction_id")
         .eq("status", "settled")
         .not("settled_transaction_id", "is", null),
+      supabase
+        .from("transaction_recurrences")
+        .select("*")
+        .eq("is_active", true)
+        .order("created_at", { ascending: true }),
     ]);
 
     if (scopedAccountIds.length > 0) {
@@ -477,6 +514,20 @@ function LancamentosPageContent() {
       }
     }
 
+    if (recurrencesRes.error) {
+      console.error(recurrencesRes.error);
+    } else {
+      setRecurrences(
+        ((recurrencesRes.data ?? []) as TransactionRecurrenceRow[])
+          .filter((row) =>
+            row.family_id
+              ? row.family_id === scope.activeFamilyId
+              : row.owner_user_id === scope.userId,
+          )
+          .map((row) => mapTransactionRecurrence(row)),
+      );
+    }
+
     setAccounts(scopedAccounts);
 
     const visibility: CategoryVisibilityContext = {
@@ -512,6 +563,7 @@ function LancamentosPageContent() {
         type: row.type,
         accountId: row.account_id,
         categoryId: row.category_id,
+        includeInProjection: row.include_in_projection,
       })),
     );
 
@@ -608,6 +660,20 @@ function LancamentosPageContent() {
     [pendingPredictions, period],
   );
 
+  const nextPendingByRecurrence = useMemo(() => {
+    const map = new Map<string, PendingPrediction>();
+    for (const prediction of pendingPredictions) {
+      if (prediction.recurrenceId && !map.has(prediction.recurrenceId)) {
+        map.set(prediction.recurrenceId, prediction);
+      }
+    }
+    return map;
+  }, [pendingPredictions]);
+
+  const nextPendingPrediction = visiblePendingPredictions[0] ?? null;
+  const nextRecurringPrediction =
+    pendingPredictions.find((prediction) => prediction.recurrenceId) ?? null;
+
   const incomes = useMemo(
     () => sumByType(filteredTransactions, "income"),
     [filteredTransactions],
@@ -676,6 +742,7 @@ function LancamentosPageContent() {
       scheduledDate: new Date().toISOString().slice(0, 10),
       categoryId: "",
       accountId: "",
+      includeInProjection: true,
     });
   }
 
@@ -718,6 +785,7 @@ function LancamentosPageContent() {
       description: predictionForm.description,
       amount,
       scheduledDate: predictionForm.scheduledDate,
+      includeInProjection: predictionForm.includeInProjection,
     });
 
     if (!result.ok) {
@@ -750,6 +818,7 @@ function LancamentosPageContent() {
       endDate: "",
       occurrencesLimit: "",
       autoConfirm: false,
+      includeInProjection: true,
     });
   }
 
@@ -795,6 +864,7 @@ function LancamentosPageContent() {
       endDate: "",
       occurrencesLimit: "",
       autoConfirm: false,
+      includeInProjection: true,
     });
     setOpen(true);
   }
@@ -929,12 +999,76 @@ function LancamentosPageContent() {
     toast.success("Previsão liquidada e lançamento criado.");
   }
 
+  async function handleEndRecurrence(recurrence: TransactionRecurrence) {
+    if (endingRecurrenceId) return;
+
+    const confirmed = await confirm({
+      title: "Encerrar recorrência",
+      description: `Encerrar a recorrência "${recurrence.description}"? Novas ocorrências não serão geradas e as previsões pendentes dela serão canceladas. Lançamentos e previsões já liquidadas serão mantidos.`,
+      confirmLabel: "Encerrar recorrência",
+      destructive: true,
+    });
+
+    if (!confirmed) return;
+
+    setEndingRecurrenceId(recurrence.id);
+    const result = await endRecurrence(supabase, recurrence.id);
+
+    if (!result.ok) {
+      toast.error(result.message);
+      setEndingRecurrenceId(null);
+      return;
+    }
+
+    await loadData();
+    setEndingRecurrenceId(null);
+    toast.success(
+      result.canceledPredictions > 0
+        ? `Recorrência encerrada. ${result.canceledPredictions} ${
+            result.canceledPredictions === 1
+              ? "previsão pendente cancelada"
+              : "previsões pendentes canceladas"
+          }.`
+        : "Recorrência encerrada.",
+    );
+  }
+
+  async function handleRecurrenceProjectionChange(
+    recurrence: TransactionRecurrence,
+    includeInProjection: boolean,
+  ) {
+    if (updatingProjectionId) return;
+
+    setUpdatingProjectionId(recurrence.id);
+    const result = await setRecurrenceProjection(
+      supabase,
+      recurrence.id,
+      includeInProjection,
+    );
+
+    if (!result.ok) {
+      toast.error(result.message);
+      setUpdatingProjectionId(null);
+      return;
+    }
+
+    await loadData();
+    setUpdatingProjectionId(null);
+    toast.success(
+      includeInProjection
+        ? "Recorrência incluída no saldo projetado."
+        : "Recorrência removida do saldo projetado.",
+    );
+  }
+
   async function handleCancelPrediction(prediction: PendingPrediction) {
     if (settlingPredictionId) return;
 
     const confirmed = await confirm({
       title: "Cancelar previsão",
-      description: `Cancelar a previsão "${prediction.description}"? Nenhum lançamento será criado.`,
+      description: prediction.recurrenceId
+        ? `Cancelar apenas esta ocorrência de "${prediction.description}"? A recorrência continua ativa e nenhum lançamento será criado.`
+        : `Cancelar a previsão "${prediction.description}"? Nenhum lançamento será criado.`,
       confirmLabel: "Cancelar previsão",
       destructive: true,
     });
@@ -953,6 +1087,34 @@ function LancamentosPageContent() {
     await loadData();
     setSettlingPredictionId(null);
     toast.success("Previsão cancelada.");
+  }
+
+  async function handlePredictionProjectionChange(
+    prediction: PendingPrediction,
+    includeInProjection: boolean,
+  ) {
+    if (updatingPredictionProjectionId) return;
+
+    setUpdatingPredictionProjectionId(prediction.id);
+    const result = await setPredictionProjection(
+      supabase,
+      prediction.id,
+      includeInProjection,
+    );
+
+    if (!result.ok) {
+      toast.error(result.message);
+      setUpdatingPredictionProjectionId(null);
+      return;
+    }
+
+    await loadData();
+    setUpdatingPredictionProjectionId(null);
+    toast.success(
+      includeInProjection
+        ? "Previsão incluída no saldo projetado."
+        : "Previsão removida do saldo projetado.",
+    );
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1047,6 +1209,7 @@ function LancamentosPageContent() {
             ? parsedOccurrencesLimit
             : null,
         autoConfirm: form.autoConfirm,
+        includeInProjection: form.includeInProjection,
       });
 
       if (!result.ok) {
@@ -1253,6 +1416,29 @@ function LancamentosPageContent() {
               Sem conta prevista, a previsão será pessoal. A conta real será
               escolhida ao liquidar.
             </p>
+
+            <label className="flex items-start gap-3 rounded-xl border border-border/50 bg-muted/20 p-3">
+              <input
+                type="checkbox"
+                checked={predictionForm.includeInProjection}
+                onChange={(event) =>
+                  setPredictionForm((current) => ({
+                    ...current,
+                    includeInProjection: event.target.checked,
+                  }))
+                }
+                className="mt-0.5 size-4 rounded border-input accent-primary"
+                data-testid="prediction-include-in-projection"
+              />
+              <span className="space-y-1">
+                <span className="block text-sm font-medium">
+                  Incluir no saldo projetado
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  Considera esta previsão enquanto ela estiver pendente.
+                </span>
+              </span>
+            </label>
 
             <SheetFooter className="px-0 pb-2">
               <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -1511,6 +1697,29 @@ function LancamentosPageContent() {
                           required
                         />
                       ) : null}
+
+                      <div className="flex items-start gap-3">
+                        <input
+                          id="recurrence-include-in-projection"
+                          type="checkbox"
+                          checked={form.includeInProjection}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              includeInProjection: event.target.checked,
+                            }))
+                          }
+                          className="mt-0.5 size-4 rounded border-input accent-primary"
+                        />
+                        <div className="space-y-1">
+                          <Label htmlFor="recurrence-include-in-projection">
+                            Incluir no saldo projetado
+                          </Label>
+                          <p className="text-sm text-muted-foreground">
+                            Considera as ocorrências pendentes desta recorrência.
+                          </p>
+                        </div>
+                      </div>
 
                       <div className="flex items-start gap-3">
                         <input
@@ -1833,13 +2042,193 @@ function LancamentosPageContent() {
       ) : null}
 
       <Card className="animate-enter-delayed border-border/50 shadow-sm">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 font-semibold">
-            <CalendarClock className="size-5 text-primary" />
-            Previsões pendentes
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="pt-0">
+        <button
+          type="button"
+          className="w-full text-left"
+          onClick={() => setRecurrencesExpanded((current) => !current)}
+          aria-expanded={recurrencesExpanded}
+          aria-controls="recurrences-panel"
+          data-testid="recurrences-toggle"
+        >
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 space-y-1">
+                <CardTitle className="flex items-center gap-2 font-semibold">
+                  <Repeat2 className="size-5 text-primary" />
+                  Recorrências
+                </CardTitle>
+                <p className="truncate text-sm text-muted-foreground">
+                  {loading
+                    ? "Carregando recorrências..."
+                    : recurrences.length === 0
+                      ? "Nenhuma recorrência ativa."
+                      : `${recurrences.length} ${
+                          recurrences.length === 1
+                            ? "recorrência ativa"
+                            : "recorrências ativas"
+                        }${
+                          nextRecurringPrediction
+                            ? ` · Próxima: ${nextRecurringPrediction.description} em ${formatDate(nextRecurringPrediction.scheduledDate)}`
+                            : ""
+                        }`}
+                </p>
+              </div>
+              <ChevronDown
+                className={`size-5 shrink-0 text-muted-foreground transition-transform ${
+                  recurrencesExpanded ? "rotate-180" : ""
+                }`}
+                aria-hidden
+              />
+            </div>
+          </CardHeader>
+        </button>
+        {recurrencesExpanded ? (
+          <CardContent id="recurrences-panel" className="pt-0">
+            {loading ? (
+              <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Carregando recorrências...
+              </div>
+            ) : recurrences.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 px-6 py-8 text-center">
+                <p className="text-sm font-medium">
+                  Nenhuma recorrência ativa
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Crie um lançamento recorrente para vê-lo aqui.
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-border/60">
+                {recurrences.map((recurrence) => {
+                  const config = typeMap[recurrence.type];
+                  const Icon = config.icon;
+                  const account = accountMap.get(recurrence.accountId);
+                  const nextOccurrence = nextPendingByRecurrence.get(
+                    recurrence.id,
+                  );
+                  const isBusy = endingRecurrenceId === recurrence.id;
+                  const isUpdatingProjection =
+                    updatingProjectionId === recurrence.id;
+
+                  return (
+                    <div
+                      key={recurrence.id}
+                      className="flex flex-col gap-3 py-4 first:pt-2 last:pb-2 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="flex min-w-0 items-start gap-3">
+                        <div
+                          className={`flex size-10 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ring-black/5 dark:ring-white/10 ${config.iconClass}`}
+                        >
+                          <Icon className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-medium">
+                            {recurrence.description}
+                          </p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {frequencyLabels[recurrence.frequency]}
+                            <span aria-hidden> · </span>
+                            {account?.name ?? "Conta"}
+                            <span aria-hidden> · </span>
+                            {nextOccurrence
+                              ? `Próxima em ${formatDate(nextOccurrence.scheduledDate)}`
+                              : "Sem previsões pendentes"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3 sm:justify-end">
+                        <span
+                          className={`font-semibold tabular-nums ${config.valueClass}`}
+                        >
+                          {recurrence.type === "expense" ? "-" : ""}
+                          {formatCurrency(recurrence.amount)}
+                        </span>
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            checked={recurrence.includeInProjection}
+                            disabled={updatingProjectionId !== null}
+                            onChange={(event) =>
+                              void handleRecurrenceProjectionChange(
+                                recurrence,
+                                event.target.checked,
+                              )
+                            }
+                            className="size-4 rounded border-input accent-primary"
+                            aria-label={`Incluir ${recurrence.description} no saldo projetado`}
+                          />
+                          {isUpdatingProjection ? "Atualizando..." : "Projetar"}
+                        </label>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={endingRecurrenceId !== null}
+                          onClick={() => void handleEndRecurrence(recurrence)}
+                          data-testid={`end-recurrence-${recurrence.id}`}
+                        >
+                          {isBusy ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
+                          Encerrar
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        ) : null}
+      </Card>
+
+      <Card className="animate-enter-delayed border-border/50 shadow-sm">
+        <button
+          type="button"
+          className="w-full text-left"
+          onClick={() => setPredictionsExpanded((current) => !current)}
+          aria-expanded={predictionsExpanded}
+          aria-controls="pending-predictions-panel"
+          data-testid="pending-predictions-toggle"
+        >
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 space-y-1">
+                <CardTitle className="flex items-center gap-2 font-semibold">
+                  <CalendarClock className="size-5 text-primary" />
+                  Previsões pendentes
+                </CardTitle>
+                <p className="truncate text-sm text-muted-foreground">
+                  {loading
+                    ? "Carregando previsões..."
+                    : visiblePendingPredictions.length === 0
+                      ? "Nenhuma previsão pendente no período."
+                      : `${visiblePendingPredictions.length} ${
+                          visiblePendingPredictions.length === 1
+                            ? "previsão pendente"
+                            : "previsões pendentes"
+                        }${
+                          nextPendingPrediction
+                            ? ` · Próxima: ${nextPendingPrediction.description} em ${formatDate(nextPendingPrediction.scheduledDate)}`
+                            : ""
+                        }`}
+                </p>
+              </div>
+              <ChevronDown
+                className={`size-5 shrink-0 text-muted-foreground transition-transform ${
+                  predictionsExpanded ? "rotate-180" : ""
+                }`}
+                aria-hidden
+              />
+            </div>
+          </CardHeader>
+        </button>
+        {predictionsExpanded ? (
+        <CardContent id="pending-predictions-panel" className="pt-0">
           {loading ? (
             <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -1866,6 +2255,8 @@ function LancamentosPageContent() {
                   ? categoryMap.get(prediction.categoryId)
                   : null;
                 const isBusy = settlingPredictionId === prediction.id;
+                const isUpdatingProjection =
+                  updatingPredictionProjectionId === prediction.id;
                 const isOverdue =
                   prediction.scheduledDate <
                   new Date().toISOString().slice(0, 10);
@@ -1914,6 +2305,24 @@ function LancamentosPageContent() {
                         {formatCurrency(prediction.amount)}
                       </span>
                       <div className="flex items-center gap-1.5">
+                        <label className="mr-1 flex items-center gap-2 text-xs text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            checked={prediction.includeInProjection}
+                            disabled={updatingPredictionProjectionId !== null}
+                            onChange={(event) =>
+                              void handlePredictionProjectionChange(
+                                prediction,
+                                event.target.checked,
+                              )
+                            }
+                            className="size-4 rounded border-input accent-primary"
+                            aria-label={`Incluir ${prediction.description} no saldo projetado`}
+                          />
+                          {isUpdatingProjection
+                            ? "Atualizando..."
+                            : "Projetar"}
+                        </label>
                         <Button
                           type="button"
                           size="sm"
@@ -1949,6 +2358,7 @@ function LancamentosPageContent() {
             </div>
           )}
         </CardContent>
+        ) : null}
       </Card>
 
       <Card className="animate-enter-delayed border-border/50 shadow-sm">

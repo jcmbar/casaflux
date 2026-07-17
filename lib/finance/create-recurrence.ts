@@ -24,6 +24,7 @@ export type CreateRecurrenceInput = {
   endDate: string | null;
   occurrencesLimit: number | null;
   autoConfirm: boolean;
+  includeInProjection: boolean;
 };
 
 export type CreateRecurrenceResult =
@@ -57,6 +58,7 @@ export async function createRecurrence(
           ? input.occurrencesLimit
           : null,
       auto_confirm: input.autoConfirm,
+      include_in_projection: input.includeInProjection,
     })
     .select("*")
     .single();
