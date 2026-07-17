@@ -185,7 +185,9 @@ function CategoryRow({
 }
 
 export default function CategoriasPage() {
-  const supabase = useMemo(() => createClient(), []);
+  const [supabase, setSupabase] = useState<ReturnType<
+    typeof createClient
+  > | null>(null);
   const pathname = usePathname();
   const confirm = useConfirm();
   const { user, loading: authLoading } = useAppContext();
@@ -207,7 +209,13 @@ export default function CategoriasPage() {
     transfer: false,
   });
 
+  useEffect(() => {
+    setSupabase(createClient());
+  }, []);
+
   const loadCategories = useCallback(async () => {
+    if (!supabase) return;
+
     if (!user) {
       setCategories([]);
       setVisibilityContext({ hiddenSystemCategoryIds: new Set() });
@@ -310,7 +318,7 @@ export default function CategoriasPage() {
   }
 
   async function handleDeactivate(category: Category) {
-    if (!user) return;
+    if (!user || !supabase) return;
 
     const result = await deactivateCategoryForUser(supabase, category, user.id);
 
@@ -325,7 +333,7 @@ export default function CategoriasPage() {
   }
 
   async function handleReactivate(category: Category) {
-    if (!user) return;
+    if (!user || !supabase) return;
 
     const result = await reactivateCategoryForUser(supabase, category, user.id);
 
@@ -340,7 +348,7 @@ export default function CategoriasPage() {
   }
 
   async function handleDelete(category: Category) {
-    if (!isCustomCategory(category) || !user) return;
+    if (!isCustomCategory(category) || !user || !supabase) return;
 
     const usage = await fetchCategoryUsage(supabase, category.id);
 
@@ -378,7 +386,7 @@ export default function CategoriasPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!user) return;
+    if (!user || !supabase) return;
 
     const name = form.name.trim();
     if (!name) return;
