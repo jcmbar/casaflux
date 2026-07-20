@@ -14,6 +14,7 @@ import {
   isNubankInvoicePayment,
   isNubankIofFee,
 } from "./payment-detector";
+import { isCreditCardInvoicePaymentCandidate } from "../../invoice-payment/resolve-invoice-payment";
 
 const EXPECTED_HEADER = ["date", "title", "amount"];
 
@@ -22,16 +23,30 @@ export type ParseNubankCreditCardOptions = {
   cardAccountId: string;
 };
 
-function classifyCreditCardTitle(title: string): NormalizedImportKind {
-  if (isNubankInvoicePayment(title)) {
+function classifyCreditCardRow(input: {
+  title: string;
+  direction: "in" | "out";
+}): NormalizedImportKind {
+  if (
+    isCreditCardInvoicePaymentCandidate({
+      description: input.title,
+      direction: input.direction,
+      source: "nubank_credit_card",
+    })
+  ) {
     return "card_invoice_payment";
   }
 
-  if (isNubankIofFee(title)) {
+  // Exact title without the credit direction → do not auto-classify as payment.
+  if (isNubankInvoicePayment(input.title)) {
+    return "card_purchase";
+  }
+
+  if (isNubankIofFee(input.title)) {
     return "card_fee";
   }
 
-  if (extractInstallment(title)) {
+  if (extractInstallment(input.title)) {
     return "card_purchase";
   }
 
@@ -101,7 +116,7 @@ export function parseNubankCreditCardCsv(
       const title = (titleRaw ?? "").trim();
       const { amount, direction } = parseNubankCreditCardAmount(amountRaw ?? "");
       const installment = extractInstallment(title);
-      const kind = classifyCreditCardTitle(title);
+      const kind = classifyCreditCardRow({ title, direction });
 
       rows.push({
         source: "nubank_credit_card",

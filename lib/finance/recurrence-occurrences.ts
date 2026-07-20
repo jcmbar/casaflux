@@ -24,6 +24,7 @@ export type RecurrencePlanFields = Pick<
   | "endDate"
   | "occurrencesLimit"
   | "isActive"
+  | "isPaused"
 >;
 
 function todayIso(): string {
@@ -37,7 +38,7 @@ function todayIso(): string {
  * an occurrence (any status) and a time window, returns the scheduled
  * dates that still need a `predicted` occurrence.
  *
- * - Inactive recurrences produce nothing.
+ * - Inactive or paused recurrences produce nothing.
  * - Existing dates are never recreated, so occurrences that were
  *   confirmed or skipped are left untouched.
  * - Past dates since `startDate` are included: a missed date should
@@ -48,7 +49,7 @@ export function planPredictedOccurrences(
   existingDates: Iterable<string>,
   options: PlanOccurrencesOptions = {},
 ): string[] {
-  if (!recurrence.isActive) {
+  if (!recurrence.isActive || recurrence.isPaused) {
     return [];
   }
 
@@ -104,14 +105,15 @@ export type RecurrenceSnapshotFields = Pick<
  *
  * Idempotent: re-running never duplicates dates (guarded here and by the
  * unique index on (recurrence_id, scheduled_date)) and never modifies
- * existing predictions, whatever their status.
+ * existing predictions, whatever their status. Template edits that should
+ * rewrite upcoming pending rows go through `updateRecurrence`.
  */
 export async function syncPredictedOccurrences(
   supabase: SupabaseClient,
   recurrence: RecurrenceSnapshotFields & RecurrencePlanFields,
   options: PlanOccurrencesOptions = {},
 ): Promise<SyncOccurrencesResult> {
-  if (!recurrence.isActive) {
+  if (!recurrence.isActive || recurrence.isPaused) {
     return { ok: true, created: 0 };
   }
 

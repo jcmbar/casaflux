@@ -14,6 +14,7 @@ import { MemberParticipationRow } from "@/components/finance/dashboard/member-pa
 import { PredictionSummary } from "@/components/finance/dashboard/prediction-summary";
 import { RecentTransactions } from "@/components/finance/dashboard/recent-transactions";
 import { SummaryCards } from "@/components/finance/dashboard/summary-cards";
+import { UpcomingStatementDues } from "@/components/finance/dashboard/upcoming-bills";
 import { useDashboardData } from "@/components/finance/dashboard/use-dashboard-data";
 import { useAppContext } from "@/contexts/app-context";
 
@@ -33,6 +34,7 @@ export function DashboardView() {
     totalAccountBalance,
     monthlyPredictionAggregates,
     monthlyProjectionDelta,
+    upcomingStatementDues,
   } = useDashboardData();
 
   return (
@@ -80,6 +82,12 @@ export function DashboardView() {
         aggregates={monthlyPredictionAggregates}
         monthKey={monthSummary.monthKey}
         monthLabel={monthSummary.monthLabel}
+      />
+
+      <UpcomingStatementDues
+        loading={loading}
+        items={upcomingStatementDues}
+        className="animate-enter-delayed"
       />
 
       <CashflowChart

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="CasaFlux">
+  <path
+    d="M16 5.8 25 13.4v8.8L16 26.2 7 22.2v-8.8L16 5.8Z"
+    stroke="#0f766e"
+    stroke-width="2.3"
+    stroke-linejoin="round"
+    stroke-linecap="round"
+  />
+  <path
+    d="M16 11.4a4.8 4.8 0 0 1 4.8 4.8"
+    stroke="#0f766e"
+    stroke-width="2.3"
+    stroke-linecap="round"
+  />
+  <path
+    d="M16 21a4.8 4.8 0 0 1-4.8-4.8"
+    stroke="#0f766e"
+    stroke-width="2.3"
+    stroke-linecap="round"
+  />
+</svg>

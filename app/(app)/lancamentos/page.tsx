@@ -12,7 +12,9 @@ import {
   CreditCard,
   Loader2,
   MoreHorizontal,
+  Pause,
   Pencil,
+  Play,
   Plus,
   Repeat2,
   Search,
@@ -23,6 +25,8 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { AccountIdentityMark } from "@/components/finance/account-identity";
+import { CreditCardStatementSummary } from "@/components/finance/credit-card-statement-summary";
+import { PayInvoiceSheet } from "@/components/finance/pay-invoice-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,7 +57,6 @@ import {
 import { useAppContext } from "@/contexts/app-context";
 import { PeriodFilterBar } from "@/components/finance/period-filter-bar";
 import {
-  filterTransactionsByPeriod,
   getMonthKey,
   parsePeriodFromSearchParams,
   type PeriodFilter,
@@ -78,8 +81,13 @@ import {
   getTransactionBalanceDelta,
 } from "@/lib/finance/account-balance";
 import { createTransaction } from "@/lib/finance/create-transaction";
+import { fetchAllTransactionsForAccounts } from "@/lib/finance/fetch-transactions";
 import { createRecurrence } from "@/lib/finance/create-recurrence";
 import { endRecurrence } from "@/lib/finance/end-recurrence";
+import {
+  pauseRecurrence,
+  resumeRecurrence,
+} from "@/lib/finance/pause-recurrence";
 import { updateRecurrence } from "@/lib/finance/update-recurrence";
 import {
   centsToAmount,
@@ -102,6 +110,24 @@ import {
 } from "@/lib/finance/prediction-aggregates";
 import { getRecurrenceEndValidationError } from "@/lib/finance/recurrence-validation";
 import {
+  RECURRENCE_END_TYPE_LABELS,
+  RECURRENCE_END_TYPE_OPTIONS,
+  RECURRENCE_FREQUENCY_LABELS,
+  RECURRENCE_FREQUENCY_OPTIONS,
+} from "@/lib/finance/recurrence-labels";
+import { getPendingPredictionRecurrenceOrigin, getRecurrenceRowElementId } from "@/lib/finance/pending-prediction-recurrence-origin";
+import {
+  formatPendingPredictionUrgencySummary,
+  groupPendingPredictionsByUrgency,
+} from "@/lib/finance/pending-prediction-urgency";
+import {
+  RECURRENCE_NAVIGATION_HIGHLIGHT_MS,
+  clearRecurrenceHighlightIfCurrent,
+  getRecurrenceNavigationHighlightClassName,
+  isRecurrenceRowHighlighted,
+  nextRecurrenceHighlightId,
+} from "@/lib/finance/recurrence-navigation-highlight";
+import {
   buildCreateRecurrenceInputFromPredictionForm,
   getPredictionRecurrenceSubmitValidationError,
   shouldCreatePredictionAsRecurrence,
@@ -117,15 +143,38 @@ import {
 import { sumByType } from "@/lib/finance/dashboard-stats";
 import { formatAccountSelectLabel } from "@/lib/finance/account-identity";
 import {
+  getTransactionStatementRelation,
+  hasCreditCardBillingConfig,
+  STATEMENT_CYCLE_RELATION_LABELS,
+} from "@/lib/finance/credit-card-billing";
+import {
+  filterLancamentosTransactions,
+  resolveCardStatementPeriodContext,
+} from "@/lib/finance/lancamentos-card-statement";
+import {
   ALL_ACCOUNTS_FILTER,
   detectInvoicePaymentSignal,
-  filterTransactionsByAccount,
   getAccountKindLabel,
   getInvoicePaymentLabel,
+  getInvoicePaymentReconcileBadge,
+  getInvoicePaymentReconcileBadgeClass,
+  getInvoicePaymentReconcileBadgeLabel,
   partitionAccountsForFilter,
   resolveAccountFilter,
   type LancamentosAccountFilter,
 } from "@/lib/finance/lancamentos-filters";
+import {
+  applyLancamentosQuickFilters,
+  getLancamentosListEmptyCopy,
+  LANCAMENTOS_ORIGIN_FILTER_LABELS,
+  LANCAMENTOS_ORIGIN_FILTERS,
+  LANCAMENTOS_TYPE_FILTER_LABELS,
+  LANCAMENTOS_TYPE_FILTERS,
+  parseLancamentosOriginFilter,
+  parseLancamentosTypeFilter,
+  type LancamentosOriginFilter,
+  type LancamentosTypeFilter,
+} from "@/lib/finance/lancamentos-quick-filters";
 import {
   buildTransactionSearchIndex,
   filterTransactionsBySearch,
@@ -146,7 +195,9 @@ import { toast } from "@/lib/toast";
 import { canPostToAccount, type Account } from "@/types/account";
 import { cn } from "@/lib/utils";
 import {
+  getRecurrenceLifecycleStatus,
   mapTransactionRecurrence,
+  RECURRENCE_LIFECYCLE_STATUS_LABELS,
   type RecurrenceEndType,
   type RecurrenceFrequency,
   type TransactionRecurrence,
@@ -257,12 +308,7 @@ const typeMap = {
   },
 } as const;
 
-const frequencyLabels: Record<RecurrenceFrequency, string> = {
-  weekly: "Semanal",
-  biweekly: "Quinzenal",
-  monthly: "Mensal",
-  yearly: "Anual",
-};
+const frequencyLabels = RECURRENCE_FREQUENCY_LABELS;
 
 function PredictionDiffLine({
   diff,
@@ -360,12 +406,24 @@ function buildLancamentosUrl(
 
   if (extraParams) {
     for (const [key, value] of Object.entries(extraParams)) {
-      params.set(key, value);
+      if (value && value !== "all") {
+        params.set(key, value);
+      }
     }
   }
 
   const query = params.toString();
   return query ? `/lancamentos?${query}` : "/lancamentos";
+}
+
+function lancamentosFilterParams(input: {
+  typeFilter: LancamentosTypeFilter;
+  originFilter: LancamentosOriginFilter;
+}) {
+  return {
+    type: input.typeFilter,
+    origin: input.originFilter,
+  };
 }
 
 function LancamentosPageContent() {
@@ -385,7 +443,14 @@ function LancamentosPageContent() {
   const [recurrences, setRecurrences] = useState<TransactionRecurrence[]>([]);
   const [recurrencesExpanded, setRecurrencesExpanded] = useState(false);
   const [predictionsExpanded, setPredictionsExpanded] = useState(false);
+  const [focusedRecurrenceId, setFocusedRecurrenceId] = useState<string | null>(
+    null,
+  );
+  const [recurrenceFocusNonce, setRecurrenceFocusNonce] = useState(0);
   const [endingRecurrenceId, setEndingRecurrenceId] = useState<string | null>(
+    null,
+  );
+  const [pausingRecurrenceId, setPausingRecurrenceId] = useState<string | null>(
     null,
   );
   const [updatingProjectionId, setUpdatingProjectionId] = useState<
@@ -418,6 +483,7 @@ function LancamentosPageContent() {
     amountCents: 0,
   });
   const [settling, setSettling] = useState(false);
+  const [payInvoiceOpen, setPayInvoiceOpen] = useState(false);
   const [predictionOpen, setPredictionOpen] = useState(false);
   const [predictionSaving, setPredictionSaving] = useState(false);
   const [editingPredictionId, setEditingPredictionId] = useState<string | null>(
@@ -455,6 +521,12 @@ function LancamentosPageContent() {
     normalizeAppliedSearchTerm(
       parseSearchFromSearchParams(searchParams.get("search")),
     ),
+  );
+  const [typeFilter, setTypeFilter] = useState<LancamentosTypeFilter>(() =>
+    parseLancamentosTypeFilter(searchParams.get("type")),
+  );
+  const [originFilter, setOriginFilter] = useState<LancamentosOriginFilter>(
+    () => parseLancamentosOriginFilter(searchParams.get("origin")),
   );
   const [form, setForm] = useState<FormState>({
     description: "",
@@ -578,17 +650,18 @@ function LancamentosPageContent() {
     ]);
 
     if (scopedAccountIds.length > 0) {
-      const transactionsRes = await supabase
-        .from("transactions")
-        .select(TRANSACTIONS_SELECT)
-        .in("account_id", scopedAccountIds)
-        .order("transaction_date", { ascending: false })
-        .order("created_at", { ascending: false });
+      const transactionsRes = await fetchAllTransactionsForAccounts<TransactionRow>(
+        supabase,
+        {
+          accountIds: scopedAccountIds,
+          select: TRANSACTIONS_SELECT,
+        },
+      );
 
       if (transactionsRes.error) {
         console.error(transactionsRes.error);
       } else {
-        transactionRows = (transactionsRes.data ?? []) as TransactionRow[];
+        transactionRows = transactionsRes.data;
       }
     }
 
@@ -724,6 +797,41 @@ function LancamentosPageContent() {
   }, [scope]);
 
   useEffect(() => {
+    if (!focusedRecurrenceId || recurrenceFocusNonce === 0) {
+      return;
+    }
+
+    const targetId = focusedRecurrenceId;
+    const timeoutId = window.setTimeout(() => {
+      setFocusedRecurrenceId((current) =>
+        clearRecurrenceHighlightIfCurrent(current, targetId),
+      );
+    }, RECURRENCE_NAVIGATION_HIGHLIGHT_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [focusedRecurrenceId, recurrenceFocusNonce]);
+
+  useEffect(() => {
+    if (
+      !focusedRecurrenceId ||
+      !recurrencesExpanded ||
+      recurrenceFocusNonce === 0
+    ) {
+      return;
+    }
+
+    const row = document.getElementById(
+      getRecurrenceRowElementId(focusedRecurrenceId),
+    );
+    row?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (row instanceof HTMLElement) {
+      row.focus({ preventScroll: true });
+    }
+  }, [focusedRecurrenceId, recurrencesExpanded, recurrenceFocusNonce]);
+
+  useEffect(() => {
     function handleTransactionsChanged() {
       if (scope) {
         void loadData();
@@ -771,6 +879,8 @@ function LancamentosPageContent() {
     setAccountFilter(
       resolveAccountFilter(searchParams.get("account"), accountIds),
     );
+    setTypeFilter(parseLancamentosTypeFilter(searchParams.get("type")));
+    setOriginFilter(parseLancamentosOriginFilter(searchParams.get("origin")));
 
     const fromUrl = parseSearchFromSearchParams(searchParams.get("search"));
     setAppliedSearchTerm((applied) => {
@@ -783,10 +893,24 @@ function LancamentosPageContent() {
     });
   }, [accountIds, searchParams]);
 
+  const quickFilterParams = useMemo(
+    () =>
+      lancamentosFilterParams({
+        typeFilter,
+        originFilter,
+      }),
+    [originFilter, typeFilter],
+  );
+
   function updatePeriod(nextPeriod: PeriodFilter) {
     setPeriod(nextPeriod);
     router.replace(
-      buildLancamentosUrl(nextPeriod, accountFilter, appliedSearchTerm),
+      buildLancamentosUrl(
+        nextPeriod,
+        accountFilter,
+        appliedSearchTerm,
+        quickFilterParams,
+      ),
       { scroll: false },
     );
   }
@@ -794,7 +918,12 @@ function LancamentosPageContent() {
   function updateAccountFilter(nextFilter: LancamentosAccountFilter) {
     setAccountFilter(nextFilter);
     router.replace(
-      buildLancamentosUrl(period, nextFilter, appliedSearchTerm),
+      buildLancamentosUrl(
+        period,
+        nextFilter,
+        appliedSearchTerm,
+        quickFilterParams,
+      ),
       { scroll: false },
     );
   }
@@ -803,17 +932,49 @@ function LancamentosPageContent() {
     const next = normalizeAppliedSearchTerm(rawTerm);
     setSearchTerm(rawTerm);
     setAppliedSearchTerm(next);
-    router.replace(buildLancamentosUrl(period, accountFilter, next), {
-      scroll: false,
-    });
+    router.replace(
+      buildLancamentosUrl(period, accountFilter, next, quickFilterParams),
+      {
+        scroll: false,
+      },
+    );
   }
 
   function clearSearchTerm() {
     setSearchTerm("");
     setAppliedSearchTerm("");
-    router.replace(buildLancamentosUrl(period, accountFilter, ""), {
-      scroll: false,
-    });
+    router.replace(
+      buildLancamentosUrl(period, accountFilter, "", quickFilterParams),
+      {
+        scroll: false,
+      },
+    );
+  }
+
+  function updateTypeFilter(next: LancamentosTypeFilter) {
+    setTypeFilter(next);
+    router.replace(
+      buildLancamentosUrl(
+        period,
+        accountFilter,
+        appliedSearchTerm,
+        lancamentosFilterParams({ typeFilter: next, originFilter }),
+      ),
+      { scroll: false },
+    );
+  }
+
+  function updateOriginFilter(next: LancamentosOriginFilter) {
+    setOriginFilter(next);
+    router.replace(
+      buildLancamentosUrl(
+        period,
+        accountFilter,
+        appliedSearchTerm,
+        lancamentosFilterParams({ typeFilter, originFilter: next }),
+      ),
+      { scroll: false },
+    );
   }
 
   useEffect(() => {
@@ -824,9 +985,12 @@ function LancamentosPageContent() {
 
     const timer = window.setTimeout(() => {
       setAppliedSearchTerm(next);
-      router.replace(buildLancamentosUrl(period, accountFilter, next), {
-        scroll: false,
-      });
+      router.replace(
+        buildLancamentosUrl(period, accountFilter, next, quickFilterParams),
+        {
+          scroll: false,
+        },
+      );
     }, LANCAMENTOS_SEARCH_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
@@ -834,6 +998,7 @@ function LancamentosPageContent() {
     accountFilter,
     appliedSearchTerm,
     period,
+    quickFilterParams,
     router,
     searchTerm,
   ]);
@@ -884,21 +1049,75 @@ function LancamentosPageContent() {
     [searchLookups, transactionOriginsById, transactions],
   );
 
+  const selectedAccount =
+    accountFilter === ALL_ACCOUNTS_FILTER
+      ? null
+      : accounts.find((account) => account.id === accountFilter) ?? null;
+
+  const statementReferenceDate = useMemo(
+    () => new Date().toISOString().slice(0, 10),
+    [],
+  );
+
+  const cardStatement = useMemo(
+    () =>
+      resolveCardStatementPeriodContext({
+        account: selectedAccount,
+        period,
+        transactions,
+        referenceDate: statementReferenceDate,
+      }),
+    [period, selectedAccount, statementReferenceDate, transactions],
+  );
+
   const filteredTransactions = useMemo(() => {
-    const byPeriod = filterTransactionsByPeriod(transactions, period);
-    const byAccount = filterTransactionsByAccount(byPeriod, accountFilter);
+    const byPeriodAndAccount = filterLancamentosTransactions({
+      transactions,
+      period,
+      accountFilter,
+      allAccountsFilter: ALL_ACCOUNTS_FILTER,
+      cardStatement,
+    });
+    const byQuickFilters = applyLancamentosQuickFilters({
+      transactions: byPeriodAndAccount,
+      typeFilter,
+      originFilter,
+      originsByTransactionId: transactionOriginsById,
+    });
     return filterTransactionsBySearch(
-      byAccount,
+      byQuickFilters,
       appliedSearchTerm,
       transactionSearchIndex,
     );
   }, [
     accountFilter,
     appliedSearchTerm,
+    cardStatement,
+    originFilter,
     period,
+    transactionOriginsById,
     transactionSearchIndex,
     transactions,
+    typeFilter,
   ]);
+
+  const listEmptyCopy = useMemo(
+    () =>
+      getLancamentosListEmptyCopy({
+        hasLoadedTransactions: transactions.length > 0,
+        searchTerm: appliedSearchTerm,
+        typeFilter,
+        originFilter,
+        hasAccountFilter: accountFilter !== ALL_ACCOUNTS_FILTER,
+      }),
+    [
+      accountFilter,
+      appliedSearchTerm,
+      originFilter,
+      transactions.length,
+      typeFilter,
+    ],
+  );
 
   const transactionById = useMemo(
     () => new Map(transactions.map((item) => [item.id, item])),
@@ -916,6 +1135,19 @@ function LancamentosPageContent() {
     [pendingPredictions, period],
   );
 
+  const pendingPredictionUrgencyGroups = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return groupPendingPredictionsByUrgency(visiblePendingPredictions, today);
+  }, [visiblePendingPredictions]);
+
+  const pendingPredictionUrgencySummary = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return formatPendingPredictionUrgencySummary(
+      visiblePendingPredictions,
+      today,
+    );
+  }, [visiblePendingPredictions]);
+
   const nextPendingByRecurrence = useMemo(() => {
     const map = new Map<string, PendingPrediction>();
     for (const prediction of pendingPredictions) {
@@ -926,33 +1158,51 @@ function LancamentosPageContent() {
     return map;
   }, [pendingPredictions]);
 
-  const nextPendingPrediction = visiblePendingPredictions[0] ?? null;
+  const recurrenceById = useMemo(() => {
+    const map = new Map(recurrences.map((item) => [item.id, item]));
+    return map;
+  }, [recurrences]);
+
   const nextRecurringPrediction =
-    pendingPredictions.find((prediction) => prediction.recurrenceId) ?? null;
+    pendingPredictions.find((prediction) => {
+      if (!prediction.recurrenceId) return false;
+      const recurrence = recurrences.find(
+        (item) => item.id === prediction.recurrenceId,
+      );
+      return recurrence != null && !recurrence.isPaused;
+    }) ?? null;
 
-  const incomes = useMemo(
-    () => sumByType(filteredTransactions, "income"),
-    [filteredTransactions],
-  );
+  const incomes = useMemo(() => {
+    if (cardStatement?.usesStatementCycle) {
+      return cardStatement.settlement.paidTotal;
+    }
+    return sumByType(filteredTransactions, "income");
+  }, [cardStatement, filteredTransactions]);
 
-  const expenses = useMemo(
-    () => sumByType(filteredTransactions, "expense"),
-    [filteredTransactions],
-  );
+  const expenses = useMemo(() => {
+    if (cardStatement?.usesStatementCycle) {
+      return cardStatement.settlement.cyclePurchasesTotal;
+    }
+    return sumByType(filteredTransactions, "expense");
+  }, [cardStatement, filteredTransactions]);
 
+  const amountDue = cardStatement?.usesStatementCycle
+    ? cardStatement.settlement.amountDueTotal
+    : null;
   const balance = incomes - expenses;
   const monthlyPredictionDiff = getPredictionDiff(
     monthlyPredictionAggregates.predicted,
     monthlyPredictionAggregates.realized,
   );
   const showMonthlyPredictionAggregates =
-    period.mode === "month" && period.monthKey === currentMonthKey;
-  const summaryScopeLabel =
-    period.mode === "all" ? "total" : "do mês";
-  const selectedAccount =
-    accountFilter === ALL_ACCOUNTS_FILTER
-      ? null
-      : accounts.find((account) => account.id === accountFilter) ?? null;
+    period.mode === "month" &&
+    period.monthKey === currentMonthKey &&
+    !cardStatement?.usesStatementCycle;
+  const summaryScopeLabel = cardStatement?.usesStatementCycle
+    ? "da fatura"
+    : period.mode === "all"
+      ? "total"
+      : "do mês";
   const listTitle =
     accountFilter === ALL_ACCOUNTS_FILTER
       ? period.mode === "all"
@@ -960,7 +1210,9 @@ function LancamentosPageContent() {
         : "Lançamentos do mês"
       : period.mode === "all"
         ? `Histórico · ${selectedAccount?.name ?? "Conta"}`
-        : `Mês · ${selectedAccount?.name ?? "Conta"}`;
+        : cardStatement?.usesStatementCycle
+          ? `Fatura · ${selectedAccount?.name ?? "Conta"}`
+          : `Mês · ${selectedAccount?.name ?? "Conta"}`;
   const isEditing = editingId !== null;
   const isEditingRecurrence = editingRecurrenceId !== null;
   const openedFromQuery = useRef(false);
@@ -1112,12 +1364,12 @@ function LancamentosPageContent() {
       updatePeriod({ mode: "month", monthKey: predictionMonth });
       toast.success(
         result.occurrencesCreated > 0
-          ? `Recorrência criada. ${result.occurrencesCreated} ${
+          ? `Previsão recorrente criada. ${result.occurrencesCreated} ${
               result.occurrencesCreated === 1
                 ? "previsão gerada"
                 : "previsões geradas"
-            }, incluindo a primeira em ${formatDate(predictionForm.scheduledDate)}.`
-          : "Recorrência criada.",
+            }, começando em ${formatDate(predictionForm.scheduledDate)}.`
+          : "Previsão recorrente criada.",
       );
       return;
     }
@@ -1184,6 +1436,19 @@ function LancamentosPageContent() {
     });
   }
 
+  function focusRecurrenceOrigin(recurrenceId: string) {
+    if (!recurrenceById.has(recurrenceId)) {
+      toast.error("Não foi possível encontrar a recorrência de origem.");
+      return;
+    }
+
+    setRecurrencesExpanded(true);
+    setFocusedRecurrenceId((current) =>
+      nextRecurrenceHighlightId(current, recurrenceId),
+    );
+    setRecurrenceFocusNonce((current) => current + 1);
+  }
+
   function openEditRecurrence(recurrence: TransactionRecurrence) {
     setEditingId(null);
     setEditingRecurrenceId(recurrence.id);
@@ -1226,10 +1491,23 @@ function LancamentosPageContent() {
     openedFromQuery.current = true;
     handleOpenNew();
     router.replace(
-      buildLancamentosUrl(period, accountFilter, appliedSearchTerm),
+      buildLancamentosUrl(
+        period,
+        accountFilter,
+        appliedSearchTerm,
+        quickFilterParams,
+      ),
       { scroll: false },
     );
-  }, [accountFilter, appliedSearchTerm, loading, period, router, searchParams]);
+  }, [
+    accountFilter,
+    appliedSearchTerm,
+    loading,
+    period,
+    quickFilterParams,
+    router,
+    searchParams,
+  ]);
 
   function handleTypeChange(type: TransactionType) {
     setForm((current) => {
@@ -1290,20 +1568,30 @@ function LancamentosPageContent() {
   }
 
   async function refreshTransactions() {
-    const { data, error } = await supabase
-      .from("transactions")
-      .select(TRANSACTIONS_SELECT)
-      .order("transaction_date", { ascending: false })
-      .order("created_at", { ascending: false });
+    if (!scope) {
+      return;
+    }
+
+    const scopedAccountIds = getScopedAccountIds(accounts, scope);
+    if (scopedAccountIds.length === 0) {
+      setTransactions([]);
+      return;
+    }
+
+    const { data, error } = await fetchAllTransactionsForAccounts<TransactionRow>(
+      supabase,
+      {
+        accountIds: scopedAccountIds,
+        select: TRANSACTIONS_SELECT,
+      },
+    );
 
     if (error) {
       console.error(error);
       return;
     }
 
-    setTransactions(
-      (data ?? []).map((row) => mapTransaction(row as TransactionRow)),
-    );
+    setTransactions(data.map((row) => mapTransaction(row)));
   }
 
   function canManageTransaction(transaction: Transaction) {
@@ -1442,7 +1730,7 @@ function LancamentosPageContent() {
   }
 
   async function handleEndRecurrence(recurrence: TransactionRecurrence) {
-    if (endingRecurrenceId) return;
+    if (endingRecurrenceId || pausingRecurrenceId) return;
 
     const confirmed = await confirm({
       title: "Encerrar recorrência",
@@ -1472,6 +1760,72 @@ function LancamentosPageContent() {
               : "previsões pendentes canceladas"
           }.`
         : "Recorrência encerrada.",
+    );
+  }
+
+  async function handlePauseRecurrence(recurrence: TransactionRecurrence) {
+    if (endingRecurrenceId || pausingRecurrenceId) return;
+
+    const confirmed = await confirm({
+      title: "Pausar recorrência",
+      description: `Pausar "${recurrence.description}"? As próximas previsões deixam de ser geradas e as futuras pendentes são canceladas. O passado e o que já foi liquidado permanecem.`,
+      confirmLabel: "Pausar recorrência",
+    });
+
+    if (!confirmed) return;
+
+    setPausingRecurrenceId(recurrence.id);
+    const result = await pauseRecurrence(supabase, recurrence.id);
+
+    if (!result.ok) {
+      toast.error(result.message);
+      setPausingRecurrenceId(null);
+      return;
+    }
+
+    await loadData();
+    setPausingRecurrenceId(null);
+    toast.success(
+      result.canceledUpcomingPredictions > 0
+        ? `Recorrência pausada. ${result.canceledUpcomingPredictions} ${
+            result.canceledUpcomingPredictions === 1
+              ? "previsão futura cancelada"
+              : "previsões futuras canceladas"
+          }.`
+        : "Recorrência pausada.",
+    );
+  }
+
+  async function handleResumeRecurrence(recurrence: TransactionRecurrence) {
+    if (endingRecurrenceId || pausingRecurrenceId) return;
+
+    const confirmed = await confirm({
+      title: "Retomar recorrência",
+      description: `Retomar "${recurrence.description}"? As próximas previsões voltam a ser geradas a partir de agora.`,
+      confirmLabel: "Retomar recorrência",
+    });
+
+    if (!confirmed) return;
+
+    setPausingRecurrenceId(recurrence.id);
+    const result = await resumeRecurrence(supabase, recurrence.id);
+
+    if (!result.ok) {
+      toast.error(result.message);
+      setPausingRecurrenceId(null);
+      return;
+    }
+
+    await loadData();
+    setPausingRecurrenceId(null);
+    toast.success(
+      result.createdPredictions > 0
+        ? `Recorrência retomada. ${result.createdPredictions} ${
+            result.createdPredictions === 1
+              ? "próxima previsão gerada"
+              : "próximas previsões geradas"
+          }.`
+        : "Recorrência retomada.",
     );
   }
 
@@ -1689,8 +2043,8 @@ function LancamentosPageContent() {
         syncParts.push(
           `${result.updatedPredictions} ${
             result.updatedPredictions === 1
-              ? "previsão pendente atualizada"
-              : "previsões pendentes atualizadas"
+              ? "próxima previsão atualizada"
+              : "próximas previsões atualizadas"
           }`,
         );
       }
@@ -1698,8 +2052,8 @@ function LancamentosPageContent() {
         syncParts.push(
           `${result.canceledPredictions} ${
             result.canceledPredictions === 1
-              ? "ocorrência fora da regra cancelada"
-              : "ocorrências fora da regra canceladas"
+              ? "previsão futura fora da regra cancelada"
+              : "previsões futuras fora da regra canceladas"
           }`,
         );
       }
@@ -1716,7 +2070,7 @@ function LancamentosPageContent() {
       toast.success(
         syncParts.length > 0
           ? `Recorrência atualizada. ${syncParts.join(" · ")}.`
-          : "Recorrência atualizada.",
+          : "Recorrência atualizada. Próximas previsões já refletem a nova regra.",
       );
       return;
     }
@@ -1850,6 +2204,36 @@ function LancamentosPageContent() {
         </p>
       </div>
 
+      {selectedAccount &&
+      selectedAccount.type === "credit_card" &&
+      hasCreditCardBillingConfig(selectedAccount) ? (
+        <CreditCardStatementSummary
+          account={selectedAccount}
+          transactions={transactions}
+          cycle={cardStatement?.cycle}
+          referenceDate={statementReferenceDate}
+          className="animate-enter"
+          onPayInvoice={() => setPayInvoiceOpen(true)}
+          payInvoiceDisabled={transferEligibleAccounts.length === 0}
+        />
+      ) : null}
+
+      {selectedAccount &&
+      selectedAccount.type === "credit_card" &&
+      cardStatement?.cycle &&
+      user ? (
+        <PayInvoiceSheet
+          open={payInvoiceOpen}
+          onOpenChange={setPayInvoiceOpen}
+          cardAccount={selectedAccount}
+          cycle={cardStatement.cycle}
+          remainingAmount={cardStatement.settlement.remainingTotal}
+          sourceAccounts={transferEligibleAccounts}
+          userId={user.id}
+          onSuccess={loadData}
+        />
+      ) : null}
+
       <div className="animate-enter rounded-xl border border-border/50 bg-card p-4 shadow-sm">
         <FormField id="lancamentos-search" label="Busca rápida">
           <form
@@ -1868,7 +2252,7 @@ function LancamentosPageContent() {
                 id="lancamentos-search"
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
-                placeholder="Buscar por descrição, categoria, conta, valor..."
+                placeholder="Descrição, categoria, tipo, valor, manual/importado..."
                 className="h-10 bg-surface-sunken/60 pr-10 pl-9 dark:bg-input/40"
                 data-testid="lancamentos-search-input"
                 autoComplete="off"
@@ -1898,13 +2282,72 @@ function LancamentosPageContent() {
             </Button>
           </form>
         </FormField>
-        {appliedSearchTerm ? (
+
+        <div className="mt-3 space-y-2">
+          <div
+            className="flex flex-wrap gap-2"
+            role="group"
+            aria-label="Filtrar por tipo"
+            data-testid="lancamentos-type-filters"
+          >
+            {LANCAMENTOS_TYPE_FILTERS.map((filter) => {
+              const active = typeFilter === filter;
+              return (
+                <Button
+                  key={filter}
+                  type="button"
+                  size="sm"
+                  variant={active ? "default" : "outline"}
+                  aria-pressed={active}
+                  onClick={() => updateTypeFilter(filter)}
+                  data-testid={`lancamentos-type-filter-${filter}`}
+                >
+                  {LANCAMENTOS_TYPE_FILTER_LABELS[filter]}
+                </Button>
+              );
+            })}
+          </div>
+          <div
+            className="flex flex-wrap gap-2"
+            role="group"
+            aria-label="Filtrar por origem"
+            data-testid="lancamentos-origin-filters"
+          >
+            {LANCAMENTOS_ORIGIN_FILTERS.map((filter) => {
+              const active = originFilter === filter;
+              return (
+                <Button
+                  key={filter}
+                  type="button"
+                  size="sm"
+                  variant={active ? "default" : "outline"}
+                  aria-pressed={active}
+                  onClick={() => updateOriginFilter(filter)}
+                  data-testid={`lancamentos-origin-filter-${filter}`}
+                >
+                  {LANCAMENTOS_ORIGIN_FILTER_LABELS[filter]}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+
+        {appliedSearchTerm ||
+        typeFilter !== "all" ||
+        originFilter !== "all" ? (
           <p
             className="mt-2 text-xs text-muted-foreground"
             data-testid="lancamentos-search-status"
           >
-            Filtrando por “{appliedSearchTerm}” · {filteredTransactions.length}{" "}
+            {filteredTransactions.length}{" "}
             {filteredTransactions.length === 1 ? "resultado" : "resultados"}
+            {appliedSearchTerm ? ` · busca “${appliedSearchTerm}”` : ""}
+            {typeFilter !== "all"
+              ? ` · ${LANCAMENTOS_TYPE_FILTER_LABELS[typeFilter]}`
+              : ""}
+            {originFilter !== "all"
+              ? ` · ${LANCAMENTOS_ORIGIN_FILTER_LABELS[originFilter]}`
+              : ""}
           </p>
         ) : null}
       </div>
@@ -1955,7 +2398,7 @@ function LancamentosPageContent() {
               {editingPredictionId
                 ? "Corrija os dados desta previsão avulsa pendente."
                 : predictionForm.isRecurring
-                  ? "A data prevista inicia a recorrência e vira a primeira previsão pendente."
+                  ? "Marque como recorrente para gerar as próximas previsões automaticamente."
                   : "Planeje uma receita ou despesa sem criar um lançamento real."}
             </SheetDescription>
           </SheetHeader>
@@ -2081,7 +2524,7 @@ function LancamentosPageContent() {
 
             <p className="-mt-2 text-xs text-muted-foreground">
               {predictionForm.isRecurring && !editingPredictionId
-                ? "Recorrências precisam de uma conta prevista. Próximas ocorrências serão geradas automaticamente."
+                ? "Recorrências precisam de uma conta. As próximas previsões são geradas a partir da data inicial."
                 : "Sem conta prevista, a previsão será pessoal. A conta real será escolhida ao liquidar."}
             </p>
 
@@ -2102,12 +2545,11 @@ function LancamentosPageContent() {
                     data-testid="prediction-is-recurring"
                   />
                   <span className="space-y-1">
-                    <Label htmlFor="prediction-is-recurring">
-                      Repetir esta previsão
-                    </Label>
+                    <Label htmlFor="prediction-is-recurring">Repetir</Label>
                     <span className="block text-xs text-muted-foreground">
-                      Cria uma recorrência. A data acima vira a primeira
-                      ocorrência — sem duplicar o item.
+                      Ideal para salário, aluguel, assinaturas e outros
+                      compromissos previsíveis. A data acima vira a primeira
+                      previsão.
                     </span>
                   </span>
                 </label>
@@ -2127,10 +2569,11 @@ function LancamentosPageContent() {
                           }))
                         }
                       >
-                        <option value="weekly">Semanal</option>
-                        <option value="biweekly">Quinzenal</option>
-                        <option value="monthly">Mensal</option>
-                        <option value="yearly">Anual</option>
+                        {RECURRENCE_FREQUENCY_OPTIONS.map((frequency) => (
+                          <option key={frequency} value={frequency}>
+                            {RECURRENCE_FREQUENCY_LABELS[frequency]}
+                          </option>
+                        ))}
                       </FormSelect>
 
                       <FormSelect
@@ -2144,11 +2587,11 @@ function LancamentosPageContent() {
                           }))
                         }
                       >
-                        <option value="never">Nunca</option>
-                        <option value="until_date">Em uma data</option>
-                        <option value="occurrences_count">
-                          Após uma quantidade
-                        </option>
+                        {RECURRENCE_END_TYPE_OPTIONS.map((endType) => (
+                          <option key={endType} value={endType}>
+                            {RECURRENCE_END_TYPE_LABELS[endType]}
+                          </option>
+                        ))}
                       </FormSelect>
                     </div>
 
@@ -2269,7 +2712,7 @@ function LancamentosPageContent() {
             </SheetTitle>
             <SheetDescription>
               {isEditingRecurrence
-                ? "Altera a regra da recorrência e atualiza as previsões pendentes dela. Liquidadas e canceladas não mudam."
+                ? "As mudanças valem para as próximas previsões. O que já passou ou já foi liquidado permanece como está."
                 : isEditing
                   ? "Atualize os dados do lançamento selecionado."
                   : form.isRecurring
@@ -2353,9 +2796,16 @@ function LancamentosPageContent() {
                       date: event.target.value,
                     }))
                   }
+                  disabled={isEditingRecurrence}
                   required
                 />
               </div>
+              {isEditingRecurrence ? (
+                <p className="-mt-3 text-xs text-muted-foreground">
+                  A data inicial da regra não muda na edição — só as próximas
+                  previsões são recalculadas.
+                </p>
+              ) : null}
 
               {form.type === "transfer" ? (
                 <div className="space-y-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-4">
@@ -2482,11 +2932,11 @@ function LancamentosPageContent() {
                 <div className="space-y-4 rounded-xl border border-border/50 bg-muted/20 p-4">
                   {isEditingRecurrence ? (
                     <div className="space-y-1">
-                      <p className="text-sm font-medium">Regra da recorrência</p>
+                      <p className="text-sm font-medium">Próximas ocorrências</p>
                       <p className="text-sm text-muted-foreground">
-                        As previsões pendentes desta recorrência serão
-                        atualizadas. Datas que deixarem de fazer parte da regra
-                        serão canceladas.
+                        Valor, descrição, conta, frequência e término atualizam
+                        só as previsões futuras. Previsões passadas e liquidadas
+                        não mudam. Datas que saírem da regra são canceladas.
                       </p>
                     </div>
                   ) : (
@@ -2533,10 +2983,11 @@ function LancamentosPageContent() {
                             }))
                           }
                         >
-                          <option value="weekly">Semanal</option>
-                          <option value="biweekly">Quinzenal</option>
-                          <option value="monthly">Mensal</option>
-                          <option value="yearly">Anual</option>
+                          {RECURRENCE_FREQUENCY_OPTIONS.map((frequency) => (
+                            <option key={frequency} value={frequency}>
+                              {RECURRENCE_FREQUENCY_LABELS[frequency]}
+                            </option>
+                          ))}
                         </FormSelect>
 
                         <FormSelect
@@ -2550,11 +3001,11 @@ function LancamentosPageContent() {
                             }))
                           }
                         >
-                          <option value="never">Nunca</option>
-                          <option value="until_date">Em uma data</option>
-                          <option value="occurrences_count">
-                            Após uma quantidade
-                          </option>
+                          {RECURRENCE_END_TYPE_OPTIONS.map((endType) => (
+                            <option key={endType} value={endType}>
+                              {RECURRENCE_END_TYPE_LABELS[endType]}
+                            </option>
+                          ))}
                         </FormSelect>
                       </div>
 
@@ -2838,10 +3289,18 @@ function LancamentosPageContent() {
         data-testid="lancamentos-summary"
         data-ready={loading ? "false" : "true"}
       >
-        <CardContent className="grid gap-4 pt-6 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-border/60">
+        <CardContent
+          className={`grid gap-4 pt-6 sm:gap-0 sm:divide-x sm:divide-border/60 ${
+            cardStatement?.usesStatementCycle
+              ? "sm:grid-cols-4"
+              : "sm:grid-cols-3"
+          }`}
+        >
           <div className="space-y-1 sm:px-4 sm:first:pl-0">
             <p className="text-sm text-muted-foreground">
-              Receitas {summaryScopeLabel}
+              {cardStatement?.usesStatementCycle
+                ? "Pagamentos da fatura"
+                : `Receitas ${summaryScopeLabel}`}
             </p>
             <p
               className="text-2xl font-semibold text-primary tabular-nums sm:text-3xl"
@@ -2853,7 +3312,9 @@ function LancamentosPageContent() {
 
           <div className="space-y-1 sm:px-4">
             <p className="text-sm text-muted-foreground">
-              Despesas {summaryScopeLabel}
+              {cardStatement?.usesStatementCycle
+                ? "Despesas do ciclo"
+                : `Despesas ${summaryScopeLabel}`}
             </p>
             <p
               className="text-2xl font-semibold text-destructive tabular-nums sm:text-3xl"
@@ -2863,17 +3324,45 @@ function LancamentosPageContent() {
             </p>
           </div>
 
+          {cardStatement?.usesStatementCycle && amountDue != null ? (
+            <div className="space-y-1 sm:px-4">
+              <p className="text-sm text-muted-foreground">
+                Total a pagar nesta fatura
+              </p>
+              <p
+                className="text-2xl font-semibold text-destructive tabular-nums sm:text-3xl"
+                data-testid="lancamentos-amount-due-total"
+              >
+                {formatCurrency(amountDue)}
+              </p>
+            </div>
+          ) : null}
+
           <div className="space-y-1 sm:px-4 sm:last:pr-0">
             <p className="text-sm text-muted-foreground">
-              {period.mode === "all" ? "Saldo total" : "Saldo do mês"}
+              {cardStatement?.usesStatementCycle
+                ? "Restante a pagar"
+                : period.mode === "all"
+                  ? "Saldo total"
+                  : "Saldo do mês"}
             </p>
             <p
               className={`text-2xl font-semibold tabular-nums sm:text-3xl ${
-                balance >= 0 ? "text-primary" : "text-destructive"
+                cardStatement?.usesStatementCycle
+                  ? cardStatement.settlement.remainingTotal <= 0
+                    ? "text-primary"
+                    : "text-destructive"
+                  : balance >= 0
+                    ? "text-primary"
+                    : "text-destructive"
               }`}
               data-testid="lancamentos-balance-total"
             >
-              {formatCurrency(balance)}
+              {formatCurrency(
+                cardStatement?.usesStatementCycle
+                  ? cardStatement.settlement.remainingTotal
+                  : balance,
+              )}
             </p>
           </div>
         </CardContent>
@@ -2955,16 +3444,33 @@ function LancamentosPageContent() {
                   {loading
                     ? "Carregando recorrências..."
                     : recurrences.length === 0
-                      ? "Nenhuma recorrência ativa."
-                      : `${recurrences.length} ${
-                          recurrences.length === 1
-                            ? "recorrência ativa"
-                            : "recorrências ativas"
-                        }${
-                          nextRecurringPrediction
-                            ? ` · Próxima: ${nextRecurringPrediction.description} em ${formatDate(nextRecurringPrediction.scheduledDate)}`
-                            : ""
-                        }`}
+                      ? "Nenhuma recorrência cadastrada."
+                      : (() => {
+                          const pausedCount = recurrences.filter(
+                            (item) => item.isPaused,
+                          ).length;
+                          const activeCount = recurrences.length - pausedCount;
+                          const parts: string[] = [];
+                          if (activeCount > 0) {
+                            parts.push(
+                              `${activeCount} ${
+                                activeCount === 1 ? "ativa" : "ativas"
+                              }`,
+                            );
+                          }
+                          if (pausedCount > 0) {
+                            parts.push(
+                              `${pausedCount} ${
+                                pausedCount === 1 ? "pausada" : "pausadas"
+                              }`,
+                            );
+                          }
+                          return `${parts.join(" · ")}${
+                            nextRecurringPrediction
+                              ? ` · Próxima: ${nextRecurringPrediction.description} em ${formatDate(nextRecurringPrediction.scheduledDate)}`
+                              : ""
+                          }`;
+                        })()}
                 </p>
               </div>
               <ChevronDown
@@ -2986,7 +3492,7 @@ function LancamentosPageContent() {
             ) : recurrences.length === 0 ? (
               <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 px-6 py-8 text-center">
                 <p className="text-sm font-medium">
-                  Nenhuma recorrência ativa
+                  Nenhuma recorrência cadastrada
                 </p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Crie um lançamento recorrente para vê-lo aqui.
@@ -2994,21 +3500,39 @@ function LancamentosPageContent() {
               </div>
             ) : (
               <div className="divide-y divide-border/60">
-                {recurrences.map((recurrence) => {
+                {[...recurrences]
+                  .sort((a, b) => Number(a.isPaused) - Number(b.isPaused))
+                  .map((recurrence) => {
                   const config = typeMap[recurrence.type];
                   const Icon = config.icon;
                   const account = accountMap.get(recurrence.accountId);
                   const nextOccurrence = nextPendingByRecurrence.get(
                     recurrence.id,
                   );
-                  const isBusy = endingRecurrenceId === recurrence.id;
+                  const lifecycle = getRecurrenceLifecycleStatus(recurrence);
+                  const isBusy =
+                    endingRecurrenceId === recurrence.id ||
+                    pausingRecurrenceId === recurrence.id;
+                  const actionsDisabled =
+                    endingRecurrenceId !== null || pausingRecurrenceId !== null;
+                  const isHighlighted = isRecurrenceRowHighlighted(
+                    recurrence.id,
+                    focusedRecurrenceId,
+                  );
                   const isUpdatingProjection =
                     updatingProjectionId === recurrence.id;
 
                   return (
                     <div
                       key={recurrence.id}
-                      className="flex flex-col gap-3 py-4 first:pt-2 last:pb-2 sm:flex-row sm:items-center sm:justify-between"
+                      id={getRecurrenceRowElementId(recurrence.id)}
+                      tabIndex={-1}
+                      data-testid={`recurrence-row-${recurrence.id}`}
+                      data-highlighted={isHighlighted ? "true" : undefined}
+                      className={cn(
+                        "flex flex-col gap-3 rounded-xl py-4 outline-none transition-[background-color,box-shadow] duration-300 first:pt-2 last:pb-2 sm:flex-row sm:items-center sm:justify-between",
+                        getRecurrenceNavigationHighlightClassName(isHighlighted),
+                      )}
                     >
                       <div className="flex min-w-0 items-start gap-3">
                         <div
@@ -3017,22 +3541,36 @@ function LancamentosPageContent() {
                           <Icon className="h-4 w-4" />
                         </div>
                         <div className="min-w-0">
-                          <p className="font-medium">
-                            {recurrence.description}
-                          </p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-medium">
+                              {recurrence.description}
+                            </p>
+                            <Badge
+                              variant={
+                                lifecycle === "paused"
+                                  ? "secondary"
+                                  : "outline"
+                              }
+                              data-testid={`recurrence-status-${recurrence.id}`}
+                            >
+                              {RECURRENCE_LIFECYCLE_STATUS_LABELS[lifecycle]}
+                            </Badge>
+                          </div>
                           <p className="mt-1 text-sm text-muted-foreground">
                             {frequencyLabels[recurrence.frequency]}
                             <span aria-hidden> · </span>
                             {account?.name ?? "Conta"}
                             <span aria-hidden> · </span>
-                            {nextOccurrence
-                              ? `Próxima em ${formatDate(nextOccurrence.scheduledDate)}`
-                              : "Sem previsões pendentes"}
+                            {lifecycle === "paused"
+                              ? "Pausada — sem novas previsões"
+                              : nextOccurrence
+                                ? `Próxima em ${formatDate(nextOccurrence.scheduledDate)}`
+                                : "Sem previsões pendentes"}
                           </p>
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between gap-3 sm:justify-end">
+                      <div className="flex flex-wrap items-center justify-between gap-3 sm:justify-end">
                         <span
                           className={`font-semibold tabular-nums ${config.valueClass}`}
                         >
@@ -3059,22 +3597,59 @@ function LancamentosPageContent() {
                           type="button"
                           size="icon-sm"
                           variant="ghost"
-                          disabled={endingRecurrenceId !== null}
+                          disabled={actionsDisabled}
                           onClick={() => openEditRecurrence(recurrence)}
                           aria-label={`Editar recorrência ${recurrence.description}`}
                           data-testid={`edit-recurrence-${recurrence.id}`}
                         >
                           <Pencil className="h-4 w-4" />
                         </Button>
+                        {lifecycle === "paused" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={actionsDisabled}
+                            onClick={() =>
+                              void handleResumeRecurrence(recurrence)
+                            }
+                            data-testid={`resume-recurrence-${recurrence.id}`}
+                          >
+                            {isBusy && pausingRecurrenceId === recurrence.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Play className="h-4 w-4" />
+                            )}
+                            Retomar recorrência
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={actionsDisabled}
+                            onClick={() =>
+                              void handlePauseRecurrence(recurrence)
+                            }
+                            data-testid={`pause-recurrence-${recurrence.id}`}
+                          >
+                            {isBusy && pausingRecurrenceId === recurrence.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Pause className="h-4 w-4" />
+                            )}
+                            Pausar recorrência
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           size="sm"
                           variant="outline"
-                          disabled={endingRecurrenceId !== null}
+                          disabled={actionsDisabled}
                           onClick={() => void handleEndRecurrence(recurrence)}
                           data-testid={`end-recurrence-${recurrence.id}`}
                         >
-                          {isBusy ? (
+                          {isBusy && endingRecurrenceId === recurrence.id ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
                           ) : (
                             <Trash2 className="h-4 w-4" />
@@ -3112,15 +3687,13 @@ function LancamentosPageContent() {
                     ? "Carregando previsões..."
                     : visiblePendingPredictions.length === 0
                       ? "Nenhuma previsão pendente no período."
-                      : `${visiblePendingPredictions.length} ${
-                          visiblePendingPredictions.length === 1
-                            ? "previsão pendente"
-                            : "previsões pendentes"
-                        }${
-                          nextPendingPrediction
-                            ? ` · Próxima: ${nextPendingPrediction.description} em ${formatDate(nextPendingPrediction.scheduledDate)}`
-                            : ""
-                        }`}
+                      : pendingPredictionUrgencySummary
+                        ? pendingPredictionUrgencySummary
+                        : `${visiblePendingPredictions.length} ${
+                            visiblePendingPredictions.length === 1
+                              ? "previsão pendente"
+                              : "previsões pendentes"
+                          }`}
                 </p>
               </div>
               <ChevronDown
@@ -3149,130 +3722,214 @@ function LancamentosPageContent() {
               </p>
             </div>
           ) : (
-            <div className="divide-y divide-border/60">
-              {visiblePendingPredictions.map((prediction) => {
-                const config = typeMap[prediction.type];
-                const Icon = config.icon;
-                const account = prediction.accountId
-                  ? accountMap.get(prediction.accountId)
-                  : null;
-                const category = prediction.categoryId
-                  ? categoryMap.get(prediction.categoryId)
-                  : null;
-                const isBusy = settlingPredictionId === prediction.id;
-                const isUpdatingProjection =
-                  updatingPredictionProjectionId === prediction.id;
-                const isOverdue =
-                  prediction.scheduledDate <
-                  new Date().toISOString().slice(0, 10);
-
-                return (
-                  <div
-                    key={prediction.id}
-                    className="flex flex-col gap-3 py-4 first:pt-2 last:pb-2 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="flex min-w-0 items-start gap-3">
-                      <div
-                        className={`flex size-10 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ring-black/5 dark:ring-white/10 ${config.iconClass}`}
-                      >
-                        <Icon className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="font-medium">
-                          {prediction.description}
-                        </p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          {formatDate(prediction.scheduledDate)}
-                          <span aria-hidden> · </span>
-                          {category?.name ?? "Sem categoria"}
-                          <span aria-hidden> · </span>
-                          {account?.name ?? "Conta a definir"}
-                          {prediction.recurrenceId ? (
-                            <>
-                              <span aria-hidden> · </span>
-                              Recorrente · edite no card de Recorrências
-                            </>
-                          ) : null}
-                        </p>
-                        {isOverdue ? (
-                          <p className="mt-1 text-xs font-medium text-muted-foreground">
-                            Ainda não realizado
-                          </p>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between gap-3 sm:justify-end">
-                      <span
-                        className={`font-semibold tabular-nums ${config.valueClass}`}
-                      >
-                        {prediction.type === "expense" ? "-" : ""}
-                        {formatCurrency(prediction.amount)}
-                      </span>
-                      <div className="flex items-center gap-1.5">
-                        <label className="mr-1 flex items-center gap-2 text-xs text-muted-foreground">
-                          <input
-                            type="checkbox"
-                            checked={prediction.includeInProjection}
-                            disabled={updatingPredictionProjectionId !== null}
-                            onChange={(event) =>
-                              void handlePredictionProjectionChange(
-                                prediction,
-                                event.target.checked,
-                              )
-                            }
-                            className="size-4 rounded border-input accent-primary"
-                            aria-label={`Incluir ${prediction.description} no saldo projetado`}
-                          />
-                          {isUpdatingProjection
-                            ? "Atualizando..."
-                            : "Projetar"}
-                        </label>
-                        {!prediction.recurrenceId ? (
-                          <Button
-                            type="button"
-                            size="icon-sm"
-                            variant="ghost"
-                            disabled={settlingPredictionId !== null}
-                            onClick={() => openEditPrediction(prediction)}
-                            aria-label={`Editar previsão ${prediction.description}`}
-                            data-testid={`edit-prediction-${prediction.id}`}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                        ) : null}
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          disabled={settlingPredictionId !== null}
-                          onClick={() => openSettleDialog(prediction)}
-                          data-testid={`settle-prediction-${prediction.id}`}
-                        >
-                          {isBusy ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Check className="h-4 w-4" />
-                          )}
-                          Liquidar
-                        </Button>
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="ghost"
-                          disabled={settlingPredictionId !== null}
-                          onClick={() =>
-                            void handleCancelPrediction(prediction)
-                          }
-                          aria-label={`Cancelar previsão ${prediction.description}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
+            <div className="space-y-5">
+              {pendingPredictionUrgencyGroups.map((group) => (
+                <section
+                  key={group.urgency}
+                  aria-label={group.label}
+                  data-testid={`pending-predictions-${group.urgency}`}
+                >
+                  <div className="mb-2 flex items-baseline justify-between gap-2">
+                    <h3
+                      className={cn(
+                        "text-xs font-semibold tracking-wide uppercase",
+                        group.urgency === "overdue"
+                          ? "text-rose-700 dark:text-rose-300"
+                          : group.urgency === "due_today"
+                            ? "text-amber-800 dark:text-amber-200"
+                            : "text-muted-foreground",
+                      )}
+                    >
+                      {group.label}
+                    </h3>
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {group.items.length}
+                    </span>
                   </div>
-                );
-              })}
+                  <div className="divide-y divide-border/60">
+                    {group.items.map((prediction) => {
+                      const config = typeMap[prediction.type];
+                      const Icon = config.icon;
+                      const account = prediction.accountId
+                        ? accountMap.get(prediction.accountId)
+                        : null;
+                      const category = prediction.categoryId
+                        ? categoryMap.get(prediction.categoryId)
+                        : null;
+                      const isBusy = settlingPredictionId === prediction.id;
+                      const isUpdatingProjection =
+                        updatingPredictionProjectionId === prediction.id;
+                      const urgency = group.urgency;
+                      const linkedRecurrence = prediction.recurrenceId
+                        ? recurrenceById.get(prediction.recurrenceId)
+                        : null;
+                      const recurrenceOrigin =
+                        getPendingPredictionRecurrenceOrigin(
+                          prediction.recurrenceId,
+                          linkedRecurrence,
+                        );
+
+                      return (
+                        <div
+                          key={prediction.id}
+                          data-urgency={urgency}
+                          className={cn(
+                            "flex flex-col gap-3 py-4 first:pt-2 last:pb-2 sm:flex-row sm:items-center sm:justify-between",
+                            urgency === "overdue" &&
+                              "rounded-r-xl border-l-2 border-l-rose-500/50 bg-rose-500/[0.04] pl-3 dark:bg-rose-500/[0.07]",
+                            urgency === "due_today" &&
+                              "rounded-r-xl border-l-2 border-l-amber-500/40 bg-amber-500/[0.04] pl-3 dark:bg-amber-500/[0.07]",
+                          )}
+                        >
+                          <div className="flex min-w-0 items-start gap-3">
+                            <div
+                              className={`flex size-10 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ring-black/5 dark:ring-white/10 ${config.iconClass}`}
+                            >
+                              <Icon className="h-4 w-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="font-medium">
+                                  {prediction.description}
+                                </p>
+                                {recurrenceOrigin ? (
+                                  recurrenceOrigin.canNavigate &&
+                                  prediction.recurrenceId ? (
+                                    <Badge
+                                      render={<button type="button" />}
+                                      variant={
+                                        recurrenceOrigin.isPaused
+                                          ? "secondary"
+                                          : "outline"
+                                      }
+                                      className="cursor-pointer hover:bg-muted"
+                                      title="Ver recorrência"
+                                      aria-label={`Ver recorrência: ${recurrenceOrigin.label}`}
+                                      data-testid={`prediction-recurrence-origin-${prediction.id}`}
+                                      onClick={() => {
+                                        const targetId =
+                                          prediction.recurrenceId;
+                                        if (targetId) {
+                                          focusRecurrenceOrigin(targetId);
+                                        }
+                                      }}
+                                    >
+                                      {recurrenceOrigin.label}
+                                    </Badge>
+                                  ) : (
+                                    <Badge
+                                      variant={
+                                        recurrenceOrigin.isPaused
+                                          ? "secondary"
+                                          : "outline"
+                                      }
+                                      data-testid={`prediction-recurrence-origin-${prediction.id}`}
+                                    >
+                                      {recurrenceOrigin.label}
+                                    </Badge>
+                                  )
+                                ) : null}
+                              </div>
+                              <p className="mt-1 text-sm text-muted-foreground">
+                                <span
+                                  className={cn(
+                                    urgency === "overdue" &&
+                                      "font-medium text-rose-700 dark:text-rose-300",
+                                    urgency === "due_today" &&
+                                      "font-medium text-amber-800 dark:text-amber-200",
+                                  )}
+                                >
+                                  {urgency === "due_today"
+                                    ? "Hoje"
+                                    : formatDate(prediction.scheduledDate)}
+                                  {urgency === "overdue" ? " · Atrasada" : null}
+                                </span>
+                                <span aria-hidden> · </span>
+                                {category?.name ?? "Sem categoria"}
+                                <span aria-hidden> · </span>
+                                {account?.name ?? "Conta a definir"}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-3 sm:justify-end">
+                            <span
+                              className={`font-semibold tabular-nums ${config.valueClass}`}
+                            >
+                              {prediction.type === "expense" ? "-" : ""}
+                              {formatCurrency(prediction.amount)}
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <label className="mr-1 flex items-center gap-2 text-xs text-muted-foreground">
+                                <input
+                                  type="checkbox"
+                                  checked={prediction.includeInProjection}
+                                  disabled={
+                                    updatingPredictionProjectionId !== null
+                                  }
+                                  onChange={(event) =>
+                                    void handlePredictionProjectionChange(
+                                      prediction,
+                                      event.target.checked,
+                                    )
+                                  }
+                                  className="size-4 rounded border-input accent-primary"
+                                  aria-label={`Incluir ${prediction.description} no saldo projetado`}
+                                />
+                                {isUpdatingProjection
+                                  ? "Atualizando..."
+                                  : "Projetar"}
+                              </label>
+                              {!prediction.recurrenceId ? (
+                                <Button
+                                  type="button"
+                                  size="icon-sm"
+                                  variant="ghost"
+                                  disabled={settlingPredictionId !== null}
+                                  onClick={() =>
+                                    openEditPrediction(prediction)
+                                  }
+                                  aria-label={`Editar previsão ${prediction.description}`}
+                                  data-testid={`edit-prediction-${prediction.id}`}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              ) : null}
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={settlingPredictionId !== null}
+                                onClick={() => openSettleDialog(prediction)}
+                                data-testid={`settle-prediction-${prediction.id}`}
+                              >
+                                {isBusy ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Check className="h-4 w-4" />
+                                )}
+                                Liquidar
+                              </Button>
+                              <Button
+                                type="button"
+                                size="icon-sm"
+                                variant="ghost"
+                                disabled={settlingPredictionId !== null}
+                                onClick={() =>
+                                  void handleCancelPrediction(prediction)
+                                }
+                                aria-label={`Cancelar previsão ${prediction.description}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
             </div>
           )}
         </CardContent>
@@ -3294,23 +3951,9 @@ function LancamentosPageContent() {
               <div className="mx-auto mb-3 flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
                 <ArrowRightLeft className="size-5" />
               </div>
-              <p className="text-sm font-medium">
-                {transactions.length === 0
-                  ? "Nenhum lançamento encontrado"
-                  : appliedSearchTerm
-                    ? "Nenhum lançamento encontrado para esta busca"
-                    : accountFilter !== ALL_ACCOUNTS_FILTER
-                      ? "Nenhum lançamento nesta conta"
-                      : "Nenhum lançamento neste período"}
-              </p>
+              <p className="text-sm font-medium">{listEmptyCopy.title}</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                {transactions.length === 0
-                  ? "Registre sua primeira movimentação ou importe um CSV do Nubank."
-                  : appliedSearchTerm
-                    ? "Tente outro termo, limpe a busca ou ajuste a conta/período."
-                    : accountFilter !== ALL_ACCOUNTS_FILTER
-                      ? "Tente outra conta, cartão ou veja todas as contas."
-                      : "Tente outro mês ou veja todo o histórico."}
+                {listEmptyCopy.description}
               </p>
             </div>
           ) : (
@@ -3333,6 +3976,25 @@ function LancamentosPageContent() {
                   accountType: account?.type,
                 });
                 const invoiceLabel = getInvoicePaymentLabel(invoiceSignal);
+                const reconcileBadge = getInvoicePaymentReconcileBadge({
+                  invoicePaymentOrigin: transaction.invoicePaymentOrigin,
+                  reconciledWithTransactionId:
+                    transaction.reconciledWithTransactionId,
+                });
+                const reconcileBadgeLabel =
+                  getInvoicePaymentReconcileBadgeLabel(reconcileBadge);
+                const statementRelation =
+                  selectedAccount &&
+                  selectedAccount.type === "credit_card" &&
+                  account?.id === selectedAccount.id
+                    ? cardStatement?.usesStatementCycle
+                      ? "current"
+                      : getTransactionStatementRelation({
+                          account: selectedAccount,
+                          transactionDate: transaction.date,
+                          referenceDate: statementReferenceDate,
+                        })
+                    : null;
                 const linkedTransfer = isLinkedAccountTransfer(transaction);
                 const origin = resolveTransactionOrigin(
                   transaction.id,
@@ -3454,6 +4116,26 @@ function LancamentosPageContent() {
                               className="border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300"
                             >
                               {invoiceLabel}
+                            </Badge>
+                          ) : null}
+                          {reconcileBadgeLabel ? (
+                            <Badge
+                              variant="outline"
+                              className={getInvoicePaymentReconcileBadgeClass(
+                                reconcileBadge,
+                              )}
+                              data-testid={`invoice-reconcile-badge-${transaction.id}`}
+                            >
+                              {reconcileBadgeLabel}
+                            </Badge>
+                          ) : null}
+                          {statementRelation === "current" ? (
+                            <Badge
+                              variant="outline"
+                              className="border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300"
+                              data-testid={`statement-cycle-${transaction.id}`}
+                            >
+                              {STATEMENT_CYCLE_RELATION_LABELS.current}
                             </Badge>
                           ) : null}
                         </div>

@@ -117,3 +117,53 @@ export function getInvoicePaymentLabel(
       return null;
   }
 }
+
+export type InvoicePaymentReconcileBadge =
+  | "reconciled"
+  | "manual_pending"
+  | null;
+
+/**
+ * Visual status for invoice payment legs on lists / fatura views.
+ * Prefers reconcile link over raw origin.
+ */
+export function getInvoicePaymentReconcileBadge(input: {
+  invoicePaymentOrigin?: "manual" | "imported" | null;
+  reconciledWithTransactionId?: string | null;
+}): InvoicePaymentReconcileBadge {
+  if (input.reconciledWithTransactionId) {
+    return "reconciled";
+  }
+
+  if (input.invoicePaymentOrigin === "manual") {
+    return "manual_pending";
+  }
+
+  return null;
+}
+
+export function getInvoicePaymentReconcileBadgeLabel(
+  badge: InvoicePaymentReconcileBadge,
+): string | null {
+  switch (badge) {
+    case "reconciled":
+      return "Conciliado";
+    case "manual_pending":
+      return "Manual (aguardando import)";
+    default:
+      return null;
+  }
+}
+
+export function getInvoicePaymentReconcileBadgeClass(
+  badge: InvoicePaymentReconcileBadge,
+): string {
+  switch (badge) {
+    case "reconciled":
+      return "border-emerald-500/25 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200";
+    case "manual_pending":
+      return "border-amber-500/25 bg-amber-500/10 text-amber-900 dark:text-amber-100";
+    default:
+      return "";
+  }
+}

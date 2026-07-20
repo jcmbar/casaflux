@@ -241,6 +241,25 @@
       0 24px 56px -36px color-mix(in oklch, var(--chart-2) 28%, transparent),
       0 20px 48px -36px color-mix(in oklch, var(--foreground) 18%, transparent);
   }
+
+  .recurrence-nav-highlight {
+    animation: recurrence-nav-highlight 1.8s ease-out both;
+  }
+}
+
+@keyframes recurrence-nav-highlight {
+  0% {
+    background-color: color-mix(in oklch, var(--primary) 16%, transparent);
+    box-shadow: inset 3px 0 0 0 color-mix(in oklch, var(--primary) 55%, transparent);
+  }
+  40% {
+    background-color: color-mix(in oklch, var(--primary) 11%, transparent);
+    box-shadow: inset 3px 0 0 0 color-mix(in oklch, var(--primary) 40%, transparent);
+  }
+  100% {
+    background-color: color-mix(in oklch, var(--primary) 7%, transparent);
+    box-shadow: inset 3px 0 0 0 color-mix(in oklch, var(--primary) 28%, transparent);
+  }
 }
 
 @keyframes chart-fade-in {

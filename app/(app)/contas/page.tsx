@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { AccountIdentity } from "@/components/finance/account-identity";
+import { CreditCardStatementSummary } from "@/components/finance/credit-card-statement-summary";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -29,6 +30,10 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useAppContext } from "@/contexts/app-context";
+import { getCreditCardBillingValidationError } from "@/lib/finance/credit-card-billing";
+import { fetchAllTransactionsForAccounts } from "@/lib/finance/fetch-transactions";
+import { resolveContasCardStatementContext } from "@/lib/finance/lancamentos-card-statement";
+import { TRANSACTIONS_SELECT } from "@/lib/finance/transactions-query";
 import { formatCurrency } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
@@ -40,6 +45,7 @@ import {
   type AccountMode,
   type AccountType,
 } from "@/types/account";
+import { mapTransaction, type Transaction, type TransactionRow } from "@/types/transaction";
 
 type FormState = {
   name: string;
@@ -51,6 +57,8 @@ type FormState = {
   allowFamilyView: boolean;
   allowFamilyPost: boolean;
   allowFamilyEdit: boolean;
+  statementClosingDay: string;
+  statementDueDay: string;
 };
 
 const defaultForm: FormState = {
@@ -63,18 +71,46 @@ const defaultForm: FormState = {
   allowFamilyView: true,
   allowFamilyPost: true,
   allowFamilyEdit: false,
+  statementClosingDay: "",
+  statementDueDay: "",
 };
+
+function parseOptionalDay(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function billingFieldsForType(type: AccountType, form: FormState) {
+  if (type !== "credit_card") {
+    return {
+      statement_closing_day: null,
+      statement_due_day: null,
+    };
+  }
+
+  return {
+    statement_closing_day: parseOptionalDay(form.statementClosingDay),
+    statement_due_day: parseOptionalDay(form.statementDueDay),
+  };
+}
 
 export default function ContasPage() {
   const supabase = useMemo(() => createClient()!, []);
   const confirm = useConfirm();
   const { user, activeFamily, isFamilyAdmin } = useAppContext();
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [cardTransactions, setCardTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(defaultForm);
+  const statementReferenceDate = useMemo(
+    () => new Date().toISOString().slice(0, 10),
+    [],
+  );
 
   async function loadAccounts() {
     setLoading(true);
@@ -91,7 +127,33 @@ export default function ContasPage() {
       return;
     }
 
-    setAccounts((data ?? []) as Account[]);
+    const loadedAccounts = (data ?? []) as Account[];
+    setAccounts(loadedAccounts);
+
+    const cardIds = loadedAccounts
+      .filter((account) => account.type === "credit_card")
+      .map((account) => account.id);
+
+    if (cardIds.length === 0) {
+      setCardTransactions([]);
+    } else {
+      const transactionsRes = await fetchAllTransactionsForAccounts<TransactionRow>(
+        supabase,
+        {
+          accountIds: cardIds,
+          // Same select as `/lancamentos` so settlement fields stay aligned.
+          select: TRANSACTIONS_SELECT,
+        },
+      );
+
+      if (transactionsRes.error) {
+        console.error(transactionsRes.error);
+        setCardTransactions([]);
+      } else {
+        setCardTransactions(transactionsRes.data.map(mapTransaction));
+      }
+    }
+
     setLoading(false);
   }
 
@@ -121,6 +183,14 @@ export default function ContasPage() {
       allowFamilyView: account.allow_family_view,
       allowFamilyPost: account.allow_family_post,
       allowFamilyEdit: account.allow_family_edit,
+      statementClosingDay:
+        account.statement_closing_day != null
+          ? String(account.statement_closing_day)
+          : "",
+      statementDueDay:
+        account.statement_due_day != null
+          ? String(account.statement_due_day)
+          : "",
     });
     setOpen(true);
   }
@@ -184,6 +254,17 @@ export default function ContasPage() {
       return;
     }
 
+    const billing = billingFieldsForType(form.type, form);
+    const billingError = getCreditCardBillingValidationError({
+      type: form.type,
+      statementClosingDay: billing.statement_closing_day,
+      statementDueDay: billing.statement_due_day,
+    });
+    if (billingError) {
+      toast.error(billingError);
+      return;
+    }
+
     setSaving(true);
 
     const payload =
@@ -200,6 +281,7 @@ export default function ContasPage() {
             allow_family_view: false,
             allow_family_post: false,
             allow_family_edit: false,
+            ...billing,
           }
         : {
             name: form.name.trim(),
@@ -213,6 +295,7 @@ export default function ContasPage() {
             allow_family_view: form.allowFamilyView,
             allow_family_post: form.allowFamilyPost,
             allow_family_edit: form.allowFamilyEdit,
+            ...billing,
           };
 
     if (editingId) {
@@ -240,6 +323,7 @@ export default function ContasPage() {
         allow_family_view: false,
         allow_family_post: false,
         allow_family_edit: false,
+        ...billing,
       });
 
       if (error) {
@@ -261,6 +345,7 @@ export default function ContasPage() {
         allow_family_view: form.allowFamilyView,
         allow_family_post: form.allowFamilyPost,
         allow_family_edit: form.allowFamilyEdit,
+        ...billing,
       });
 
       if (error) {
@@ -380,12 +465,19 @@ export default function ContasPage() {
                 id="type"
                 label="Formato"
                 value={form.type}
-                onChange={(event) =>
+                onChange={(event) => {
+                  const nextType = event.target.value as AccountType;
                   setForm((current) => ({
                     ...current,
-                    type: event.target.value as AccountType,
-                  }))
-                }
+                    type: nextType,
+                    ...(nextType === "credit_card"
+                      ? {}
+                      : {
+                          statementClosingDay: "",
+                          statementDueDay: "",
+                        }),
+                  }));
+                }}
               >
                 <option value="checking">Conta corrente</option>
                 <option value="savings">Poupança</option>
@@ -393,6 +485,49 @@ export default function ContasPage() {
                 <option value="credit_card">Cartão de crédito</option>
                 <option value="investment">Investimento</option>
               </FormSelect>
+
+              {form.type === "credit_card" ? (
+                <div className="space-y-3 rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
+                  <p className="text-sm text-muted-foreground">
+                    Ciclo da fatura: compras entre um fechamento e o próximo
+                    entram na mesma fatura.
+                  </p>
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <FormInput
+                      id="statement-closing-day"
+                      label="Dia de fechamento"
+                      type="number"
+                      min={1}
+                      max={31}
+                      placeholder="Ex.: 20"
+                      value={form.statementClosingDay}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          statementClosingDay: event.target.value,
+                        }))
+                      }
+                      data-testid="account-statement-closing-day"
+                    />
+                    <FormInput
+                      id="statement-due-day"
+                      label="Dia de vencimento"
+                      type="number"
+                      min={1}
+                      max={31}
+                      placeholder="Ex.: 27"
+                      value={form.statementDueDay}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          statementDueDay: event.target.value,
+                        }))
+                      }
+                      data-testid="account-statement-due-day"
+                    />
+                  </div>
+                </div>
+              ) : null}
 
               <div className="grid gap-5 sm:grid-cols-2">
                 <FormInput
@@ -552,6 +687,14 @@ export default function ContasPage() {
               {accounts.map((account) => {
                 const isForecast = account.account_mode === "forecast";
                 const editable = canManageAccount(account);
+                const cardStatement =
+                  account.type === "credit_card"
+                    ? resolveContasCardStatementContext({
+                        account,
+                        transactions: cardTransactions,
+                        referenceDate: statementReferenceDate,
+                      })
+                    : null;
 
                 return (
                   <div
@@ -562,7 +705,7 @@ export default function ContasPage() {
                         : "border-transparent hover:bg-muted/40"
                     }`}
                   >
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 space-y-3">
                       <AccountIdentity
                         account={account}
                         size="lg"
@@ -576,6 +719,14 @@ export default function ContasPage() {
                         }
                         className="w-full items-start"
                       />
+                      {account.type === "credit_card" ? (
+                        <CreditCardStatementSummary
+                          account={account}
+                          transactions={cardTransactions}
+                          cycle={cardStatement?.cycle}
+                          referenceDate={statementReferenceDate}
+                        />
+                      ) : null}
                     </div>
 
                     <div className="flex items-center justify-between gap-3 sm:justify-end">

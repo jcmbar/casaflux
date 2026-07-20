@@ -1,4 +1,4 @@
-import { BrandMark } from "@/components/auth/brand-mark";
+import { BrandMark } from "@/components/brand/brand-mark";
 import { Separator } from "@/components/ui/separator";
 
 import { SidebarSignOutButton } from "./sidebar-sign-out-button";
@@ -8,7 +8,13 @@ export function AppSidebar() {
   return (
     <aside className="hidden h-svh w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
       <div className="flex h-16 items-center px-5">
-        <BrandMark href="/dashboard" size="sm" orientation="horizontal" />
+        <BrandMark
+          href="/dashboard"
+          surface="sidebar_expanded"
+          size="sm"
+          orientation="horizontal"
+          showTagline={false}
+        />
       </div>
 
       <Separator className="bg-sidebar-border" />

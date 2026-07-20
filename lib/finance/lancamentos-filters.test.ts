@@ -9,6 +9,8 @@ import {
   filterTransactionsByAccount,
   getAccountKindLabel,
   getInvoicePaymentLabel,
+  getInvoicePaymentReconcileBadge,
+  getInvoicePaymentReconcileBadgeLabel,
   partitionAccountsForFilter,
   resolveAccountFilter,
 } from "./lancamentos-filters";
@@ -150,5 +152,35 @@ describe("invoice payment signals", () => {
       "Pagamento de fatura",
     );
     expect(getInvoicePaymentLabel(null)).toBeNull();
+  });
+
+  it("exposes reconcile status badges for manual pending and linked pairs", () => {
+    expect(
+      getInvoicePaymentReconcileBadge({
+        invoicePaymentOrigin: "manual",
+        reconciledWithTransactionId: null,
+      }),
+    ).toBe("manual_pending");
+
+    expect(
+      getInvoicePaymentReconcileBadge({
+        invoicePaymentOrigin: "manual",
+        reconciledWithTransactionId: "imported-1",
+      }),
+    ).toBe("reconciled");
+
+    expect(
+      getInvoicePaymentReconcileBadge({
+        invoicePaymentOrigin: "imported",
+        reconciledWithTransactionId: "manual-1",
+      }),
+    ).toBe("reconciled");
+
+    expect(
+      getInvoicePaymentReconcileBadgeLabel("manual_pending"),
+    ).toBe("Manual (aguardando import)");
+    expect(getInvoicePaymentReconcileBadgeLabel("reconciled")).toBe(
+      "Conciliado",
+    );
   });
 });

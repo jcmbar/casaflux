@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { filterRealAccounts, type Account } from "@/types/account";
 
+import { fetchAllTransactionsForAccounts } from "./fetch-transactions";
 import {
   filterAccountsByFinanceScope,
   type FinanceViewScope,
@@ -47,17 +48,17 @@ export async function fetchScopedFinanceData<TRow extends { account_id: string }
     };
   }
 
-  const transactionsRes = await supabase
-    .from("transactions")
-    .select(transactionsSelect)
-    .in("account_id", scopedAccountIds)
-    .order("transaction_date", { ascending: false })
-    .order("created_at", { ascending: false });
+  const transactionsRes = await fetchAllTransactionsForAccounts<TRow>(supabase, {
+    accountIds: scopedAccountIds,
+    select: transactionsSelect,
+  });
 
   return {
     accounts: includedAccounts,
-    transactionRows: (transactionsRes.data ?? []) as unknown as TRow[],
+    transactionRows: transactionsRes.data,
     accountsError: null,
-    transactionsError: transactionsRes.error,
+    transactionsError: transactionsRes.error
+      ? new Error(transactionsRes.error.message)
+      : null,
   };
 }

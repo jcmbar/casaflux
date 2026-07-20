@@ -3,7 +3,7 @@
 import { MenuIcon } from "lucide-react";
 import { useState } from "react";
 
-import { BrandMark } from "@/components/auth/brand-mark";
+import { BrandMark } from "@/components/brand/brand-mark";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -40,7 +40,13 @@ export function MobileNav() {
       >
         <SheetHeader className="border-b border-sidebar-border px-5 py-4 text-left">
           <SheetTitle className="sr-only">Menu CasaFlux</SheetTitle>
-          <BrandMark href="/dashboard" size="sm" orientation="horizontal" />
+          <BrandMark
+            href="/dashboard"
+            surface="mobile_nav"
+            size="sm"
+            orientation="horizontal"
+            showTagline={false}
+          />
         </SheetHeader>
 
         <div className="px-3 py-4">

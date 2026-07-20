@@ -49,6 +49,31 @@ export type PendingPredictionScheduleItem = {
 };
 
 /**
+ * Splits pending predictions into past (before today) and upcoming
+ * (today or later). Edit impact stays on upcoming only.
+ */
+export function partitionPendingPredictionsForEdit(
+  pending: readonly PendingPredictionScheduleItem[],
+  today: string,
+): {
+  past: PendingPredictionScheduleItem[];
+  upcoming: PendingPredictionScheduleItem[];
+} {
+  const past: PendingPredictionScheduleItem[] = [];
+  const upcoming: PendingPredictionScheduleItem[] = [];
+
+  for (const item of pending) {
+    if (item.scheduledDate < today) {
+      past.push(item);
+    } else {
+      upcoming.push(item);
+    }
+  }
+
+  return { past, upcoming };
+}
+
+/**
  * Returns pending prediction ids whose scheduled date no longer belongs
  * to the recurrence rule (e.g. after a frequency or end-rule change).
  *
@@ -85,17 +110,18 @@ export function getOutdatedPendingPredictionIds(
 }
 
 /**
- * Updates an active recurrence template and keeps pending predictions
- * consistent with the new rule:
+ * Updates an active recurrence template and keeps **upcoming** pending
+ * predictions consistent with the new rule:
  *
- * - pending predictions receive the new snapshot fields;
- * - pending dates that leave the schedule are canceled;
+ * - upcoming pending predictions receive the new snapshot fields;
+ * - upcoming pending dates that leave the schedule are canceled;
  * - missing dates inside the sync window are created;
- * - settled/canceled predictions are never touched.
+ * - past pending, settled, and canceled predictions are never touched.
  */
 export async function updateRecurrence(
   supabase: SupabaseClient,
   input: UpdateRecurrenceInput,
+  options: { today?: string } = {},
 ): Promise<UpdateRecurrenceResult> {
   if (!input.description.trim()) {
     return { ok: false, message: "Informe uma descrição para a recorrência." };
@@ -180,18 +206,21 @@ export async function updateRecurrence(
     };
   }
 
+  const today = options.today ?? new Date().toISOString().slice(0, 10);
   const pending = (pendingRows ?? []).map((row) => ({
     id: row.id as string,
     scheduledDate: row.scheduled_date as string,
   }));
+  const { upcoming } = partitionPendingPredictionsForEdit(pending, today);
 
   let updatedPredictions = 0;
 
-  if (pending.length > 0) {
+  if (upcoming.length > 0) {
+    const upcomingIds = upcoming.map((item) => item.id);
     const { data: updatedRows, error: updatePendingError } = await supabase
       .from("financial_predictions")
       .update(snapshot)
-      .eq("recurrence_id", recurrence.id)
+      .in("id", upcomingIds)
       .eq("status", "predicted")
       .select("id");
 
@@ -216,7 +245,8 @@ export async function updateRecurrence(
       endDate: recurrence.endDate,
       occurrencesLimit: recurrence.occurrencesLimit,
     },
-    pending,
+    upcoming,
+    { today },
   );
 
   let canceledPredictions = 0;
@@ -242,7 +272,9 @@ export async function updateRecurrence(
     canceledPredictions = canceledRows?.length ?? 0;
   }
 
-  const syncResult = await syncPredictedOccurrences(supabase, recurrence);
+  const syncResult = await syncPredictedOccurrences(supabase, recurrence, {
+    today,
+  });
 
   if (!syncResult.ok) {
     notifyRecurrencesChanged();

@@ -18,6 +18,8 @@ export const mockAccounts: Account[] = [
     type: "checking",
     balance: 4250.75,
     color: "#2563eb",
+    statement_closing_day: null,
+    statement_due_day: null,
     ...mockDefaults,
   },
   {
@@ -26,6 +28,8 @@ export const mockAccounts: Account[] = [
     type: "savings",
     balance: 12000,
     color: "#16a34a",
+    statement_closing_day: null,
+    statement_due_day: null,
     ...mockDefaults,
   },
   {
@@ -34,6 +38,8 @@ export const mockAccounts: Account[] = [
     type: "credit_card",
     balance: -850.3,
     color: "#dc2626",
+    statement_closing_day: 20,
+    statement_due_day: 27,
     ...mockDefaults,
   },
 ];

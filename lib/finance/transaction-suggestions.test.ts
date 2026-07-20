@@ -18,10 +18,12 @@ function makeTransaction(
     type: "expense",
     categoryId: "cat-food",
     accountId: "acc-1",
+    linkedTransactionId: null,
     createdBy: "user-1",
     familyId: null,
     date: "2026-07-01",
     createdAt: "2026-07-01T12:00:00Z",
+    statementCycleId: null,
     ...overrides,
   };
 }

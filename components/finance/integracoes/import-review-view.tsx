@@ -4,19 +4,23 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
+  ArrowLeft,
   FileSpreadsheet,
   History,
   Loader2,
   Upload,
 } from "lucide-react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormSelect } from "@/components/forms/form-controls";
 import { PageIntro } from "@/components/layout/page-intro";
 import { useConfirm } from "@/components/feedback/confirm-dialog-provider";
+import { InvoicePaymentImportPanel } from "@/components/finance/integracoes/invoice-payment-import-panel";
 import { useAppContext } from "@/contexts/app-context";
 import { buildImportPreview } from "@/lib/integrations/core/import-orchestrator";
 import { detectImportSource } from "@/lib/integrations/core/detect-source";
@@ -25,6 +29,22 @@ import {
   getCommitImportPreviewValidationError,
 } from "@/lib/integrations/commit/commit-import-preview";
 import { getCommittableImportRows } from "@/lib/integrations/commit/map-import-row";
+import {
+  getInvoicePaymentImportMode,
+  resolveImportedInvoicePaymentForAccount,
+  type InvoicePaymentImportMode,
+} from "@/lib/integrations/invoice-payment/resolve-invoice-payment";
+import {
+  getInvoicePaymentReconcileDecision,
+  INVOICE_PAYMENT_RECONCILE_MAX_DATE_DAYS,
+  suggestInvoicePaymentReconcileForRows,
+  type InvoicePaymentReconcileDecision,
+  type InvoicePaymentReconcileSuggestion,
+  type ManualInvoicePaymentCandidate,
+} from "@/lib/integrations/invoice-payment/suggest-invoice-payment-reconcile";
+import { fetchManualInvoicePaymentCandidates } from "@/lib/finance/reconcile-invoice-payment";
+import { addDaysIso } from "@/lib/finance/credit-card-billing";
+import { formatAccountSelectLabel } from "@/lib/finance/account-identity";
 import {
   applyConfirmedCategoryToRow,
   applyHighConfidenceCategorySuggestions,
@@ -45,6 +65,11 @@ import {
 } from "@/lib/integrations/history/compare-preview-with-history";
 import { hashImportContentAsync } from "@/lib/integrations/history/hash-content";
 import { fetchImportHistoryContext } from "@/lib/integrations/history/import-history-service";
+import {
+  getGuidedReimportIntro,
+  IMPORTACOES_ROUTES,
+  parseGuidedReimportSearchParams,
+} from "@/lib/integrations/history/importations";
 import { buildImportRowIdentityKey } from "@/lib/integrations/history/row-identity";
 import {
   importDirectionLabels,
@@ -61,7 +86,6 @@ import type {
   ImportRowHistoricalStatus,
 } from "@/lib/integrations/types";
 import type { Category } from "@/types/category";
-import { formatAccountSelectLabel } from "@/lib/finance/account-identity";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
@@ -219,10 +243,18 @@ function ImportRowBadges({
 }
 
 export function ImportReviewView() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = useMemo(() => createClient()!, []);
   const confirm = useConfirm();
   const { user, activeFamily } = useAppContext();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const guidedReimport = useMemo(
+    () => parseGuidedReimportSearchParams(searchParams),
+    [searchParams],
+  );
+  const [guidedAccountApplied, setGuidedAccountApplied] = useState(false);
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
@@ -242,6 +274,15 @@ export function ImportReviewView() {
   const [invoiceSourceAccounts, setInvoiceSourceAccounts] = useState<
     Record<number, string>
   >({});
+  const [invoicePaymentModes, setInvoicePaymentModes] = useState<
+    Record<number, InvoicePaymentImportMode>
+  >({});
+  const [invoiceReconcileDecisions, setInvoiceReconcileDecisions] = useState<
+    Record<number, InvoicePaymentReconcileDecision>
+  >({});
+  const [manualInvoiceCandidates, setManualInvoiceCandidates] = useState<
+    ManualInvoicePaymentCandidate[]
+  >([]);
   const [rowFilter, setRowFilter] = useState<RowFilter>("all");
   const [readingFile, setReadingFile] = useState(false);
 
@@ -406,13 +447,66 @@ export function ImportReviewView() {
     ).length;
   }, [activePreview]);
 
+  const selectedCardAccount = useMemo(
+    () => creditCardAccounts.find((account) => account.id === cardAccountId) ?? null,
+    [cardAccountId, creditCardAccounts],
+  );
+
+  const invoiceReconcileSuggestions = useMemo(() => {
+    if (!activePreview || !cardAccountId || detectedSource !== "nubank_credit_card") {
+      return {} as Record<number, InvoicePaymentReconcileSuggestion>;
+    }
+
+    const rows = activePreview.rows
+      .filter((row) => row.kind === "card_invoice_payment")
+      .filter(
+        (row) =>
+          getInvoicePaymentImportMode(invoicePaymentModes, row.sourceLine) ===
+          "payment",
+      )
+      .map((row) => {
+        const resolution = resolveImportedInvoicePaymentForAccount({
+          paymentDate: row.date,
+          cardAccount: selectedCardAccount,
+        });
+
+        return {
+          sourceLine: row.sourceLine,
+          imported: {
+            amount: row.amount,
+            paymentDate: row.date,
+            cycleId: resolution?.cycleId ?? null,
+            cardAccountId,
+            sourceAccountId: invoiceSourceAccounts[row.sourceLine] ?? null,
+          },
+        };
+      });
+
+    return suggestInvoicePaymentReconcileForRows({
+      rows,
+      candidates: manualInvoiceCandidates,
+    });
+  }, [
+    activePreview,
+    cardAccountId,
+    detectedSource,
+    invoicePaymentModes,
+    invoiceSourceAccounts,
+    manualInvoiceCandidates,
+    selectedCardAccount,
+  ]);
+
   const committableRows = useMemo(() => {
     if (!activePreview) {
       return [];
     }
 
-    return getCommittableImportRows(activePreview.rows, invoiceSourceAccounts);
-  }, [activePreview, invoiceSourceAccounts]);
+    return getCommittableImportRows(
+      activePreview.rows,
+      invoiceSourceAccounts,
+      invoicePaymentModes,
+    );
+  }, [activePreview, invoicePaymentModes, invoiceSourceAccounts]);
 
   const commitValidationError = useMemo(() => {
     if (!activePreview || !user || !contentHash || !targetAccountId) {
@@ -423,6 +517,7 @@ export function ImportReviewView() {
       preview: activePreview,
       targetAccountId,
       invoiceSourceAccounts,
+      invoicePaymentModes,
       ownerUserId: user.id,
       familyId: activeFamily?.id ?? null,
       fileName,
@@ -433,10 +528,102 @@ export function ImportReviewView() {
     activePreview,
     contentHash,
     fileName,
+    invoicePaymentModes,
     invoiceSourceAccounts,
     targetAccountId,
     user,
   ]);
+
+  useEffect(() => {
+    if (checkingAccounts.length !== 1) {
+      return;
+    }
+
+    const onlyId = checkingAccounts[0]!.id;
+    if (!activePreview) {
+      return;
+    }
+
+    const paymentLines = activePreview.rows
+      .filter((row) => row.kind === "card_invoice_payment")
+      .map((row) => row.sourceLine);
+
+    if (paymentLines.length === 0) {
+      return;
+    }
+
+    setInvoiceSourceAccounts((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const line of paymentLines) {
+        if (!next[line]) {
+          next[line] = onlyId;
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [activePreview, checkingAccounts]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadManualInvoiceCandidates() {
+      if (
+        !activePreview ||
+        !cardAccountId ||
+        detectedSource !== "nubank_credit_card"
+      ) {
+        setManualInvoiceCandidates([]);
+        return;
+      }
+
+      const paymentRows = activePreview.rows.filter(
+        (row) => row.kind === "card_invoice_payment",
+      );
+
+      if (paymentRows.length === 0) {
+        setManualInvoiceCandidates([]);
+        return;
+      }
+
+      const dates = paymentRows.map((row) => row.date).sort();
+      const earliest = dates[0]!;
+      const latest = dates[dates.length - 1]!;
+
+      // Widen the window so manuals paid a few days earlier/later still load.
+      const pad = INVOICE_PAYMENT_RECONCILE_MAX_DATE_DAYS;
+      const dateFrom = addDaysIso(earliest, -pad);
+      const dateTo = addDaysIso(latest, pad);
+
+      const { candidates, error } = await fetchManualInvoicePaymentCandidates(
+        supabase,
+        {
+          cardAccountId,
+          dateFrom,
+          dateTo,
+        },
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      if (error) {
+        console.error(error);
+        setManualInvoiceCandidates([]);
+        return;
+      }
+
+      setManualInvoiceCandidates(candidates);
+    }
+
+    void loadManualInvoiceCandidates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activePreview, cardAccountId, detectedSource, supabase]);
 
   useEffect(() => {
     async function loadAccounts() {
@@ -456,6 +643,43 @@ export function ImportReviewView() {
 
     void loadAccounts();
   }, [supabase]);
+
+  useEffect(() => {
+    if (guidedAccountApplied || accountsLoading || !guidedReimport.accountId) {
+      return;
+    }
+
+    const account = accounts.find(
+      (item) => item.id === guidedReimport.accountId,
+    );
+    if (!account) {
+      setGuidedAccountApplied(true);
+      return;
+    }
+
+    if (account.type === "credit_card") {
+      setCardAccountId(account.id);
+    } else if (["checking", "savings"].includes(account.type)) {
+      setCheckingAccountId(account.id);
+    }
+
+    setGuidedAccountApplied(true);
+  }, [
+    accounts,
+    accountsLoading,
+    guidedAccountApplied,
+    guidedReimport.accountId,
+  ]);
+
+  const guidedAccountName = useMemo(() => {
+    if (!guidedReimport.accountId) return null;
+    return (
+      accounts.find((account) => account.id === guidedReimport.accountId)?.name ??
+      null
+    );
+  }, [accounts, guidedReimport.accountId]);
+
+  const isGuidedReimport = Boolean(guidedReimport.fromBatchId);
 
   useEffect(() => {
     let cancelled = false;
@@ -570,6 +794,9 @@ export function ImportReviewView() {
     setReadingFile(true);
     setFileName(file.name);
     setInvoiceSourceAccounts({});
+    setInvoicePaymentModes({});
+    setInvoiceReconcileDecisions({});
+    setManualInvoiceCandidates([]);
     setRowFilter("all");
 
     const reader = new FileReader();
@@ -614,14 +841,21 @@ export function ImportReviewView() {
 
     setCommitting(true);
 
+    const targetAccount =
+      accounts.find((account) => account.id === targetAccountId) ?? null;
+
     const result = await commitImportPreview(supabase, {
       preview: activePreview,
       targetAccountId,
       invoiceSourceAccounts,
+      invoicePaymentModes,
+      invoicePaymentReconcileDecisions: invoiceReconcileDecisions,
+      invoicePaymentReconcileSuggestions: invoiceReconcileSuggestions,
       ownerUserId: user.id,
       familyId: activeFamily?.id ?? null,
       fileName,
       contentHash,
+      targetAccount,
     });
 
     setCommitting(false);
@@ -631,10 +865,19 @@ export function ImportReviewView() {
       return;
     }
 
+    const reconcileNote =
+      result.reconciledInvoicePayments > 0
+        ? ` ${result.reconciledInvoicePayments} pagamento(s) conciliado(s) com lançamento(s) manual(is).`
+        : "";
+
     toast.success(
-      `${result.committedRows} linha(s) importada(s), ${result.createdTransactions} lançamento(s) criado(s).`,
+      `${result.createdTransactions} lançamento(s) criado(s) a partir de ${result.committedRows} linha(s).${reconcileNote}`,
     );
     setHistoryRefreshKey((current) => current + 1);
+
+    if (result.batchId) {
+      router.push(`/importacoes/${result.batchId}`);
+    }
   }
 
   function handleReset() {
@@ -648,6 +891,9 @@ export function ImportReviewView() {
     setHistoryError(null);
     setCommitting(false);
     setInvoiceSourceAccounts({});
+    setInvoicePaymentModes({});
+    setInvoiceReconcileDecisions({});
+    setManualInvoiceCandidates([]);
     setRowFilter("all");
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -656,11 +902,51 @@ export function ImportReviewView() {
 
   return (
     <div className="space-y-6 md:space-y-8">
-      <PageIntro description="Envie um CSV do Nubank para revisar o preview normalizado e comparar com importações anteriores. Nenhum lançamento financeiro será gravado nesta etapa." />
+      <div className="space-y-3">
+        <Link
+          href={
+            guidedReimport.fromBatchId
+              ? IMPORTACOES_ROUTES.detail(guidedReimport.fromBatchId)
+              : IMPORTACOES_ROUTES.list
+          }
+          className={cn(
+            buttonVariants({ variant: "ghost", size: "sm" }),
+            "-ml-2 gap-1.5 text-muted-foreground",
+          )}
+        >
+          <ArrowLeft className="size-4" />
+          {guidedReimport.fromBatchId ? "Voltar à importação" : "Importações"}
+        </Link>
+        <PageIntro
+          description={
+            isGuidedReimport
+              ? getGuidedReimportIntro({
+                  source: guidedReimport.source,
+                  accountName: guidedAccountName,
+                })
+              : "Envie um CSV do Nubank, revise o que será criado e confirme a importação. Nada é gravado até você confirmar."
+          }
+        />
+      </div>
+
+      {isGuidedReimport ? (
+        <Alert
+          className="border-primary/20 bg-primary/5"
+          data-testid="guided-reimport-banner"
+        >
+          <History className="size-4" />
+          <AlertTitle>Importar novamente</AlertTitle>
+          <AlertDescription>
+            Conta e origem foram pré-selecionadas a partir da importação
+            anterior. Selecione o arquivo CSV para revisar — nada será gravado
+            automaticamente.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <Card className="border-border/50 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-base">Arquivo CSV</CardTitle>
+          <CardTitle className="text-base">Arquivo importado</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1064,26 +1350,51 @@ export function ImportReviewView() {
                     </div>
 
                     {row.kind === "card_invoice_payment" ? (
-                      <div className="mt-3 max-w-md">
-                        <FormSelect
-                          id={`invoice-source-${row.sourceLine}`}
-                          label="Conta de origem do pagamento (pendente, não será salva)"
-                          value={invoiceSourceAccounts[row.sourceLine] ?? ""}
-                          onChange={(event) =>
-                            setInvoiceSourceAccounts((current) => ({
-                              ...current,
-                              [row.sourceLine]: event.target.value,
-                            }))
-                          }
-                        >
-                          <option value="">Selecione a conta bancária de origem</option>
-                          {checkingAccounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {formatAccountSelectLabel(account)}
-                </option>
-              ))}
-                        </FormSelect>
-                      </div>
+                      <InvoicePaymentImportPanel
+                        row={row}
+                        cardName={
+                          selectedCardAccount
+                            ? formatAccountSelectLabel(selectedCardAccount)
+                            : "Cartão selecionado"
+                        }
+                        resolution={resolveImportedInvoicePaymentForAccount({
+                          paymentDate: row.date,
+                          cardAccount: selectedCardAccount,
+                        })}
+                        mode={getInvoicePaymentImportMode(
+                          invoicePaymentModes,
+                          row.sourceLine,
+                        )}
+                        sourceAccountId={
+                          invoiceSourceAccounts[row.sourceLine] ?? ""
+                        }
+                        checkingAccounts={checkingAccounts}
+                        onModeChange={(mode) =>
+                          setInvoicePaymentModes((current) => ({
+                            ...current,
+                            [row.sourceLine]: mode,
+                          }))
+                        }
+                        onSourceAccountChange={(accountId) =>
+                          setInvoiceSourceAccounts((current) => ({
+                            ...current,
+                            [row.sourceLine]: accountId,
+                          }))
+                        }
+                        reconcileSuggestion={
+                          invoiceReconcileSuggestions[row.sourceLine] ?? null
+                        }
+                        reconcileDecision={getInvoicePaymentReconcileDecision(
+                          invoiceReconcileDecisions,
+                          row.sourceLine,
+                        )}
+                        onReconcileDecisionChange={(decision) =>
+                          setInvoiceReconcileDecisions((current) => ({
+                            ...current,
+                            [row.sourceLine]: decision,
+                          }))
+                        }
+                      />
                     ) : null}
                   </div>
                 ))}
@@ -1179,28 +1490,51 @@ export function ImportReviewView() {
                         </div>
 
                         {isInvoicePayment ? (
-                          <div className="mt-3 max-w-md">
-                            <FormSelect
-                              id={`row-invoice-source-${row.sourceLine}`}
-                              label="Conta de origem (pendente)"
-                              value={invoiceSourceAccounts[row.sourceLine] ?? ""}
-                              onChange={(event) =>
-                                setInvoiceSourceAccounts((current) => ({
-                                  ...current,
-                                  [row.sourceLine]: event.target.value,
-                                }))
-                              }
-                            >
-                              <option value="">
-                                Selecione a conta bancária de origem
-                              </option>
-                              {checkingAccounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {formatAccountSelectLabel(account)}
-                </option>
-              ))}
-                            </FormSelect>
-                          </div>
+                          <InvoicePaymentImportPanel
+                            row={row}
+                            cardName={
+                              selectedCardAccount
+                                ? formatAccountSelectLabel(selectedCardAccount)
+                                : "Cartão selecionado"
+                            }
+                            resolution={resolveImportedInvoicePaymentForAccount({
+                              paymentDate: row.date,
+                              cardAccount: selectedCardAccount,
+                            })}
+                            mode={getInvoicePaymentImportMode(
+                              invoicePaymentModes,
+                              row.sourceLine,
+                            )}
+                            sourceAccountId={
+                              invoiceSourceAccounts[row.sourceLine] ?? ""
+                            }
+                            checkingAccounts={checkingAccounts}
+                            onModeChange={(mode) =>
+                              setInvoicePaymentModes((current) => ({
+                                ...current,
+                                [row.sourceLine]: mode,
+                              }))
+                            }
+                            onSourceAccountChange={(accountId) =>
+                              setInvoiceSourceAccounts((current) => ({
+                                ...current,
+                                [row.sourceLine]: accountId,
+                              }))
+                            }
+                            reconcileSuggestion={
+                              invoiceReconcileSuggestions[row.sourceLine] ?? null
+                            }
+                            reconcileDecision={getInvoicePaymentReconcileDecision(
+                              invoiceReconcileDecisions,
+                              row.sourceLine,
+                            )}
+                            onReconcileDecisionChange={(decision) =>
+                              setInvoiceReconcileDecisions((current) => ({
+                                ...current,
+                                [row.sourceLine]: decision,
+                              }))
+                            }
+                          />
                         ) : null}
 
                         {row.historicalStatus === "new" &&

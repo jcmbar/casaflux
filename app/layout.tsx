@@ -15,6 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "CasaFlux",
   description: "Finanças familiares simples e organizadas",
+  applicationName: "CasaFlux",
 };
 
 export default function RootLayout({

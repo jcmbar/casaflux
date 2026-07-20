@@ -204,12 +204,15 @@ export function transactionMatchesSearch(
     return true;
   }
 
-  return haystack.includes(query);
+  // AND semantics: every whitespace-separated token must appear.
+  const tokens = query.split(" ").filter(Boolean);
+  return tokens.every((token) => haystack.includes(token));
 }
 
 /**
  * Filters transactions by a free-text query against a prebuilt search index.
  * Empty/whitespace query returns the input list unchanged.
+ * Multi-word queries require every token to match (AND).
  */
 export function filterTransactionsBySearch<
   T extends Pick<Transaction, "id">,
@@ -225,6 +228,6 @@ export function filterTransactionsBySearch<
 
   return transactions.filter((transaction) => {
     const haystack = searchIndex.get(transaction.id) ?? "";
-    return haystack.includes(query);
+    return transactionMatchesSearch(haystack, query);
   });
 }

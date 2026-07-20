@@ -4,6 +4,7 @@ const mockDefaults = {
   createdBy: "mock-user",
   familyId: null,
   linkedTransactionId: null,
+  statementCycleId: null,
 } as const;
 
 export const mockTransactions: Transaction[] = [

@@ -20,6 +20,10 @@ export interface Account {
   allow_family_view: boolean;
   allow_family_post: boolean;
   allow_family_edit: boolean;
+  /** Credit-card statement closing day (1–31). Null for other account types. */
+  statement_closing_day: number | null;
+  /** Credit-card statement due day (1–31). Null for other account types. */
+  statement_due_day: number | null;
   created_at: string;
   families?: {
     id: string;

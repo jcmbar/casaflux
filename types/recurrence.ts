@@ -21,6 +21,7 @@ export type TransactionRecurrence = {
   autoConfirm: boolean;
   includeInProjection: boolean;
   isActive: boolean;
+  isPaused: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -42,6 +43,7 @@ export type TransactionRecurrenceRow = {
   auto_confirm: boolean;
   include_in_projection: boolean;
   is_active: boolean;
+  is_paused?: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -66,7 +68,27 @@ export function mapTransactionRecurrence(
     autoConfirm: row.auto_confirm,
     includeInProjection: row.include_in_projection,
     isActive: row.is_active,
+    isPaused: Boolean(row.is_paused),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+export type RecurrenceLifecycleStatus = "active" | "paused" | "ended";
+
+export const RECURRENCE_LIFECYCLE_STATUS_LABELS: Record<
+  RecurrenceLifecycleStatus,
+  string
+> = {
+  active: "Ativa",
+  paused: "Pausada",
+  ended: "Encerrada",
+};
+
+export function getRecurrenceLifecycleStatus(
+  recurrence: Pick<TransactionRecurrence, "isActive" | "isPaused">,
+): RecurrenceLifecycleStatus {
+  if (!recurrence.isActive) return "ended";
+  if (recurrence.isPaused) return "paused";
+  return "active";
 }

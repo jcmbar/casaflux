@@ -15,6 +15,7 @@ function recurrence(
     endDate: null,
     occurrencesLimit: null,
     isActive: true,
+    isPaused: false,
     ...overrides,
   };
 }
@@ -110,6 +111,16 @@ describe("planPredictedOccurrences", () => {
   it("generates nothing for inactive recurrences", () => {
     const dates = planPredictedOccurrences(
       recurrence({ isActive: false }),
+      [],
+      { today: "2026-07-17", windowDays: 90 },
+    );
+
+    expect(dates).toEqual([]);
+  });
+
+  it("generates nothing for paused recurrences", () => {
+    const dates = planPredictedOccurrences(
+      recurrence({ isPaused: true }),
       [],
       { today: "2026-07-17", windowDays: 90 },
     );

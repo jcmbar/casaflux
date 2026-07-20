@@ -15,6 +15,15 @@ export type Transaction = {
   date: string;
   notes?: string | null;
   createdAt: string;
+  /** Credit-card statement cycle id (closing date YYYY-MM-DD) for invoice payments. */
+  statementCycleId: string | null;
+  /** How an invoice payment was registered (`manual` UI vs CSV `imported`). */
+  invoicePaymentOrigin?: "manual" | "imported" | null;
+  /**
+   * Future link between equivalent manual and imported invoice payment legs.
+   * When set, settlement should not double-count both sides.
+   */
+  reconciledWithTransactionId?: string | null;
 };
 
 export type TransactionRow = {
@@ -30,6 +39,9 @@ export type TransactionRow = {
   transaction_date: string;
   notes: string | null;
   created_at: string;
+  statement_cycle_id?: string | null;
+  invoice_payment_origin?: "manual" | "imported" | null;
+  reconciled_with_transaction_id?: string | null;
   categories?: {
     id: string;
     name: string;
@@ -57,5 +69,8 @@ export function mapTransaction(row: TransactionRow): Transaction {
     date: row.transaction_date,
     notes: row.notes,
     createdAt: row.created_at,
+    statementCycleId: row.statement_cycle_id ?? null,
+    invoicePaymentOrigin: row.invoice_payment_origin ?? null,
+    reconciledWithTransactionId: row.reconciled_with_transaction_id ?? null,
   };
 }

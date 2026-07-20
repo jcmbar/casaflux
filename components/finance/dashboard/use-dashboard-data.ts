@@ -29,7 +29,13 @@ import {
   fetchMonthlyPredictionAggregates,
   type MonthlyPredictionAggregates,
 } from "@/lib/finance/prediction-aggregates";
+import { fetchAllTransactionsForAccounts } from "@/lib/finance/fetch-transactions";
 import { TRANSACTIONS_SELECT } from "@/lib/finance/transactions-query";
+import { hasCreditCardBillingConfig } from "@/lib/finance/credit-card-billing";
+import {
+  buildUpcomingStatementDues,
+  type UpcomingStatementDueItem,
+} from "@/lib/finance/upcoming-statement-dues";
 import { createClient } from "@/lib/supabase/client";
 import { filterRealAccounts, type Account } from "@/types/account";
 import { mapTransaction, type TransactionRow } from "@/types/transaction";
@@ -61,6 +67,7 @@ export type DashboardData = {
   totalAccountBalance: number;
   monthlyPredictionAggregates: MonthlyPredictionAggregates;
   monthlyProjectionDelta: number;
+  upcomingStatementDues: UpcomingStatementDueItem[];
   refresh: () => Promise<void>;
 };
 
@@ -150,12 +157,13 @@ export function useDashboardData(): DashboardData {
     let rows: TransactionRow[] = [];
 
     if (realAccountIds.length > 0) {
-      const transactionsRes = await supabase
-        .from("transactions")
-        .select(TRANSACTIONS_SELECT)
-        .in("account_id", realAccountIds)
-        .order("transaction_date", { ascending: false })
-        .order("created_at", { ascending: false });
+      const transactionsRes = await fetchAllTransactionsForAccounts<TransactionRow>(
+        supabase,
+        {
+          accountIds: realAccountIds,
+          select: TRANSACTIONS_SELECT,
+        },
+      );
 
       if (transactionsRes.error) {
         console.error(transactionsRes.error);
@@ -164,7 +172,7 @@ export function useDashboardData(): DashboardData {
         return;
       }
 
-      rows = (transactionsRes.data ?? []) as TransactionRow[];
+      rows = transactionsRes.data;
     }
 
     setTransactionRows(rows);
@@ -316,6 +324,24 @@ export function useDashboardData(): DashboardData {
     [accounts],
   );
 
+  const upcomingStatementDues = useMemo(() => {
+    const referenceDate = new Date().toISOString().slice(0, 10);
+    const cards = accounts
+      .filter((account) => hasCreditCardBillingConfig(account))
+      .map((account) => ({
+        account,
+        transactions: transactions.filter(
+          (transaction) => transaction.accountId === account.id,
+        ),
+      }));
+
+    return buildUpcomingStatementDues({
+      cards,
+      referenceDate,
+      limit: 6,
+    });
+  }, [accounts, transactions]);
+
   return {
     loading,
     error,
@@ -330,6 +356,7 @@ export function useDashboardData(): DashboardData {
     totalAccountBalance,
     monthlyPredictionAggregates,
     monthlyProjectionDelta,
+    upcomingStatementDues,
     refresh: loadData,
   };
 }

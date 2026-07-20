@@ -60,6 +60,7 @@ describe("mapImportRowToTransactions", () => {
       paymentRow,
       CARD_ACCOUNT_ID,
       SOURCE_CHECKING_ID,
+      { statementClosingDay: 20, statementDueDay: 27 },
     );
 
     expect(transactions).toHaveLength(2);
@@ -67,12 +68,33 @@ describe("mapImportRowToTransactions", () => {
       accountId: SOURCE_CHECKING_ID,
       type: "expense",
       amount: 3598.45,
+      statementCycleId: "2026-06-20",
     });
     expect(transactions[1]).toMatchObject({
       accountId: CARD_ACCOUNT_ID,
       type: "income",
       amount: 3598.45,
+      statementCycleId: "2026-06-20",
     });
+  });
+
+  it("leaves statementCycleId null when card billing is not configured", () => {
+    const preview = buildImportPreview({
+      content: [
+        "date,title,amount",
+        '2026-06-26,Pagamento recebido,"- 100,00"',
+      ].join("\n"),
+      cardAccountId: CARD_ACCOUNT_ID,
+    });
+
+    const transactions = mapImportRowToTransactions(
+      preview.rows[0]!,
+      CARD_ACCOUNT_ID,
+      SOURCE_CHECKING_ID,
+    );
+
+    expect(transactions[0]?.statementCycleId ?? null).toBeNull();
+    expect(transactions[1]?.statementCycleId ?? null).toBeNull();
   });
 });
 
@@ -179,6 +201,51 @@ describe("commitImportPreview selection", () => {
 
     expect(payload).toHaveLength(1);
     expect(payload[0]?.identity_key).toContain("store");
+  });
+
+  it("includes statement_cycle_id on invoice payment RPC payload when card is configured", () => {
+    const preview = buildImportPreview({
+      content: [
+        "date,title,amount",
+        '2026-07-26,Pagamento recebido,"- 100,00"',
+      ].join("\n"),
+      cardAccountId: CARD_ACCOUNT_ID,
+    });
+
+    const payload = buildCommitImportRpcPayload({
+      preview,
+      targetAccountId: CARD_ACCOUNT_ID,
+      invoiceSourceAccounts: {
+        [preview.rows[0]!.sourceLine]: SOURCE_CHECKING_ID,
+      },
+      ownerUserId: "user-1",
+      familyId: null,
+      fileName: "card.csv",
+      contentHash: hashImportContent("hash"),
+      targetAccount: {
+        type: "credit_card",
+        statement_closing_day: 20,
+        statement_due_day: 27,
+      },
+    });
+
+    expect(payload).toHaveLength(1);
+    expect(payload[0]?.transactions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          account_id: SOURCE_CHECKING_ID,
+          type: "expense",
+          statement_cycle_id: "2026-07-20",
+          invoice_payment_origin: "imported",
+        }),
+        expect.objectContaining({
+          account_id: CARD_ACCOUNT_ID,
+          type: "income",
+          statement_cycle_id: "2026-07-20",
+          invoice_payment_origin: "imported",
+        }),
+      ]),
+    );
   });
 
   it("includes confirmed category_id only for confirmed rows", () => {

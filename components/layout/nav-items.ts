@@ -1,5 +1,6 @@
 import {
   ArrowLeftRight,
+  CreditCard,
   Landmark,
   LayoutDashboard,
   PieChart,
@@ -75,11 +76,19 @@ export const secondaryNavItems: NavItem[] = [
     icon: Target,
   },
   {
-    href: "/integracoes",
-    label: "Integrações",
-    title: "Integrações",
-    description: "Importe extratos CSV do Nubank para revisão.",
+    href: "/importacoes",
+    label: "Importações",
+    shortLabel: "Import.",
+    title: "Importações",
+    description: "Histórico e novas importações de arquivos do Nubank.",
     icon: Upload,
+  },
+  {
+    href: "/faturas",
+    label: "Faturas",
+    title: "Faturas",
+    description: "Histórico de faturas e pagamentos dos cartões.",
+    icon: CreditCard,
   },
 ];
 

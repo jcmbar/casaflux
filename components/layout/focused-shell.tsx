@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 
 import { AuthAtmosphere } from "@/components/auth/auth-atmosphere";
-import { BrandMark } from "@/components/auth/brand-mark";
+import { BrandMark } from "@/components/brand/brand-mark";
 import { useAppContext } from "@/contexts/app-context";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { ThemeProvider } from "./theme-provider";
@@ -41,7 +41,13 @@ export function FocusedShell({ children }: FocusedShellProps) {
     <ThemeProvider>
       <AuthAtmosphere>
         <header className="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-border/40 bg-background/80 px-4 backdrop-blur-md md:px-6">
-          <BrandMark href="/" size="sm" orientation="horizontal" />
+          <BrandMark
+            href="/"
+            surface="header"
+            size="sm"
+            orientation="horizontal"
+            showTagline={false}
+          />
 
           <div className="flex items-center gap-2">
             <ThemeToggle />

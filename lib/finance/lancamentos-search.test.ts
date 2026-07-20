@@ -253,6 +253,14 @@ describe("transactionMatchesSearch", () => {
     expect(transactionMatchesSearch(haystack, "NET")).toBe(true);
     expect(transactionMatchesSearch(haystack, "uber")).toBe(false);
   });
+
+  it("requires every token for multi-word queries (AND)", () => {
+    const haystack = normalizeSearchText(
+      "netflix.com despesa assinaturas cartao 59,90 importado",
+    );
+    expect(transactionMatchesSearch(haystack, "netflix despesa")).toBe(true);
+    expect(transactionMatchesSearch(haystack, "netflix receita")).toBe(false);
+  });
 });
 
 describe("URL search persistence helpers", () => {

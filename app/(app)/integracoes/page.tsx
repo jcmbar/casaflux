@@ -1,5 +1,5 @@
-import { ImportReviewView } from "@/components/finance/integracoes/import-review-view";
+import { redirect } from "next/navigation";
 
-export default function IntegracoesPage() {
-  return <ImportReviewView />;
+export default function IntegracoesRedirectPage() {
+  redirect("/importacoes");
 }

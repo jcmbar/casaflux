@@ -1,6 +1,12 @@
 import type { TransactionType } from "@/types/transaction";
 import type { ImportPreviewRow, NormalizedImportKind } from "../types";
 import { getConfirmedCategoryForCommit } from "../categories/category-suggestion-service";
+import type { CreditCardBillingConfig } from "@/lib/finance/credit-card-billing";
+import { getStatementCyclePaidByPaymentDate } from "@/lib/finance/credit-card-billing";
+import {
+  getInvoicePaymentImportMode,
+  type InvoicePaymentImportMode,
+} from "../invoice-payment/resolve-invoice-payment";
 
 export type CommitImportTransactionDraft = {
   accountId: string;
@@ -9,6 +15,10 @@ export type CommitImportTransactionDraft = {
   description: string;
   transactionDate: string;
   categoryId?: string | null;
+  /** Closing-date ISO for credit-card invoice payment legs. */
+  statementCycleId?: string | null;
+  /** Tags invoice payment legs for future manual↔imported reconciliation. */
+  invoicePaymentOrigin?: "manual" | "imported" | null;
 };
 
 export type CommitImportRowPayload = {
@@ -35,16 +45,33 @@ export function mapImportRowToTransactions(
   row: ImportPreviewRow,
   targetAccountId: string,
   invoiceSourceAccountId?: string,
+  billingConfig?: CreditCardBillingConfig | null,
+  invoicePaymentMode: InvoicePaymentImportMode = "payment",
 ): CommitImportTransactionDraft[] {
   const base = {
     amount: row.amount,
     transactionDate: row.date,
   };
 
+  if (row.kind === "card_invoice_payment" && invoicePaymentMode === "common") {
+    return [
+      {
+        ...base,
+        accountId: targetAccountId,
+        type: "income",
+        description: row.description,
+      },
+    ];
+  }
+
   if (row.kind === "card_invoice_payment") {
     if (!invoiceSourceAccountId) {
       throw new Error("Conta de origem obrigatória para pagamento de fatura.");
     }
+
+    const statementCycleId = billingConfig
+      ? getStatementCyclePaidByPaymentDate(billingConfig, row.date).cycleId
+      : null;
 
     return [
       {
@@ -52,12 +79,16 @@ export function mapImportRowToTransactions(
         accountId: invoiceSourceAccountId,
         type: "expense",
         description: `Pagamento fatura (origem) — ${row.description}`,
+        statementCycleId,
+        invoicePaymentOrigin: "imported",
       },
       {
         ...base,
         accountId: targetAccountId,
         type: "income",
         description: row.description,
+        statementCycleId,
+        invoicePaymentOrigin: "imported",
       },
     ];
   }
@@ -73,7 +104,8 @@ export function mapImportRowToTransactions(
     ];
   }
 
-  const checkingType: TransactionType = row.direction === "in" ? "income" : "expense";
+  const checkingType: TransactionType =
+    row.direction === "in" ? "income" : "expense";
 
   return [
     {
@@ -88,6 +120,7 @@ export function mapImportRowToTransactions(
 export function isImportRowCommittable(
   row: ImportPreviewRow,
   invoiceSourceAccounts: Record<number, string>,
+  invoicePaymentModes: Record<number, InvoicePaymentImportMode> = {},
 ): boolean {
   if (row.historicalStatus !== "new") {
     return false;
@@ -102,6 +135,13 @@ export function isImportRowCommittable(
   }
 
   if (row.kind === "card_invoice_payment") {
+    const mode = getInvoicePaymentImportMode(
+      invoicePaymentModes,
+      row.sourceLine,
+    );
+    if (mode === "common") {
+      return true;
+    }
     return Boolean(invoiceSourceAccounts[row.sourceLine]);
   }
 
@@ -115,8 +155,11 @@ export function isImportRowCommittable(
 export function getCommittableImportRows(
   rows: ImportPreviewRow[],
   invoiceSourceAccounts: Record<number, string>,
+  invoicePaymentModes: Record<number, InvoicePaymentImportMode> = {},
 ): ImportPreviewRow[] {
-  return rows.filter((row) => isImportRowCommittable(row, invoiceSourceAccounts));
+  return rows.filter((row) =>
+    isImportRowCommittable(row, invoiceSourceAccounts, invoicePaymentModes),
+  );
 }
 
 export function getCommitImportValidationError(input: {
@@ -125,6 +168,7 @@ export function getCommitImportValidationError(input: {
   targetAccountId: string;
   contentHash: string;
   source: string | null;
+  invoicePaymentModes?: Record<number, InvoicePaymentImportMode>;
 }): string | null {
   if (!input.source) {
     return "Fonte de importação inválida.";
@@ -138,19 +182,35 @@ export function getCommitImportValidationError(input: {
     return "Hash do arquivo ausente.";
   }
 
+  const modes = input.invoicePaymentModes ?? {};
+
+  for (const row of input.previewRows) {
+    if (row.historicalStatus !== "new") {
+      continue;
+    }
+
+    if (NON_COMMITABLE_REVIEW_STATUSES.has(row.reviewStatus)) {
+      continue;
+    }
+
+    if (row.kind !== "card_invoice_payment") {
+      continue;
+    }
+
+    const mode = getInvoicePaymentImportMode(modes, row.sourceLine);
+    if (mode === "payment" && !input.invoiceSourceAccounts[row.sourceLine]) {
+      return "Selecione a conta de origem do pagamento de fatura.";
+    }
+  }
+
   const committableRows = getCommittableImportRows(
     input.previewRows,
     input.invoiceSourceAccounts,
+    modes,
   );
 
   if (committableRows.length === 0) {
     return "Não há linhas novas e prontas para importar.";
-  }
-
-  for (const row of committableRows) {
-    if (row.kind === "card_invoice_payment" && !input.invoiceSourceAccounts[row.sourceLine]) {
-      return "Selecione a conta de origem do pagamento de fatura.";
-    }
   }
 
   return null;
@@ -159,13 +219,14 @@ export function getCommitImportValidationError(input: {
 function applyConfirmedCategoryToTransactions(
   row: ImportPreviewRow,
   transactions: CommitImportTransactionDraft[],
+  invoicePaymentMode: InvoicePaymentImportMode,
 ): CommitImportTransactionDraft[] {
   const categoryId = getConfirmedCategoryForCommit(row);
   if (!categoryId) {
     return transactions;
   }
 
-  if (row.kind === "card_invoice_payment") {
+  if (row.kind === "card_invoice_payment" && invoicePaymentMode === "payment") {
     return transactions.map((transaction, index) =>
       index === 0 ? { ...transaction, categoryId } : transaction,
     );
@@ -179,11 +240,24 @@ export function buildCommitImportRowPayload(
   targetAccountId: string,
   identityKey: string,
   invoiceSourceAccounts: Record<number, string>,
+  billingConfig?: CreditCardBillingConfig | null,
+  invoicePaymentModes: Record<number, InvoicePaymentImportMode> = {},
 ): CommitImportRowPayload {
   const invoiceSourceAccountId = invoiceSourceAccounts[row.sourceLine];
+  const invoicePaymentMode = getInvoicePaymentImportMode(
+    invoicePaymentModes,
+    row.sourceLine,
+  );
   const transactions = applyConfirmedCategoryToTransactions(
     row,
-    mapImportRowToTransactions(row, targetAccountId, invoiceSourceAccountId),
+    mapImportRowToTransactions(
+      row,
+      targetAccountId,
+      invoiceSourceAccountId,
+      billingConfig,
+      invoicePaymentMode,
+    ),
+    invoicePaymentMode,
   );
 
   return {
@@ -191,7 +265,10 @@ export function buildCommitImportRowPayload(
     identityKey,
     externalFingerprint: row.externalFingerprint,
     externalId: row.externalId,
-    kind: row.kind,
+    kind:
+      row.kind === "card_invoice_payment" && invoicePaymentMode === "common"
+        ? "card_purchase"
+        : row.kind,
     rowDate: row.date,
     amount: row.amount,
     direction: row.direction,
@@ -218,6 +295,8 @@ export function toRpcCommitRowPayload(row: CommitImportRowPayload) {
       description: transaction.description,
       transaction_date: transaction.transactionDate,
       category_id: transaction.categoryId ?? null,
+      statement_cycle_id: transaction.statementCycleId ?? null,
+      invoice_payment_origin: transaction.invoicePaymentOrigin ?? null,
     })),
   };
 }

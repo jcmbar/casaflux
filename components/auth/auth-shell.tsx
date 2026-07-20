@@ -3,7 +3,7 @@
 import Link from "next/link";
 
 import { AuthAtmosphere } from "@/components/auth/auth-atmosphere";
-import { BrandMark } from "@/components/auth/brand-mark";
+import { BrandMark } from "@/components/brand/brand-mark";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,7 +30,7 @@ export function AuthShell({
 
       <div className="relative flex flex-1 flex-col items-center justify-center px-4 py-10 sm:px-6">
         <div className="animate-enter mb-8">
-          <BrandMark size="md" />
+          <BrandMark surface="login" size="md" href={null} />
         </div>
 
         <div className="animate-enter-delayed w-full max-w-[26rem]">

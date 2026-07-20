@@ -12,6 +12,7 @@ export type CreateTransactionInput = {
   transactionDate: string;
   userId: string;
   familyId: string | null;
+  statementCycleId?: string | null;
 };
 
 export type CreateTransactionResult =
@@ -37,6 +38,7 @@ export async function createTransaction(
     transaction_date: input.transactionDate,
     created_by: input.userId,
     family_id: input.familyId,
+    statement_cycle_id: input.statementCycleId ?? null,
   });
 
   if (error) {

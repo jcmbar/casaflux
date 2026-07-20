@@ -16,7 +16,7 @@ export const importKindLabels: Record<NormalizedImportKind, string> = {
   bank_reversal: "Estorno",
   card_purchase: "Compra no cartão",
   card_fee: "Taxa IOF",
-  card_invoice_payment: "Pagamento de fatura",
+  card_invoice_payment: "Pagamento de fatura (candidato)",
   unknown: "Desconhecido",
 };
 
