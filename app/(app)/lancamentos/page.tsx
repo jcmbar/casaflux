@@ -72,7 +72,6 @@ import {
 import {
   cancelPrediction,
   createPrediction,
-  getCreatePredictionValidationError,
   setPredictionProjection,
   settlePrediction,
   updatePrediction,
@@ -86,6 +85,11 @@ import {
   type MonthlyPredictionAggregates,
 } from "@/lib/finance/prediction-aggregates";
 import { getRecurrenceEndValidationError } from "@/lib/finance/recurrence-validation";
+import {
+  buildCreateRecurrenceInputFromPredictionForm,
+  getPredictionRecurrenceSubmitValidationError,
+  shouldCreatePredictionAsRecurrence,
+} from "@/lib/finance/prediction-recurrence-submit";
 import { setRecurrenceProjection } from "@/lib/finance/set-recurrence-projection";
 import { CATEGORIES_CHANGED_EVENT } from "@/lib/finance/category-events";
 import {
@@ -148,6 +152,11 @@ type PredictionFormState = {
   categoryId: string;
   accountId: string;
   includeInProjection: boolean;
+  isRecurring: boolean;
+  frequency: RecurrenceFrequency;
+  endType: RecurrenceEndType;
+  endDate: string;
+  occurrencesLimit: string;
 };
 
 type PendingPrediction = {
@@ -363,6 +372,11 @@ function LancamentosPageContent() {
     categoryId: "",
     accountId: "",
     includeInProjection: true,
+    isRecurring: false,
+    frequency: "monthly",
+    endType: "never",
+    endDate: "",
+    occurrencesLimit: "",
   });
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -753,6 +767,11 @@ function LancamentosPageContent() {
       categoryId: "",
       accountId: "",
       includeInProjection: true,
+      isRecurring: false,
+      frequency: "monthly",
+      endType: "never",
+      endDate: "",
+      occurrencesLimit: "",
     });
   }
 
@@ -768,6 +787,11 @@ function LancamentosPageContent() {
       categoryId: prediction.categoryId ?? "",
       accountId: prediction.accountId ?? "",
       includeInProjection: prediction.includeInProjection,
+      isRecurring: false,
+      frequency: "monthly",
+      endType: "never",
+      endDate: "",
+      occurrencesLimit: "",
     });
     setPredictionOpen(true);
   }
@@ -778,11 +802,25 @@ function LancamentosPageContent() {
     if (!user || predictionSaving) return;
 
     const amount = centsToAmount(amountStringToCents(predictionForm.amount));
-    const validationError = getCreatePredictionValidationError({
+    const submitInput = {
+      isRecurring: predictionForm.isRecurring,
       description: predictionForm.description,
       amount,
       scheduledDate: predictionForm.scheduledDate,
-    });
+      accountId: predictionForm.accountId,
+      categoryId: predictionForm.categoryId || null,
+      type: predictionForm.type,
+      includeInProjection: predictionForm.includeInProjection,
+      frequency: predictionForm.frequency,
+      endType: predictionForm.endType,
+      endDate: predictionForm.endDate,
+      occurrencesLimit: predictionForm.occurrencesLimit,
+    };
+
+    const validationError = getPredictionRecurrenceSubmitValidationError(
+      submitInput,
+      { isEditing: editingPredictionId !== null },
+    );
 
     if (validationError) {
       toast.error(validationError);
@@ -801,6 +839,44 @@ function LancamentosPageContent() {
     }
 
     setPredictionSaving(true);
+
+    if (
+      shouldCreatePredictionAsRecurrence(submitInput, {
+        isEditing: editingPredictionId !== null,
+      })
+    ) {
+      const result = await createRecurrence(
+        supabase,
+        buildCreateRecurrenceInputFromPredictionForm(submitInput, {
+          ownerUserId: user.id,
+          familyId: selectedAccount!.family_id,
+          accountId: selectedAccount!.id,
+        }),
+      );
+
+      if (!result.ok) {
+        toast.error(result.message);
+        setPredictionSaving(false);
+        return;
+      }
+
+      const predictionMonth = predictionForm.scheduledDate.slice(0, 7);
+      await loadData();
+      resetPredictionForm();
+      setPredictionOpen(false);
+      setPredictionSaving(false);
+      updatePeriod({ mode: "month", monthKey: predictionMonth });
+      toast.success(
+        result.occurrencesCreated > 0
+          ? `Recorrência criada. ${result.occurrencesCreated} ${
+              result.occurrencesCreated === 1
+                ? "previsão gerada"
+                : "previsões geradas"
+            }, incluindo a primeira em ${formatDate(predictionForm.scheduledDate)}.`
+          : "Recorrência criada.",
+      );
+      return;
+    }
 
     const sharedInput = {
       familyId: selectedAccount?.family_id ?? null,
@@ -1434,7 +1510,9 @@ function LancamentosPageContent() {
             <SheetDescription>
               {editingPredictionId
                 ? "Corrija os dados desta previsão avulsa pendente."
-                : "Planeje uma receita ou despesa sem criar um lançamento real."}
+                : predictionForm.isRecurring
+                  ? "A data prevista inicia a recorrência e vira a primeira previsão pendente."
+                  : "Planeje uma receita ou despesa sem criar um lançamento real."}
             </SheetDescription>
           </SheetHeader>
 
@@ -1493,7 +1571,11 @@ function LancamentosPageContent() {
 
               <FormInput
                 id="prediction-scheduled-date"
-                label="Data prevista"
+                label={
+                  predictionForm.isRecurring && !editingPredictionId
+                    ? "Primeira ocorrência"
+                    : "Data prevista"
+                }
                 type="date"
                 value={predictionForm.scheduledDate}
                 onChange={(event) =>
@@ -1528,7 +1610,11 @@ function LancamentosPageContent() {
 
               <FormSelect
                 id="prediction-account"
-                label="Conta prevista (opcional)"
+                label={
+                  predictionForm.isRecurring && !editingPredictionId
+                    ? "Conta prevista"
+                    : "Conta prevista (opcional)"
+                }
                 value={predictionForm.accountId}
                 onChange={(event) =>
                   setPredictionForm((current) => ({
@@ -1536,8 +1622,11 @@ function LancamentosPageContent() {
                     accountId: event.target.value,
                   }))
                 }
+                required={predictionForm.isRecurring && !editingPredictionId}
               >
-                <option value="">Definir na liquidação</option>
+                {!predictionForm.isRecurring || editingPredictionId ? (
+                  <option value="">Definir na liquidação</option>
+                ) : null}
                 {postableAccounts.map((account) => (
                   <option key={account.id} value={account.id}>
                     {account.name}
@@ -1549,9 +1638,116 @@ function LancamentosPageContent() {
             </div>
 
             <p className="-mt-2 text-xs text-muted-foreground">
-              Sem conta prevista, a previsão será pessoal. A conta real será
-              escolhida ao liquidar.
+              {predictionForm.isRecurring && !editingPredictionId
+                ? "Recorrências precisam de uma conta prevista. Próximas ocorrências serão geradas automaticamente."
+                : "Sem conta prevista, a previsão será pessoal. A conta real será escolhida ao liquidar."}
             </p>
+
+            {!editingPredictionId ? (
+              <div className="space-y-4 rounded-xl border border-border/50 bg-muted/20 p-4">
+                <label className="flex items-start gap-3">
+                  <input
+                    id="prediction-is-recurring"
+                    type="checkbox"
+                    checked={predictionForm.isRecurring}
+                    onChange={(event) =>
+                      setPredictionForm((current) => ({
+                        ...current,
+                        isRecurring: event.target.checked,
+                      }))
+                    }
+                    className="mt-0.5 size-4 rounded border-input accent-primary"
+                    data-testid="prediction-is-recurring"
+                  />
+                  <span className="space-y-1">
+                    <Label htmlFor="prediction-is-recurring">
+                      Repetir esta previsão
+                    </Label>
+                    <span className="block text-xs text-muted-foreground">
+                      Cria uma recorrência. A data acima vira a primeira
+                      ocorrência — sem duplicar o item.
+                    </span>
+                  </span>
+                </label>
+
+                {predictionForm.isRecurring ? (
+                  <div className="grid gap-5 border-t border-border/50 pt-4">
+                    <div className="grid gap-5 sm:grid-cols-2">
+                      <FormSelect
+                        id="prediction-recurrence-frequency"
+                        label="Frequência"
+                        value={predictionForm.frequency}
+                        onChange={(event) =>
+                          setPredictionForm((current) => ({
+                            ...current,
+                            frequency: event.target
+                              .value as RecurrenceFrequency,
+                          }))
+                        }
+                      >
+                        <option value="weekly">Semanal</option>
+                        <option value="biweekly">Quinzenal</option>
+                        <option value="monthly">Mensal</option>
+                        <option value="yearly">Anual</option>
+                      </FormSelect>
+
+                      <FormSelect
+                        id="prediction-recurrence-end-type"
+                        label="Término"
+                        value={predictionForm.endType}
+                        onChange={(event) =>
+                          setPredictionForm((current) => ({
+                            ...current,
+                            endType: event.target.value as RecurrenceEndType,
+                          }))
+                        }
+                      >
+                        <option value="never">Nunca</option>
+                        <option value="until_date">Em uma data</option>
+                        <option value="occurrences_count">
+                          Após uma quantidade
+                        </option>
+                      </FormSelect>
+                    </div>
+
+                    {predictionForm.endType === "until_date" ? (
+                      <FormInput
+                        id="prediction-recurrence-end-date"
+                        label="Data final"
+                        type="date"
+                        min={predictionForm.scheduledDate}
+                        value={predictionForm.endDate}
+                        onChange={(event) =>
+                          setPredictionForm((current) => ({
+                            ...current,
+                            endDate: event.target.value,
+                          }))
+                        }
+                        required
+                      />
+                    ) : null}
+
+                    {predictionForm.endType === "occurrences_count" ? (
+                      <FormInput
+                        id="prediction-recurrence-occurrences-limit"
+                        label="Quantidade de ocorrências"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={predictionForm.occurrencesLimit}
+                        onChange={(event) =>
+                          setPredictionForm((current) => ({
+                            ...current,
+                            occurrencesLimit: event.target.value,
+                          }))
+                        }
+                        required
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             <label className="flex items-start gap-3 rounded-xl border border-border/50 bg-muted/20 p-3">
               <input
@@ -1571,7 +1767,9 @@ function LancamentosPageContent() {
                   Incluir no saldo projetado
                 </span>
                 <span className="block text-xs text-muted-foreground">
-                  Considera esta previsão enquanto ela estiver pendente.
+                  {predictionForm.isRecurring && !editingPredictionId
+                    ? "Considera as ocorrências pendentes desta recorrência."
+                    : "Considera esta previsão enquanto ela estiver pendente."}
                 </span>
               </span>
             </label>
@@ -1597,10 +1795,12 @@ function LancamentosPageContent() {
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Salvando...
                     </>
+                  ) : editingPredictionId ? (
+                    "Salvar alterações"
+                  ) : predictionForm.isRecurring ? (
+                    "Salvar recorrência"
                   ) : (
-                    editingPredictionId
-                      ? "Salvar alterações"
-                      : "Salvar previsão"
+                    "Salvar previsão"
                   )}
                 </Button>
               </div>
