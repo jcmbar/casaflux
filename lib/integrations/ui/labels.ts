@@ -3,11 +3,10 @@ import type {
   ImportSource,
   NormalizedImportKind,
 } from "../types";
+import { buildImportSourceLabels } from "../catalog/import-integrations";
 
-export const importSourceLabels: Record<ImportSource, string> = {
-  nubank_credit_card: "Nubank — Cartão de crédito",
-  nubank_checking: "Nubank — Conta corrente",
-};
+export const importSourceLabels: Record<ImportSource, string> =
+  buildImportSourceLabels();
 
 export const importKindLabels: Record<NormalizedImportKind, string> = {
   bank_income: "Entrada bancária",

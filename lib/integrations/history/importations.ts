@@ -1,6 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { importKindLabels, importSourceLabels } from "../ui/labels";
+import {
+  buildImportationTitleFromCatalog,
+  getImportationsEmptyMessageFromCatalog,
+  getImportSourceProductPhrase,
+  isSupportedImportSource,
+} from "../catalog/import-integrations";
 import type { ImportSource, NormalizedImportKind } from "../types";
 import type { ImportBatchStatus, ImportHistoryBatchRecord } from "./types";
 
@@ -36,6 +42,7 @@ export type ImportationListItem = {
   statusLabel: string;
   rowCount: number;
   createdLaunchCount: number;
+  ignoredItemCount: number;
   invoicePaymentCount: number;
   importedAt: string;
   href: string;
@@ -112,14 +119,7 @@ type BatchRowDb = {
 };
 
 export function buildImportationTitle(source: ImportSource): string {
-  switch (source) {
-    case "nubank_credit_card":
-      return "Importação do Nubank (cartão)";
-    case "nubank_checking":
-      return "Importação do Nubank (conta)";
-    default:
-      return "Importação";
-  }
+  return buildImportationTitleFromCatalog(source);
 }
 
 export function getImportationRowKindLabel(kind: NormalizedImportKind): string {
@@ -173,9 +173,7 @@ export function parseGuidedReimportSearchParams(
   const accountId = searchParams.get("account");
   const sourceRaw = searchParams.get("source");
   const source =
-    sourceRaw === "nubank_credit_card" || sourceRaw === "nubank_checking"
-      ? sourceRaw
-      : null;
+    sourceRaw && isSupportedImportSource(sourceRaw) ? sourceRaw : null;
 
   return {
     fromBatchId: fromBatchId?.trim() || null,
@@ -188,12 +186,9 @@ export function getGuidedReimportIntro(input: {
   source: ImportSource | null;
   accountName?: string | null;
 }): string {
-  const origin =
-    input.source === "nubank_credit_card"
-      ? "cartão Nubank"
-      : input.source === "nubank_checking"
-        ? "conta Nubank"
-        : "Nubank";
+  const origin = input.source
+    ? getImportSourceProductPhrase(input.source)
+    : "uma origem suportada";
   const accountHint = input.accountName
     ? ` A conta sugerida é “${input.accountName}”.`
     : "";
@@ -330,6 +325,7 @@ export function mapImportationListItem(input: {
   >;
   accountName: string | null;
   createdLaunchCount: number;
+  ignoredItemCount: number;
   invoicePaymentCount: number;
 }): ImportationListItem {
   return {
@@ -344,6 +340,7 @@ export function mapImportationListItem(input: {
     statusLabel: importBatchStatusLabels[input.batch.status],
     rowCount: input.batch.rowCount,
     createdLaunchCount: input.createdLaunchCount,
+    ignoredItemCount: input.ignoredItemCount,
     invoicePaymentCount: input.invoicePaymentCount,
     importedAt: input.batch.importedAt,
     href: IMPORTACOES_ROUTES.detail(input.batch.id),
@@ -443,6 +440,7 @@ export async function listImportations(
       },
       accountName: embedAccountName(batch.accounts),
       createdLaunchCount: summary.createdLaunchCount,
+      ignoredItemCount: summary.ignoredItemCount,
       invoicePaymentCount: summary.invoicePaymentCount,
     });
   });
@@ -504,6 +502,7 @@ export async function fetchImportationDetail(
     },
     accountName,
     createdLaunchCount: detailSummary.createdLaunches,
+    ignoredItemCount: detailSummary.ignoredItems,
     invoicePaymentCount: detailSummary.invoicePayments,
   });
 
@@ -526,5 +525,5 @@ export async function fetchImportationDetail(
 }
 
 export function getImportationsEmptyMessage(): string {
-  return "Você ainda não importou nenhum arquivo. Comece com um CSV do Nubank.";
+  return getImportationsEmptyMessageFromCatalog();
 }

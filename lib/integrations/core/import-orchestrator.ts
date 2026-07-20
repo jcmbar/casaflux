@@ -1,4 +1,11 @@
-import { detectImportSource } from "./detect-source";
+import {
+  resolveImportSourceProvider,
+} from "../providers/registry";
+import type { ImportSourceProvider } from "../providers/types";
+import {
+  getImportLayoutBySource,
+  getImportProviderBySource,
+} from "../catalog/import-integrations";
 import { applyIntraBatchDedupe } from "./dedupe-intra-batch";
 import {
   buildNeedsReviewRows,
@@ -6,26 +13,25 @@ import {
   summarizeImportPreview,
 } from "./preview";
 import { withDefaultHistoricalRows } from "../history/compare-preview-with-history";
-import { parseNubankCheckingCsv } from "../sources/nubank/checking-parser";
-import { parseNubankCreditCardCsv } from "../sources/nubank/credit-card-parser";
-import type { ImportPreview } from "../types";
+import { UNSUPPORTED_IMPORT_FILE_MESSAGE } from "./identify-import-file";
+import type { ImportPreview, ImportSource } from "../types";
 
 export type BuildImportPreviewInput = {
   content: string;
   cardAccountId?: string;
 };
 
-function buildUnsupportedPreview(content: string): ImportPreview {
+function buildUnsupportedPreview(_content: string): ImportPreview {
   const warnings = [
     {
       code: "unsupported_source" as const,
-      message: "Arquivo não reconhecido. Header CSV incompatível com Nubank.",
+      message: UNSUPPORTED_IMPORT_FILE_MESSAGE,
     },
   ];
   const parseErrors = [
     {
       sourceLine: 1,
-      message: "Fonte de importação não reconhecida.",
+      message: UNSUPPORTED_IMPORT_FILE_MESSAGE,
     },
   ];
 
@@ -44,11 +50,18 @@ function buildUnsupportedPreview(content: string): ImportPreview {
   };
 }
 
-function buildMissingAccountPreview(): ImportPreview {
+function buildMissingAccountPreview(source: ImportSource): ImportPreview {
+  const layout = getImportLayoutBySource(source);
+  const provider = getImportProviderBySource(source);
+  const layoutPhrase =
+    layout && provider
+      ? `${layout.layoutName.toLowerCase()} do ${provider.name}`
+      : "extrato de cartão";
+
   const warnings = [
     {
       code: "missing_account" as const,
-      message: "Conta de cartão é obrigatória para importar extrato de cartão Nubank.",
+      message: `Conta de cartão é obrigatória para importar ${layoutPhrase}.`,
     },
   ];
   const parseErrors = [
@@ -59,7 +72,7 @@ function buildMissingAccountPreview(): ImportPreview {
   ];
 
   const draft = {
-    source: "nubank_credit_card" as const,
+    source,
     rows: [],
     warnings,
     possibleDuplicates: [],
@@ -73,32 +86,29 @@ function buildMissingAccountPreview(): ImportPreview {
   };
 }
 
-export function buildImportPreview(input: BuildImportPreviewInput): ImportPreview {
-  const source = detectImportSource(input.content);
-
-  if (!source) {
-    return buildUnsupportedPreview(input.content);
+function buildPreviewFromProvider(
+  provider: ImportSourceProvider,
+  input: BuildImportPreviewInput,
+): ImportPreview {
+  if (provider.requiresCardAccount && !input.cardAccountId) {
+    return buildMissingAccountPreview(provider.source);
   }
 
-  if (source === "nubank_credit_card" && !input.cardAccountId) {
-    return buildMissingAccountPreview();
-  }
+  const parseResult = provider.parse({
+    content: input.content,
+    cardAccountId: input.cardAccountId,
+  });
 
-  const parseResult =
-    source === "nubank_credit_card"
-      ? parseNubankCreditCardCsv({
-          content: input.content,
-          cardAccountId: input.cardAccountId!,
-        })
-      : parseNubankCheckingCsv(input.content);
-
-  const dedupeResult = applyIntraBatchDedupe(parseResult.rows, source);
+  const dedupeResult = applyIntraBatchDedupe(
+    parseResult.rows,
+    provider.source,
+  );
   const rows = withDefaultHistoricalRows(dedupeResult.rows);
   const warnings = getImportWarnings(rows, parseResult.errors);
   const needsReview = buildNeedsReviewRows(rows);
 
   const draft = {
-    source,
+    source: provider.source,
     rows,
     warnings,
     possibleDuplicates: dedupeResult.duplicateGroups,
@@ -110,4 +120,18 @@ export function buildImportPreview(input: BuildImportPreviewInput): ImportPrevie
     ...draft,
     summary: summarizeImportPreview(draft),
   };
+}
+
+/**
+ * Builds an import preview via the registered source provider.
+ * Identify → confirm (UI) → preview (here) → commit (shared) stay separate.
+ */
+export function buildImportPreview(input: BuildImportPreviewInput): ImportPreview {
+  const provider = resolveImportSourceProvider(input.content);
+
+  if (!provider) {
+    return buildUnsupportedPreview(input.content);
+  }
+
+  return buildPreviewFromProvider(provider, input);
 }

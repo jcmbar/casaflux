@@ -107,6 +107,40 @@ function markCheckingDuplicates(rows: NormalizedImportRow[]): IntraBatchDedupeRe
   return { rows: nextRows, duplicateGroups };
 }
 
+function markCheckingDuplicatesByContent(
+  rows: NormalizedImportRow[],
+): IntraBatchDedupeResult {
+  const groupsByKey = new Map<string, number[]>();
+  const duplicateGroups: ImportPreviewDuplicateGroup[] = [];
+
+  const nextRows = rows.map((row) => {
+    const key = `${row.date}:${row.direction}:${row.amount}:${row.description.trim().toLowerCase()}`;
+    const sourceLines = groupsByKey.get(key) ?? [];
+    sourceLines.push(row.sourceLine);
+    groupsByKey.set(key, sourceLines);
+
+    if (sourceLines.length === 1) {
+      return row;
+    }
+
+    if (sourceLines.length === 2) {
+      duplicateGroups.push({ key, sourceLines: [...sourceLines] });
+    } else {
+      const existingGroup = duplicateGroups.find((group) => group.key === key);
+      if (existingGroup) {
+        existingGroup.sourceLines = [...sourceLines];
+      }
+    }
+
+    return {
+      ...row,
+      reviewStatus: "possible_duplicate" as const,
+    };
+  });
+
+  return { rows: nextRows, duplicateGroups };
+}
+
 export function applyIntraBatchDedupe(
   rows: NormalizedImportRow[],
   source: ImportSource,
@@ -115,5 +149,9 @@ export function applyIntraBatchDedupe(
     return markCardDuplicates(rows);
   }
 
-  return markCheckingDuplicates(rows);
+  if (rows.some((row) => row.externalId)) {
+    return markCheckingDuplicates(rows);
+  }
+
+  return markCheckingDuplicatesByContent(rows);
 }

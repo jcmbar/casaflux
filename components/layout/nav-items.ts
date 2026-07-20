@@ -11,6 +11,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { getImportNavDescription } from "@/lib/integrations/catalog/import-integrations";
+
 export type NavItem = {
   href: string;
   label: string;
@@ -80,7 +82,7 @@ export const secondaryNavItems: NavItem[] = [
     label: "Importações",
     shortLabel: "Import.",
     title: "Importações",
-    description: "Histórico e novas importações de arquivos do Nubank.",
+    description: getImportNavDescription(),
     icon: Upload,
   },
   {

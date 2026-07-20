@@ -9,11 +9,15 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAppContext } from "@/contexts/app-context";
+import { ImportIntegrationSummaries } from "@/components/finance/importacoes/import-integration-summaries";
+import { ImportCsvOnboarding } from "@/components/finance/importacoes/import-csv-onboarding";
+import { getImportationsListIntro } from "@/lib/integrations/catalog/import-integrations";
 import {
   getImportationsEmptyMessage,
   listImportations,
   type ImportationListItem,
 } from "@/lib/integrations/history/importations";
+import { buildImportIntegrationHistorySummaries } from "@/lib/integrations/history/integration-summaries";
 import { formatDate } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -76,10 +80,15 @@ export function ImportacoesView() {
     };
   }, [supabase, user]);
 
+  const integrationSummaries = useMemo(
+    () => buildImportIntegrationHistorySummaries(items),
+    [items],
+  );
+
   return (
     <div className="space-y-6 md:space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <PageIntro description="Histórico das importações de arquivos do Nubank. Veja o que já entrou e comece uma nova quando quiser." />
+        <PageIntro description={getImportationsListIntro()} />
         <Link
           href="/importacoes/nova"
           className={cn(buttonVariants(), "shrink-0 gap-2 self-start")}
@@ -89,6 +98,10 @@ export function ImportacoesView() {
         </Link>
       </div>
 
+      {!loading && !error ? (
+        <ImportIntegrationSummaries summaries={integrationSummaries} />
+      ) : null}
+
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" />
@@ -97,7 +110,7 @@ export function ImportacoesView() {
       ) : error ? (
         <Card className="border-destructive/30">
           <CardContent className="py-6 text-sm text-destructive">
-            Não foi possível carregar o histórico: {error}
+            Não foi possível carregar o histórico.
           </CardContent>
         </Card>
       ) : items.length === 0 ? (
@@ -122,65 +135,94 @@ export function ImportacoesView() {
           </CardContent>
         </Card>
       ) : (
-        <ul className="space-y-3">
-          {items.map((item) => (
-            <li key={item.id}>
-              <Link
-                href={item.href}
-                className="block rounded-xl border border-border/50 bg-card/40 p-4 transition-colors hover:border-border hover:bg-card/70"
-              >
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="flex gap-3">
-                    <div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted/60 text-muted-foreground">
-                      <FileSpreadsheet className="size-4" />
-                    </div>
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-medium">{item.title}</p>
-                        <Badge
-                          variant="outline"
-                          className={cn(
-                            "font-normal",
-                            STATUS_BADGE_CLASS[item.status],
-                          )}
-                        >
-                          {item.statusLabel}
-                        </Badge>
+        <section className="space-y-3" aria-labelledby="importations-history">
+          <div className="space-y-1">
+            <h2
+              id="importations-history"
+              className="text-sm font-medium text-foreground"
+            >
+              Histórico
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Arquivos já importados, do mais recente ao mais antigo.
+            </p>
+          </div>
+          <ul className="space-y-3">
+            {items.map((item) => (
+              <li key={item.id}>
+                <Link
+                  href={item.href}
+                  className="block rounded-xl border border-border/50 bg-card/40 p-4 transition-colors hover:border-border hover:bg-card/70"
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex gap-3">
+                      <div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted/60 text-muted-foreground">
+                        <FileSpreadsheet className="size-4" />
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        {item.accountName ?? "Conta vinculada"}
-                        {item.fileName ? ` · ${item.fileName}` : null}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {formatImportedAt(item.importedAt)}
-                      </p>
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium">{item.title}</p>
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "font-normal",
+                              STATUS_BADGE_CLASS[item.status],
+                            )}
+                          >
+                            {item.statusLabel}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {item.sourceLabel}
+                          {" · "}
+                          {item.accountName ?? "Conta vinculada"}
+                          {item.fileName ? ` · ${item.fileName}` : null}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatImportedAt(item.importedAt)}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:text-right">
+                      <span className="text-muted-foreground">
+                        Linhas no arquivo
+                      </span>
+                      <span className="font-medium tabular-nums">
+                        {item.rowCount}
+                      </span>
+                      <span className="text-muted-foreground">
+                        Lançamentos criados
+                      </span>
+                      <span className="font-medium tabular-nums">
+                        {item.createdLaunchCount}
+                      </span>
+                      <span className="text-muted-foreground">
+                        Linhas ignoradas
+                      </span>
+                      <span className="font-medium tabular-nums">
+                        {item.ignoredItemCount}
+                      </span>
+                      {item.invoicePaymentCount > 0 ? (
+                        <>
+                          <span className="text-muted-foreground">
+                            Pagamentos de fatura
+                          </span>
+                          <span className="font-medium tabular-nums">
+                            {item.invoicePaymentCount}
+                          </span>
+                        </>
+                      ) : null}
                     </div>
                   </div>
-
-                  <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:text-right">
-                    <span className="text-muted-foreground">Linhas no arquivo</span>
-                    <span className="font-medium tabular-nums">{item.rowCount}</span>
-                    <span className="text-muted-foreground">Lançamentos criados</span>
-                    <span className="font-medium tabular-nums">
-                      {item.createdLaunchCount}
-                    </span>
-                    {item.invoicePaymentCount > 0 ? (
-                      <>
-                        <span className="text-muted-foreground">
-                          Pagamentos de fatura
-                        </span>
-                        <span className="font-medium tabular-nums">
-                          {item.invoicePaymentCount}
-                        </span>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-              </Link>
-            </li>
-          ))}
-        </ul>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
+
+      <ImportCsvOnboarding />
 
       {!loading && items.length > 0 ? (
         <div className="flex justify-end">

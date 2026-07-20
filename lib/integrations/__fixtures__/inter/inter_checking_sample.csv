@@ -1,0 +1,6 @@
+Data Lançamento;Histórico;Descrição;Valor;Saldo
+01/07/2026;PIX Enviado;João Silva;-150,00;1234,50
+02/07/2026;PIX Recebido;Maria Souza;200,00;1434,50
+03/07/2026;Compra no débito;Mercado Central;-45,90;1388,60
+05/07/2026;Transferência recebida;Folha - Empresa X;3200,00;4588,60
+06/07/2026;Estorno;PIX Enviado João Silva;150,00;4738,60

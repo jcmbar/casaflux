@@ -151,6 +151,7 @@ describe("buildImportPreview", () => {
     expect(preview.source).toBeNull();
     expect(preview.rows).toEqual([]);
     expect(preview.warnings[0]?.code).toBe("unsupported_source");
+    expect(preview.warnings[0]?.message).toContain("CSV de Nubank, Inter, Bradesco");
     expect(preview.parseErrors).toHaveLength(1);
   });
 });

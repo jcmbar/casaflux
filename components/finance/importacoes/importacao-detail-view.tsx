@@ -175,18 +175,26 @@ export function ImportacaoDetailView() {
             value={String(detail.summary.fileRows)}
           />
           <SummaryStat
-            label="Lançamentos criados"
-            value={String(detail.summary.createdLaunches)}
+            label="Linhas com lançamento"
+            value={String(detail.summary.createdItems)}
           />
           <SummaryStat
-            label="Itens ignorados"
+            label="Linhas ignoradas"
             value={String(detail.summary.ignoredItems)}
           />
           <SummaryStat
-            label="Pagamentos de fatura"
-            value={String(detail.summary.invoicePayments)}
+            label="Lançamentos criados"
+            value={String(detail.summary.createdLaunches)}
           />
         </div>
+        {detail.summary.invoicePayments > 0 ? (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <SummaryStat
+              label="Pagamentos de fatura"
+              value={String(detail.summary.invoicePayments)}
+            />
+          </div>
+        ) : null}
       </section>
 
       {detail.sections.length === 0 ? (

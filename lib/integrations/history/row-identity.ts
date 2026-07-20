@@ -11,9 +11,9 @@ export function buildImportRowIdentityKey(
 
   if (row.externalId) {
     const amountCents = amountToFingerprintCents(row.amount);
-    return `nubank:checking:${accountId}:${row.externalId}:${row.direction}:${amountCents}:${row.kind}`;
+    return `${row.source}:${accountId}:${row.externalId}:${row.direction}:${amountCents}:${row.kind}`;
   }
 
   const amountCents = amountToFingerprintCents(row.amount);
-  return `${row.externalFingerprint}:${row.direction}:${amountCents}:${row.kind}`;
+  return `${row.externalFingerprint}:${accountId}:${row.direction}:${amountCents}:${row.kind}`;
 }

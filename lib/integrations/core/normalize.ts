@@ -1,6 +1,9 @@
 import type { ImportDirection, NormalizedImportRow } from "../types";
 
-export function parseCsvContent(content: string): string[][] {
+export function parseCsvContent(
+  content: string,
+  delimiter: "," | ";" = ",",
+): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -28,7 +31,7 @@ export function parseCsvContent(content: string): string[][] {
       continue;
     }
 
-    if (character === ",") {
+    if (character === delimiter) {
       row.push(field);
       field = "";
       continue;
@@ -59,6 +62,15 @@ export function parseCsvContent(content: string): string[][] {
   }
 
   return rows;
+}
+
+/** Picks comma vs semicolon from the first non-empty line. */
+export function detectCsvDelimiter(content: string): "," | ";" {
+  const firstLine = content.split(/\r?\n/).find((line) => line.trim().length > 0);
+  if (!firstLine) return ",";
+  const commas = (firstLine.match(/,/g) ?? []).length;
+  const semicolons = (firstLine.match(/;/g) ?? []).length;
+  return semicolons > commas ? ";" : ",";
 }
 
 export function parseBrazilianDateToIso(date: string): string {

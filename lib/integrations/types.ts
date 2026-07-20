@@ -1,4 +1,8 @@
-export type ImportSource = "nubank_checking" | "nubank_credit_card";
+export type ImportSource =
+  | "nubank_checking"
+  | "nubank_credit_card"
+  | "inter_checking"
+  | "bradesco_checking";
 
 export type NormalizedImportKind =
   | "bank_income"

@@ -20,15 +20,34 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormSelect } from "@/components/forms/form-controls";
 import { PageIntro } from "@/components/layout/page-intro";
 import { useConfirm } from "@/components/feedback/confirm-dialog-provider";
+import { AccountIdentityMark } from "@/components/finance/account-identity";
 import { InvoicePaymentImportPanel } from "@/components/finance/integracoes/invoice-payment-import-panel";
 import { useAppContext } from "@/contexts/app-context";
 import { buildImportPreview } from "@/lib/integrations/core/import-orchestrator";
-import { detectImportSource } from "@/lib/integrations/core/detect-source";
+import {
+  identifyImportFile,
+} from "@/lib/integrations/core/identify-import-file";
+import { buildImportFileConfirmation } from "@/lib/integrations/core/import-file-confirmation";
+import {
+  formatPlannedImportBanksSummary,
+  formatSupportedImportBanksSummary,
+  getImportFileSelectHint,
+  getImportLayoutBySource,
+  getImportReviewPageIntro,
+  getSupportedImportFileTip,
+} from "@/lib/integrations/catalog/import-integrations";
+import { getImportSourceProvider } from "@/lib/integrations/providers/registry";
 import {
   commitImportPreview,
   getCommitImportPreviewValidationError,
 } from "@/lib/integrations/commit/commit-import-preview";
 import { getCommittableImportRows } from "@/lib/integrations/commit/map-import-row";
+import {
+  buildImportDuplicateAttention,
+  getImportRowDuplicateReason,
+} from "@/lib/integrations/core/import-duplicate-attention";
+import { buildImportReviewDiagnosis } from "@/lib/integrations/core/import-review-diagnosis";
+import { buildImportReviewContext } from "@/lib/integrations/core/import-review-context";
 import {
   getInvoicePaymentImportMode,
   resolveImportedInvoicePaymentForAccount,
@@ -196,6 +215,119 @@ function SummaryCard({
   );
 }
 
+function ImportReviewDiagnosisCard({
+  diagnosis,
+}: {
+  diagnosis: ReturnType<typeof buildImportReviewDiagnosis>;
+}) {
+  return (
+    <div className="rounded-xl border border-border/50 bg-muted/15 px-4 py-4">
+      <p className="text-sm font-medium text-foreground">{diagnosis.headline}</p>
+      {diagnosis.kindBreakdown.length > 0 ? (
+        <p className="mt-2 text-sm text-muted-foreground">
+          {diagnosis.kindBreakdown
+            .map((item) => `${item.count} ${item.label.toLowerCase()}`)
+            .join(" · ")}
+        </p>
+      ) : null}
+      {diagnosis.attentionItems.length > 0 ? (
+        <ul className="mt-3 space-y-1 border-t border-border/40 pt-3">
+          {diagnosis.attentionItems.map((item) => (
+            <li
+              key={item.id}
+              className="text-sm text-amber-800 dark:text-amber-200/90"
+            >
+              {item.label}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function ImportReviewContextLine({
+  context,
+}: {
+  context: NonNullable<ReturnType<typeof buildImportReviewContext>>;
+}) {
+  return (
+    <p className="text-sm text-muted-foreground">{context.headline}</p>
+  );
+}
+
+const DUPLICATE_ATTENTION_PREVIEW_LIMIT = 8;
+
+function ImportDuplicateAttentionCard({
+  attention,
+}: {
+  attention: NonNullable<ReturnType<typeof buildImportDuplicateAttention>>;
+}) {
+  const previewLines = attention.lines.slice(0, DUPLICATE_ATTENTION_PREVIEW_LIMIT);
+  const hiddenCount = attention.lines.length - previewLines.length;
+
+  return (
+    <Card className="border-amber-500/20 shadow-sm">
+      <CardHeader className="gap-2">
+        <CardTitle className="text-base">Atenção com possíveis duplicatas</CardTitle>
+        <p className="text-sm font-medium text-foreground">{attention.headline}</p>
+        {attention.outcomeSummary ? (
+          <p className="text-sm text-muted-foreground">{attention.outcomeSummary}</p>
+        ) : null}
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {attention.groups
+          .filter((group) => group.sourceLines.length > 1 || group.keptSourceLine !== null)
+          .map((group) => (
+            <p key={group.id} className="text-xs text-muted-foreground">
+              {group.keptSourceLine != null
+                ? `Linhas ${group.sourceLines.join(", ")} — a linha ${group.keptSourceLine} permanece; as demais ficam de fora porque têm ${group.reason}.`
+                : `${group.sourceLines.length} linha(s): ${group.reason}.`}
+            </p>
+          ))}
+
+        <div className="space-y-2">
+          {previewLines.map((line) => (
+            <div
+              key={`dup-line-${line.sourceLine}`}
+              className="rounded-xl border border-amber-500/15 bg-amber-500/5 px-4 py-3"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-medium">
+                    Linha {line.sourceLine} — {line.description}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {line.dateLabel} · {line.amountLabel}
+                  </p>
+                  <p className="mt-1 text-xs text-amber-900/80 dark:text-amber-100/80">
+                    Motivo: {line.reason}
+                  </p>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={
+                    line.willImport
+                      ? "border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
+                      : "border-amber-500/25 bg-amber-500/5 text-amber-800 dark:text-amber-200"
+                  }
+                >
+                  {line.willImport ? "Será gravado" : "Ficará de fora"}
+                </Badge>
+              </div>
+            </div>
+          ))}
+          {hiddenCount > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              e mais {hiddenCount} linha(s) com o mesmo tipo de atenção.
+            </p>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function ImportRowBadges({
   row,
   isDuplicate,
@@ -285,25 +417,44 @@ export function ImportReviewView() {
   >([]);
   const [rowFilter, setRowFilter] = useState<RowFilter>("all");
   const [readingFile, setReadingFile] = useState(false);
+  const [fileConfirmed, setFileConfirmed] = useState(false);
 
-  const detectedSource = useMemo(
-    () => (csvContent ? detectImportSource(csvContent) : null),
+  const identifiedFile = useMemo(
+    () => (csvContent ? identifyImportFile(csvContent) : null),
     [csvContent],
   );
 
-  const targetAccountId =
-    detectedSource === "nubank_credit_card"
-      ? cardAccountId
-      : detectedSource === "nubank_checking"
-        ? checkingAccountId
-        : "";
+  const fileConfirmation = useMemo(() => {
+    if (!csvContent || identifiedFile?.status !== "supported") {
+      return null;
+    }
+    return buildImportFileConfirmation(csvContent, identifiedFile);
+  }, [csvContent, identifiedFile]);
+
+  const detectedSource =
+    identifiedFile?.status === "supported" ? identifiedFile.source : null;
+
+  const detectedLayout = detectedSource
+    ? getImportLayoutBySource(detectedSource)
+    : null;
+  const runtimeProvider = detectedSource
+    ? getImportSourceProvider(detectedSource)
+    : null;
+  const requiresCardAccount = Boolean(runtimeProvider?.requiresCardAccount);
+  const requiresCheckingAccount = detectedLayout?.kind === "checking";
+
+  const targetAccountId = requiresCardAccount
+    ? cardAccountId
+    : requiresCheckingAccount
+      ? checkingAccountId
+      : "";
 
   const basePreview: ImportPreview | null = useMemo(() => {
-    if (!csvContent) {
+    if (!csvContent || !detectedSource || !fileConfirmed) {
       return null;
     }
 
-    if (detectedSource === "nubank_credit_card" && !cardAccountId) {
+    if (requiresCardAccount && !cardAccountId) {
       return null;
     }
 
@@ -311,7 +462,13 @@ export function ImportReviewView() {
       content: csvContent,
       cardAccountId: cardAccountId || undefined,
     });
-  }, [cardAccountId, csvContent, detectedSource]);
+  }, [
+    cardAccountId,
+    csvContent,
+    detectedSource,
+    fileConfirmed,
+    requiresCardAccount,
+  ]);
 
   const creditCardAccounts = useMemo(
     () =>
@@ -507,6 +664,59 @@ export function ImportReviewView() {
       invoicePaymentModes,
     );
   }, [activePreview, invoicePaymentModes, invoiceSourceAccounts]);
+
+  const reviewDiagnosis = useMemo(() => {
+    if (!activePreview) {
+      return null;
+    }
+
+    return buildImportReviewDiagnosis({
+      rows: activePreview.rows,
+      invoiceSourceAccounts,
+      invoicePaymentModes,
+    });
+  }, [activePreview, invoicePaymentModes, invoiceSourceAccounts]);
+
+  const reviewContext = useMemo(() => {
+    if (!activePreview) {
+      return null;
+    }
+
+    const destinationAccount =
+      accounts.find((account) => account.id === targetAccountId) ?? null;
+
+    const invoicePeriodLabels = activePreview.rows
+      .filter((row) => row.kind === "card_invoice_payment")
+      .map(
+        (row) =>
+          resolveImportedInvoicePaymentForAccount({
+            paymentDate: row.date,
+            cardAccount: selectedCardAccount,
+          })?.periodLabel,
+      );
+
+    return buildImportReviewContext({
+      destinationAccountLabel: destinationAccount
+        ? formatAccountSelectLabel(destinationAccount)
+        : null,
+      rows: activePreview.rows,
+      invoicePeriodLabels,
+    });
+  }, [accounts, activePreview, selectedCardAccount, targetAccountId]);
+
+  const duplicateAttention = useMemo(() => {
+    if (!activePreview) {
+      return null;
+    }
+
+    return buildImportDuplicateAttention({
+      rows: activePreview.rows,
+      possibleDuplicates: activePreview.possibleDuplicates,
+      committableSourceLines: new Set(
+        committableRows.map((row) => row.sourceLine),
+      ),
+    });
+  }, [activePreview, committableRows]);
 
   const commitValidationError = useMemo(() => {
     if (!activePreview || !user || !contentHash || !targetAccountId) {
@@ -793,6 +1003,8 @@ export function ImportReviewView() {
 
     setReadingFile(true);
     setFileName(file.name);
+    setFileConfirmed(false);
+    setPreview(null);
     setInvoiceSourceAccounts({});
     setInvoicePaymentModes({});
     setInvoiceReconcileDecisions({});
@@ -884,6 +1096,7 @@ export function ImportReviewView() {
     setFileName(null);
     setCsvContent(null);
     setContentHash(null);
+    setFileConfirmed(false);
     setCardAccountId("");
     setCheckingAccountId("");
     setPreview(null);
@@ -924,10 +1137,29 @@ export function ImportReviewView() {
                   source: guidedReimport.source,
                   accountName: guidedAccountName,
                 })
-              : "Envie um CSV do Nubank, revise o que será criado e confirme a importação. Nada é gravado até você confirmar."
+              : getImportReviewPageIntro()
           }
         />
       </div>
+
+      <Alert
+        className="border-border/60 bg-muted/30"
+        data-testid="supported-import-banks"
+      >
+        <FileSpreadsheet className="size-4" />
+        <AlertTitle>Bancos suportados hoje</AlertTitle>
+        <AlertDescription>
+          <span className="block">{formatSupportedImportBanksSummary()}</span>
+          <span className="mt-1 block text-muted-foreground">
+            {getSupportedImportFileTip()}
+          </span>
+          {formatPlannedImportBanksSummary() ? (
+            <span className="mt-2 block text-xs text-muted-foreground">
+              Em breve: {formatPlannedImportBanksSummary()}
+            </span>
+          ) : null}
+        </AlertDescription>
+      </Alert>
 
       {isGuidedReimport ? (
         <Alert
@@ -959,7 +1191,7 @@ export function ImportReviewView() {
                   {fileName ?? "Nenhum arquivo selecionado"}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Formatos suportados: extrato de cartão ou conta Nubank
+                  {getImportFileSelectHint()}
                 </p>
               </div>
             </div>
@@ -993,7 +1225,90 @@ export function ImportReviewView() {
             </div>
           </div>
 
-          {detectedSource === "nubank_credit_card" ? (
+          {fileConfirmation && !fileConfirmed ? (
+            <div
+              className="space-y-3 rounded-xl border border-border/60 bg-muted/20 px-3 py-3"
+              data-testid="import-file-confirmation"
+              data-source={fileConfirmation.source}
+            >
+              <div className="flex items-start gap-3">
+                <AccountIdentityMark
+                  account={{ name: fileConfirmation.institutionName }}
+                  size="md"
+                />
+                <div className="min-w-0 space-y-1">
+                  <p className="text-sm font-medium">
+                    {fileConfirmation.headline}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Confirme se o arquivo parece correto antes de revisar os
+                    lançamentos.
+                  </p>
+                </div>
+              </div>
+
+              <dl className="grid gap-2 sm:grid-cols-3">
+                {fileConfirmation.signals.map((signal) => (
+                  <div
+                    key={signal.label}
+                    className="rounded-lg bg-background/70 px-2.5 py-2 ring-1 ring-border/50"
+                  >
+                    <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      {signal.label}
+                    </dt>
+                    <dd className="mt-0.5 text-sm text-foreground">
+                      {signal.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  onClick={() => setFileConfirmed(true)}
+                  data-testid="confirm-import-file"
+                >
+                  Continuar para revisão
+                </Button>
+                <Button type="button" variant="ghost" onClick={handleReset}>
+                  Escolher outro arquivo
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {fileConfirmation && fileConfirmed ? (
+            <div
+              className="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/20 px-3 py-3"
+              data-testid="identified-import-bank"
+              data-institution={
+                identifiedFile?.status === "supported"
+                  ? identifiedFile.institutionId
+                  : undefined
+              }
+              data-source={fileConfirmation.source}
+            >
+              <AccountIdentityMark
+                account={{ name: fileConfirmation.institutionName }}
+                size="md"
+              />
+              <div className="min-w-0">
+                <p className="text-sm font-medium">
+                  {fileConfirmation.headline}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Arquivo confirmado ·{" "}
+                  {fileConfirmation.signals
+                    .map((signal) => signal.value)
+                    .slice(0, 2)
+                    .join(" · ")}
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          {fileConfirmed && requiresCardAccount ? (
             <FormSelect
               id="card-account"
               label="Conta de cartão (obrigatória para o preview)"
@@ -1010,7 +1325,7 @@ export function ImportReviewView() {
             </FormSelect>
           ) : null}
 
-          {detectedSource === "nubank_checking" ? (
+          {fileConfirmed && requiresCheckingAccount ? (
             <FormSelect
               id="checking-account"
               label="Conta de destino (obrigatória para comparação histórica)"
@@ -1027,7 +1342,8 @@ export function ImportReviewView() {
             </FormSelect>
           ) : null}
 
-          {detectedSource === "nubank_checking" &&
+          {fileConfirmed &&
+          requiresCheckingAccount &&
           !checkingAccountId &&
           csvContent ? (
             <Alert>
@@ -1039,7 +1355,8 @@ export function ImportReviewView() {
               </AlertDescription>
             </Alert>
           ) : null}
-          {detectedSource === "nubank_credit_card" &&
+          {fileConfirmed &&
+          requiresCardAccount &&
           !cardAccountId &&
           csvContent ? (
             <Alert>
@@ -1100,6 +1417,14 @@ export function ImportReviewView() {
 
       {activePreview ? (
         <>
+          {reviewContext ? (
+            <ImportReviewContextLine context={reviewContext} />
+          ) : null}
+
+          {reviewDiagnosis ? (
+            <ImportReviewDiagnosisCard diagnosis={reviewDiagnosis} />
+          ) : null}
+
           {(activePreview.parseErrors.length > 0 || activePreview.warnings.length > 0) && (
             <Card className="border-border/50 shadow-sm">
               <CardHeader>
@@ -1300,26 +1625,8 @@ export function ImportReviewView() {
             </Card>
           </div>
 
-          {activePreview.possibleDuplicates.length > 0 ? (
-            <Card className="border-border/50 shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Possíveis duplicatas</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {activePreview.possibleDuplicates.map((group) => (
-                  <div
-                    key={group.key}
-                    className="rounded-xl border border-orange-500/20 bg-orange-500/5 px-4 py-3"
-                  >
-                    <p className="text-sm font-medium">Grupo: {group.key}</p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Linhas {group.sourceLines.join(", ")} — a primeira permanece
-                      pronta; as demais foram marcadas como possível duplicata.
-                    </p>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
+          {duplicateAttention ? (
+            <ImportDuplicateAttentionCard attention={duplicateAttention} />
           ) : null}
 
           {activePreview.needsReview.length > 0 ? (
@@ -1328,7 +1635,13 @@ export function ImportReviewView() {
                 <CardTitle className="text-base">Linhas que precisam revisão</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                {activePreview.needsReview.map((row) => (
+                {activePreview.needsReview.map((row) => {
+                  const duplicateReason = getImportRowDuplicateReason(
+                    row,
+                    activePreview.possibleDuplicates,
+                  );
+
+                  return (
                   <div
                     key={`needs-review-${row.sourceLine}`}
                     className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3"
@@ -1342,6 +1655,11 @@ export function ImportReviewView() {
                           {formatDate(row.date)} · {formatCurrency(row.amount)} ·{" "}
                           {importKindLabels[row.kind]}
                         </p>
+                        {duplicateReason ? (
+                          <p className="mt-1 text-xs text-amber-900/80 dark:text-amber-100/80">
+                            Motivo: {duplicateReason}
+                          </p>
+                        ) : null}
                       </div>
                       <ImportRowBadges
                         row={row}
@@ -1397,7 +1715,8 @@ export function ImportReviewView() {
                       />
                     ) : null}
                   </div>
-                ))}
+                  );
+                })}
               </CardContent>
             </Card>
           ) : null}
@@ -1629,12 +1948,18 @@ export function ImportReviewView() {
             </CardContent>
           </Card>
         </>
-      ) : csvContent && detectedSource === null ? (
-        <Alert variant="destructive">
-          <AlertCircle className="size-4" />
-          <AlertTitle>Arquivo não reconhecido</AlertTitle>
+      ) : csvContent && identifiedFile?.status === "unsupported" ? (
+        <Alert
+          className="border-amber-500/25 bg-amber-500/5"
+          data-testid="unsupported-import-file"
+        >
+          <AlertCircle className="size-4 text-amber-700 dark:text-amber-300" />
+          <AlertTitle>{identifiedFile.headline}</AlertTitle>
           <AlertDescription>
-            O header do CSV não corresponde a um extrato Nubank de cartão ou conta.
+            <span className="block">{identifiedFile.message}</span>
+            <span className="mt-2 block text-muted-foreground">
+              {identifiedFile.tip}
+            </span>
           </AlertDescription>
         </Alert>
       ) : null}

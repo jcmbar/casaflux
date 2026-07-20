@@ -49,7 +49,9 @@ describe("buildImportationTitle / labels", () => {
       "Pagamento de fatura",
     );
     expect(getImportationRowKindLabel("card_purchase")).toBe("Compra no cartão");
-    expect(getImportationsEmptyMessage()).toMatch(/csv do nubank/i);
+    expect(getImportationsEmptyMessage()).toMatch(
+      /banco disponível hoje.*nubank.*inter.*bradesco|banco disponível hoje.*bradesco.*inter.*nubank/i,
+    );
   });
 });
 
@@ -115,6 +117,7 @@ describe("mapImportationListItem", () => {
       },
       accountName: "Nubank Conta",
       createdLaunchCount: 10,
+      ignoredItemCount: 2,
       invoicePaymentCount: 0,
     });
 
@@ -126,6 +129,7 @@ describe("mapImportationListItem", () => {
       fileName: "nu.csv",
       href: "/importacoes/batch-1",
       createdLaunchCount: 10,
+      ignoredItemCount: 2,
       rowCount: 12,
     });
   });
@@ -143,6 +147,7 @@ describe("mapImportationListItem", () => {
       },
       accountName: "Nubank Cartão",
       createdLaunchCount: 6,
+      ignoredItemCount: 0,
       invoicePaymentCount: 1,
     });
 
