@@ -1,3 +1,5 @@
+import type { AccountType } from "@/types/account";
+
 export type TransactionType = "income" | "expense" | "transfer";
 
 export type Transaction = {
@@ -33,6 +35,7 @@ export type TransactionRow = {
   accounts?: {
     id: string;
     name: string;
+    type: AccountType;
     is_family_shared: boolean;
   } | null;
 };

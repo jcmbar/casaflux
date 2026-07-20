@@ -31,13 +31,13 @@ const BLOCK_OPTIONS: BlockOption[] = [
     id: "transactions",
     label: "Lançamentos",
     description:
-      "Remove lançamentos, previsões e recorrências. Zera o saldo das contas mantidas.",
+      "Remove lançamentos de contas e cartões, previsões, recorrências e histórico de importação CSV. Zera o saldo das contas e cartões mantidos.",
   },
   {
     id: "accounts",
-    label: "Bancos",
+    label: "Contas e cartões",
     description:
-      "Remove contas (incluindo provisão) e tudo ligado a elas. Metas vinculadas passam para modo manual.",
+      "Remove contas bancárias, cartões (incluindo provisão) e tudo ligado a elas, inclusive histórico de importação. Metas vinculadas passam para modo manual.",
   },
   {
     id: "goals",
@@ -238,7 +238,9 @@ export default function ConfiguracoesPage() {
               <span className="space-y-1">
                 <span className="block text-sm font-medium">Tudo</span>
                 <span className="block text-xs text-muted-foreground">
-                  União de lançamentos, bancos, metas e orçamento. Exige digitar{" "}
+                  União de lançamentos (contas + cartões), contas/cartões, histórico
+                  de importação, metas e orçamento. Não apaga conta de acesso,
+                  perfil, família nem categorias. Exige digitar{" "}
                   {CLEANUP_ALL_CONFIRMATION_PHRASE}.
                 </span>
               </span>

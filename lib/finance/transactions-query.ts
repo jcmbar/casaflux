@@ -7,6 +7,7 @@ export const TRANSACTIONS_SELECT = `
   accounts (
     id,
     name,
+    type,
     is_family_shared
   )
 `;

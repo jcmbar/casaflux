@@ -22,6 +22,7 @@ export type CleanupFinanceCounts = {
   accounts: number;
   goals: number;
   budgets: number;
+  importBatches: number;
   balancesReset: number;
   familyIncluded: boolean;
 };
@@ -44,6 +45,7 @@ const EMPTY_COUNTS: CleanupFinanceCounts = {
   accounts: 0,
   goals: 0,
   budgets: 0,
+  importBatches: 0,
   balancesReset: 0,
   familyIncluded: false,
 };
@@ -112,6 +114,7 @@ function mapCounts(data: unknown): CleanupFinanceCounts {
     accounts: Number(row.accounts ?? 0),
     goals: Number(row.goals ?? 0),
     budgets: Number(row.budgets ?? 0),
+    importBatches: Number(row.importBatches ?? 0),
     balancesReset: Number(row.balancesReset ?? 0),
     familyIncluded: Boolean(row.familyIncluded),
   };
@@ -158,6 +161,15 @@ export function formatCleanupSummary(counts: CleanupFinanceCounts): string {
       }`,
     );
   }
+  if (counts.importBatches > 0) {
+    parts.push(
+      `${counts.importBatches} ${
+        counts.importBatches === 1
+          ? "histórico de importação"
+          : "históricos de importação"
+      }`,
+    );
+  }
   if (counts.balancesReset > 0 && counts.accounts === 0) {
     parts.push(
       `${counts.balancesReset} ${
@@ -175,7 +187,12 @@ export function formatCleanupSummary(counts: CleanupFinanceCounts): string {
 
 /**
  * Runs selective financial cleanup via atomic RPC.
+ * Scope includes bank accounts and credit cards equally.
+ * When wiping transactions/accounts, also clears import_batches
+ * (and cascaded import_batch_rows) for those accounts.
  * Does not delete auth, profile, family graph, or categories.
+ * Balance consistency: transactions-only wipe resets balances to 0;
+ * accounts wipe deletes the accounts entirely.
  */
 export async function cleanupFinanceData(
   supabase: SupabaseClient,

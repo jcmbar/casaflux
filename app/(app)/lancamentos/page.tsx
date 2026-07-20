@@ -9,13 +9,17 @@ import {
   CalendarPlus,
   Check,
   ChevronDown,
+  CreditCard,
   Loader2,
   MoreHorizontal,
   Pencil,
   Plus,
   Repeat2,
+  Search,
   Trash2,
+  X,
 } from "lucide-react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +32,7 @@ import {
   FormInput,
   FormSelect,
 } from "@/components/forms/form-controls";
+import { Input } from "@/components/ui/input";
 import { PageIntro } from "@/components/layout/page-intro";
 import { useConfirm } from "@/components/feedback/confirm-dialog-provider";
 import {
@@ -99,11 +104,29 @@ import {
   type CategoryVisibilityContext,
 } from "@/lib/finance/active-categories";
 import { sumByType } from "@/lib/finance/dashboard-stats";
+import {
+  ALL_ACCOUNTS_FILTER,
+  detectInvoicePaymentSignal,
+  filterTransactionsByAccount,
+  getAccountKindLabel,
+  getInvoicePaymentLabel,
+  partitionAccountsForFilter,
+  resolveAccountFilter,
+  type LancamentosAccountFilter,
+} from "@/lib/finance/lancamentos-filters";
+import {
+  buildTransactionSearchIndex,
+  filterTransactionsBySearch,
+  LANCAMENTOS_SEARCH_DEBOUNCE_MS,
+  normalizeAppliedSearchTerm,
+  parseSearchFromSearchParams,
+} from "@/lib/finance/lancamentos-search";
 import { TRANSACTIONS_SELECT } from "@/lib/finance/transactions-query";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
 import { canPostToAccount, type Account } from "@/types/account";
+import { cn } from "@/lib/utils";
 import {
   mapTransactionRecurrence,
   type RecurrenceEndType,
@@ -293,13 +316,27 @@ function getDefaultCategoryId(type: TransactionType, categories: Category[]) {
   return match?.id ?? "";
 }
 
-function buildLancamentosUrl(period: PeriodFilter, extraParams?: Record<string, string>) {
+function buildLancamentosUrl(
+  period: PeriodFilter,
+  accountFilter: LancamentosAccountFilter = ALL_ACCOUNTS_FILTER,
+  searchTerm = "",
+  extraParams?: Record<string, string>,
+) {
   const params = new URLSearchParams();
 
   if (period.mode === "all") {
     params.set("period", "all");
   } else {
     params.set("month", period.monthKey);
+  }
+
+  if (accountFilter !== ALL_ACCOUNTS_FILTER) {
+    params.set("account", accountFilter);
+  }
+
+  const normalizedSearch = normalizeAppliedSearchTerm(searchTerm);
+  if (normalizedSearch) {
+    params.set("search", normalizedSearch);
   }
 
   if (extraParams) {
@@ -386,6 +423,17 @@ function LancamentosPageContent() {
   const [period, setPeriod] = useState<PeriodFilter>(() =>
     parsePeriodFromSearchParams(searchParams),
   );
+  const [accountFilter, setAccountFilter] = useState<LancamentosAccountFilter>(
+    () => resolveAccountFilter(searchParams.get("account"), new Set()),
+  );
+  const [searchTerm, setSearchTerm] = useState(() =>
+    parseSearchFromSearchParams(searchParams.get("search")),
+  );
+  const [appliedSearchTerm, setAppliedSearchTerm] = useState(() =>
+    normalizeAppliedSearchTerm(
+      parseSearchFromSearchParams(searchParams.get("search")),
+    ),
+  );
   const [form, setForm] = useState<FormState>({
     description: "",
     amount: "",
@@ -418,6 +466,16 @@ function LancamentosPageContent() {
 
     return accounts.filter((account) => canPostToAccount(account, user.id));
   }, [accounts, user]);
+
+  const { bankAccounts, creditCards } = useMemo(
+    () => partitionAccountsForFilter(accounts),
+    [accounts],
+  );
+
+  const accountIds = useMemo(
+    () => new Set(accounts.map((account) => account.id)),
+    [accounts],
+  );
 
   async function loadData() {
     if (!scope) {
@@ -659,17 +717,118 @@ function LancamentosPageContent() {
 
   useEffect(() => {
     setPeriod(parsePeriodFromSearchParams(searchParams));
-  }, [searchParams]);
+    setAccountFilter(
+      resolveAccountFilter(searchParams.get("account"), accountIds),
+    );
+
+    const fromUrl = parseSearchFromSearchParams(searchParams.get("search"));
+    setAppliedSearchTerm((applied) => {
+      if (fromUrl === applied) {
+        return applied;
+      }
+
+      setSearchTerm(fromUrl);
+      return fromUrl;
+    });
+  }, [accountIds, searchParams]);
 
   function updatePeriod(nextPeriod: PeriodFilter) {
     setPeriod(nextPeriod);
-    router.replace(buildLancamentosUrl(nextPeriod), { scroll: false });
+    router.replace(
+      buildLancamentosUrl(nextPeriod, accountFilter, appliedSearchTerm),
+      { scroll: false },
+    );
   }
 
-  const filteredTransactions = useMemo(
-    () => filterTransactionsByPeriod(transactions, period),
-    [transactions, period],
+  function updateAccountFilter(nextFilter: LancamentosAccountFilter) {
+    setAccountFilter(nextFilter);
+    router.replace(
+      buildLancamentosUrl(period, nextFilter, appliedSearchTerm),
+      { scroll: false },
+    );
+  }
+
+  function applySearchTerm(rawTerm: string = searchTerm) {
+    const next = normalizeAppliedSearchTerm(rawTerm);
+    setSearchTerm(rawTerm);
+    setAppliedSearchTerm(next);
+    router.replace(buildLancamentosUrl(period, accountFilter, next), {
+      scroll: false,
+    });
+  }
+
+  function clearSearchTerm() {
+    setSearchTerm("");
+    setAppliedSearchTerm("");
+    router.replace(buildLancamentosUrl(period, accountFilter, ""), {
+      scroll: false,
+    });
+  }
+
+  useEffect(() => {
+    const next = normalizeAppliedSearchTerm(searchTerm);
+    if (next === appliedSearchTerm) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setAppliedSearchTerm(next);
+      router.replace(buildLancamentosUrl(period, accountFilter, next), {
+        scroll: false,
+      });
+    }, LANCAMENTOS_SEARCH_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    accountFilter,
+    appliedSearchTerm,
+    period,
+    router,
+    searchTerm,
+  ]);
+
+  const searchLookups = useMemo(
+    () => ({
+      categoriesById: new Map(
+        categories.map((category) => [
+          category.id,
+          { id: category.id, name: category.name },
+        ]),
+      ),
+      accountsById: new Map(
+        accounts.map((account) => [
+          account.id,
+          {
+            id: account.id,
+            name: account.name,
+            type: account.type,
+          },
+        ]),
+      ),
+    }),
+    [accounts, categories],
   );
+
+  const transactionSearchIndex = useMemo(
+    () => buildTransactionSearchIndex(transactions, searchLookups),
+    [searchLookups, transactions],
+  );
+
+  const filteredTransactions = useMemo(() => {
+    const byPeriod = filterTransactionsByPeriod(transactions, period);
+    const byAccount = filterTransactionsByAccount(byPeriod, accountFilter);
+    return filterTransactionsBySearch(
+      byAccount,
+      appliedSearchTerm,
+      transactionSearchIndex,
+    );
+  }, [
+    accountFilter,
+    appliedSearchTerm,
+    period,
+    transactionSearchIndex,
+    transactions,
+  ]);
 
   const visiblePendingPredictions = useMemo(
     () =>
@@ -715,8 +874,18 @@ function LancamentosPageContent() {
     period.mode === "month" && period.monthKey === currentMonthKey;
   const summaryScopeLabel =
     period.mode === "all" ? "total" : "do mês";
+  const selectedAccount =
+    accountFilter === ALL_ACCOUNTS_FILTER
+      ? null
+      : accounts.find((account) => account.id === accountFilter) ?? null;
   const listTitle =
-    period.mode === "all" ? "Todo o histórico" : "Lançamentos do mês";
+    accountFilter === ALL_ACCOUNTS_FILTER
+      ? period.mode === "all"
+        ? "Todo o histórico"
+        : "Lançamentos do mês"
+      : period.mode === "all"
+        ? `Histórico · ${selectedAccount?.name ?? "Conta"}`
+        : `Mês · ${selectedAccount?.name ?? "Conta"}`;
   const isEditing = editingId !== null;
   const isEditingRecurrence = editingRecurrenceId !== null;
   const openedFromQuery = useRef(false);
@@ -975,8 +1144,11 @@ function LancamentosPageContent() {
 
     openedFromQuery.current = true;
     handleOpenNew();
-    router.replace(buildLancamentosUrl(period), { scroll: false });
-  }, [loading, period, router, searchParams]);
+    router.replace(
+      buildLancamentosUrl(period, accountFilter, appliedSearchTerm),
+      { scroll: false },
+    );
+  }, [accountFilter, appliedSearchTerm, loading, period, router, searchParams]);
 
   function handleTypeChange(type: TransactionType) {
     setForm((current) => ({
@@ -1461,9 +1633,115 @@ function LancamentosPageContent() {
 
   return (
     <div className="space-y-6 md:space-y-8">
-      <PageIntro description="Receitas, despesas e transferências." />
+      <PageIntro description="Visão unificada de receitas e despesas de contas bancárias e cartões de crédito." />
 
       <PeriodFilterBar period={period} onChange={updatePeriod} />
+
+      <div className="animate-enter flex flex-col gap-3 rounded-xl border border-border/50 bg-card p-4 shadow-sm sm:flex-row sm:items-end sm:justify-between">
+        <FormSelect
+          id="lancamentos-account-filter"
+          label="Conta"
+          value={accountFilter}
+          onChange={(event) =>
+            updateAccountFilter(
+              resolveAccountFilter(event.target.value, accountIds),
+            )
+          }
+          className="sm:min-w-64"
+          data-testid="lancamentos-account-filter"
+        >
+          <option value={ALL_ACCOUNTS_FILTER}>Todas as contas</option>
+          {bankAccounts.length > 0 ? (
+            <optgroup label="Contas">
+              {bankAccounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.name}
+                  {account.account_mode === "forecast" ? " (provisão)" : ""}
+                  {account.is_family_shared ? " · familiar" : ""}
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
+          {creditCards.length > 0 ? (
+            <optgroup label="Cartões">
+              {creditCards.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.name}
+                  {account.account_mode === "forecast" ? " (provisão)" : ""}
+                  {account.is_family_shared ? " · familiar" : ""}
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
+        </FormSelect>
+
+        <p className="text-xs text-muted-foreground sm:max-w-xs sm:text-right">
+          Inclui contas bancárias e cartões. Limpeza em lote:{" "}
+          <Link href="/configuracoes" className="underline underline-offset-2">
+            Configurações
+          </Link>
+          .
+        </p>
+      </div>
+
+      <div className="animate-enter rounded-xl border border-border/50 bg-card p-4 shadow-sm">
+        <FormField id="lancamentos-search" label="Busca rápida">
+          <form
+            className="flex flex-col gap-2 sm:flex-row sm:items-center"
+            onSubmit={(event) => {
+              event.preventDefault();
+              applySearchTerm(searchTerm);
+            }}
+          >
+            <div className="relative min-w-0 flex-1">
+              <Search
+                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+              <Input
+                id="lancamentos-search"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder="Buscar por descrição, categoria, conta, valor..."
+                className="h-10 bg-surface-sunken/60 pr-10 pl-9 dark:bg-input/40"
+                data-testid="lancamentos-search-input"
+                autoComplete="off"
+              />
+              {searchTerm ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="absolute top-1/2 right-1.5 -translate-y-1/2"
+                  onClick={clearSearchTerm}
+                  aria-label="Limpar busca"
+                  data-testid="lancamentos-search-clear"
+                >
+                  <X className="size-4" />
+                </Button>
+              ) : null}
+            </div>
+            <Button
+              type="submit"
+              variant="outline"
+              className="shrink-0"
+              data-testid="lancamentos-search-submit"
+            >
+              <Search className="size-4" />
+              Filtrar
+            </Button>
+          </form>
+        </FormField>
+        {appliedSearchTerm ? (
+          <p
+            className="mt-2 text-xs text-muted-foreground"
+            data-testid="lancamentos-search-status"
+          >
+            Filtrando por “{appliedSearchTerm}” · {filteredTransactions.length}{" "}
+            {filteredTransactions.length === 1 ? "resultado" : "resultados"}
+          </p>
+        ) : null}
+      </div>
 
       <div className="grid gap-2 sm:flex sm:justify-end">
         <Button
@@ -2769,12 +3047,20 @@ function LancamentosPageContent() {
               <p className="text-sm font-medium">
                 {transactions.length === 0
                   ? "Nenhum lançamento encontrado"
-                  : "Nenhum lançamento neste período"}
+                  : appliedSearchTerm
+                    ? "Nenhum lançamento encontrado para esta busca"
+                    : accountFilter !== ALL_ACCOUNTS_FILTER
+                      ? "Nenhum lançamento nesta conta"
+                      : "Nenhum lançamento neste período"}
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
                 {transactions.length === 0
-                  ? "Registre sua primeira movimentação para acompanhar o fluxo."
-                  : "Tente outro mês ou veja todo o histórico."}
+                  ? "Registre sua primeira movimentação ou importe um CSV do Nubank."
+                  : appliedSearchTerm
+                    ? "Tente outro termo, limpe a busca ou ajuste a conta/período."
+                    : accountFilter !== ALL_ACCOUNTS_FILTER
+                      ? "Tente outra conta, cartão ou veja todas as contas."
+                      : "Tente outro mês ou veja todo o histórico."}
               </p>
             </div>
           ) : (
@@ -2790,17 +3076,33 @@ function LancamentosPageContent() {
                 const settledDiff = settledDiffByTransactionId.get(
                   transaction.id,
                 );
+                const isCard = account?.type === "credit_card";
+                const accountKind = getAccountKindLabel(account);
+                const invoiceSignal = detectInvoicePaymentSignal({
+                  description: transaction.description,
+                  accountType: account?.type,
+                });
+                const invoiceLabel = getInvoicePaymentLabel(invoiceSignal);
 
                 return (
                   <div
                     key={transaction.id}
-                    className="group -mx-2 flex flex-col gap-3 rounded-xl px-2 py-4 transition-colors first:pt-2 last:pb-2 hover:bg-muted/40 sm:flex-row sm:items-start sm:justify-between"
+                    className={cn(
+                      "group -mx-2 flex flex-col gap-3 rounded-xl px-2 py-4 transition-colors first:pt-2 last:pb-2 hover:bg-muted/40 sm:flex-row sm:items-start sm:justify-between",
+                      invoiceSignal && "bg-violet-500/5 hover:bg-violet-500/10",
+                    )}
+                    data-testid={`transaction-row-${transaction.id}`}
+                    data-account-kind={accountKind}
                   >
                     <div className="flex min-w-0 flex-1 items-start gap-3">
                       <div
                         className={`flex size-10 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ring-black/5 dark:ring-white/10 ${config.iconClass}`}
                       >
-                        <Icon className="h-4 w-4" />
+                        {isCard ? (
+                          <CreditCard className="h-4 w-4" />
+                        ) : (
+                          <Icon className="h-4 w-4" />
+                        )}
                       </div>
 
                       <div className="min-w-0">
@@ -2808,7 +3110,7 @@ function LancamentosPageContent() {
                         <p className="mt-1 text-sm text-muted-foreground">
                           {formatDate(transaction.date)}
                         </p>
-                        <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-sm text-muted-foreground">
+                        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
                           <span>{category?.name ?? "Sem categoria"}</span>
                           <span aria-hidden>·</span>
                           <span>{account?.name ?? "Conta"}</span>
@@ -2816,6 +3118,26 @@ function LancamentosPageContent() {
                           <span>
                             {transaction.familyId ? "Compartilhado" : "Pessoal"}
                           </span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          <Badge
+                            variant="outline"
+                            className={
+                              isCard
+                                ? "border-violet-500/25 bg-violet-500/5 text-violet-700 dark:text-violet-300"
+                                : "border-border bg-muted/40 text-muted-foreground"
+                            }
+                          >
+                            {accountKind}
+                          </Badge>
+                          {invoiceLabel ? (
+                            <Badge
+                              variant="outline"
+                              className="border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300"
+                            >
+                              {invoiceLabel}
+                            </Badge>
+                          ) : null}
                         </div>
                         {settledDiff ? (
                           <PredictionDiffLine

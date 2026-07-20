@@ -53,6 +53,7 @@ describe("cleanupFinanceData", () => {
         accounts: 0,
         goals: 0,
         budgets: 3,
+        importBatches: 1,
         balancesReset: 2,
         familyIncluded: false,
       },
@@ -80,10 +81,16 @@ describe("cleanupFinanceData", () => {
         accounts: 0,
         goals: 0,
         budgets: 3,
+        importBatches: 1,
         balancesReset: 2,
         familyIncluded: false,
       },
     });
+    if (result.ok) {
+      expect(formatCleanupSummary(result.counts)).toContain(
+        "1 histórico de importação",
+      );
+    }
   });
 
   it("runs a full cleanup only with the confirmation phrase", async () => {
@@ -95,6 +102,7 @@ describe("cleanupFinanceData", () => {
         accounts: 2,
         goals: 1,
         budgets: 1,
+        importBatches: 2,
         balancesReset: 0,
         familyIncluded: true,
       },
@@ -129,8 +137,12 @@ describe("cleanupFinanceData", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.counts.familyIncluded).toBe(true);
+      expect(result.counts.importBatches).toBe(2);
       expect(formatCleanupSummary(result.counts)).toContain("4 lançamentos");
       expect(formatCleanupSummary(result.counts)).toContain("2 contas");
+      expect(formatCleanupSummary(result.counts)).toContain(
+        "2 históricos de importação",
+      );
     }
   });
 
@@ -148,5 +160,25 @@ describe("cleanupFinanceData", () => {
       message: "Selecione ao menos um bloco válido para limpar.",
     });
     expect(rpc).not.toHaveBeenCalled();
+  });
+});
+
+describe("cleanup scope documentation", () => {
+  it("treats credit-card wipe the same as bank accounts in client counts", () => {
+    const summary = formatCleanupSummary({
+      transactions: 3,
+      predictions: 0,
+      recurrences: 0,
+      accounts: 0,
+      goals: 0,
+      budgets: 0,
+      importBatches: 1,
+      balancesReset: 2,
+      familyIncluded: false,
+    });
+
+    expect(summary).toContain("3 lançamentos");
+    expect(summary).toContain("2 saldos zerados");
+    expect(summary).toContain("1 histórico de importação");
   });
 });
