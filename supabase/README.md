@@ -25,6 +25,9 @@ Apply these SQL files in order on your Supabase project (SQL Editor or Supabase 
 19. `20250624000019_financial_predictions.sql` — previsões liquidáveis (`financial_predictions`)
 20. `20250624000020_projection_balance.sql` — `include_in_projection` + RPC `set_recurrence_projection`
 21. `20250624000021_cleanup_finance_data.sql` — RPC `cleanup_finance_data` (limpeza seletiva de dados financeiros)
+22. `20250624000022_import_history.sql` — histórico de importações CSV (`import_batches`, `import_batch_rows`) para proteção contra duplicatas
+23. `20250624000023_commit_nubank_import.sql` — RPC `commit_nubank_import` (commit atômico de lançamentos + histórico)
+24. `20250624000024_import_category_on_commit.sql` — `category_id` opcional por transação no commit de importação
 
 ## Apply pending migrations
 

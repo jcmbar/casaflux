@@ -5,6 +5,7 @@ import {
   PieChart,
   Tags,
   Target,
+  Upload,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -72,6 +73,13 @@ export const secondaryNavItems: NavItem[] = [
     title: "Metas",
     description: "Objetivos financeiros e progresso da família.",
     icon: Target,
+  },
+  {
+    href: "/integracoes",
+    label: "Integrações",
+    title: "Integrações",
+    description: "Importe extratos CSV do Nubank para revisão.",
+    icon: Upload,
   },
 ];
 
