@@ -29,6 +29,7 @@ import {
   getGoalCurrentAmount,
   getGoalProgressPercent,
 } from "@/lib/finance/goal-progress";
+import { formatAccountSelectLabel } from "@/lib/finance/account-identity";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
@@ -435,8 +436,7 @@ export function MetasView() {
                   ) : (
                     scopedAccounts.map((account) => (
                       <option key={account.id} value={account.id}>
-                        {account.name}
-                        {account.is_family_shared ? " (família)" : " (pessoal)"}
+                        {formatAccountSelectLabel(account, { includeScope: true })}
                       </option>
                     ))
                   )}

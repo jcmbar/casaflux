@@ -22,6 +22,7 @@ import {
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import { AccountIdentityMark } from "@/components/finance/account-identity";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -62,6 +63,16 @@ import {
   getFinanceViewScope,
   getScopedAccountIds,
 } from "@/lib/finance/finance-scope";
+import {
+  createAccountTransfer,
+  deleteAccountTransfer,
+  getTransferEligiblePostableAccounts,
+  isLinkedAccountTransfer,
+  isTransferInDescription,
+  isTransferOutDescription,
+  TRANSFER_FLOW_HINT,
+  TRANSFER_NEED_ACCOUNTS_MESSAGE,
+} from "@/lib/finance/account-transfer";
 import {
   adjustAccountBalance,
   getTransactionBalanceDelta,
@@ -104,6 +115,7 @@ import {
   type CategoryVisibilityContext,
 } from "@/lib/finance/active-categories";
 import { sumByType } from "@/lib/finance/dashboard-stats";
+import { formatAccountSelectLabel } from "@/lib/finance/account-identity";
 import {
   ALL_ACCOUNTS_FILTER,
   detectInvoicePaymentSignal,
@@ -121,6 +133,12 @@ import {
   normalizeAppliedSearchTerm,
   parseSearchFromSearchParams,
 } from "@/lib/finance/lancamentos-search";
+import {
+  collectImportedTransactionIds,
+  getTransactionOriginBadgeClass,
+  getTransactionOriginLabel,
+  resolveTransactionOrigin,
+} from "@/lib/finance/transaction-origin";
 import { TRANSACTIONS_SELECT } from "@/lib/finance/transactions-query";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
@@ -157,6 +175,7 @@ type FormState = {
   type: TransactionType;
   categoryId: string;
   accountId: string;
+  toAccountId: string;
   date: string;
   isRecurring: boolean;
   frequency: RecurrenceFrequency;
@@ -357,6 +376,9 @@ function LancamentosPageContent() {
   const { user, activeFamily, isFamilyAdmin } = useAppContext();
   const currentMonthKey = useMemo(() => getMonthKey(), []);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [importedTransactionIds, setImportedTransactionIds] = useState<
+    Set<string>
+  >(() => new Set());
   const [pendingPredictions, setPendingPredictions] = useState<
     PendingPrediction[]
   >([]);
@@ -440,6 +462,7 @@ function LancamentosPageContent() {
     type: "expense",
     categoryId: "",
     accountId: "",
+    toAccountId: "",
     date: new Date().toISOString().slice(0, 10),
     isRecurring: false,
     frequency: "monthly",
@@ -466,6 +489,14 @@ function LancamentosPageContent() {
 
     return accounts.filter((account) => canPostToAccount(account, user.id));
   }, [accounts, user]);
+
+  const transferEligibleAccounts = useMemo(
+    () =>
+      user
+        ? getTransferEligiblePostableAccounts(accounts, user.id)
+        : [],
+    [accounts, user],
+  );
 
   const { bankAccounts, creditCards } = useMemo(
     () => partitionAccountsForFilter(accounts),
@@ -561,6 +592,25 @@ function LancamentosPageContent() {
       }
     }
 
+    let nextImportedIds = new Set<string>();
+    if (scopedAccountIds.length > 0) {
+      const importRowsRes = await supabase
+        .from("import_batch_rows")
+        .select("transaction_id, linked_transaction_id")
+        .in("account_id", scopedAccountIds);
+
+      if (importRowsRes.error) {
+        console.error(importRowsRes.error);
+      } else {
+        nextImportedIds = collectImportedTransactionIds(
+          (importRowsRes.data ?? []) as Array<{
+            transaction_id: string | null;
+            linked_transaction_id: string | null;
+          }>,
+        );
+      }
+    }
+
     if (predictionsRes.error) {
       console.error(predictionsRes.error);
     } else {
@@ -630,6 +680,7 @@ function LancamentosPageContent() {
     setCategoryVisibility(visibility);
 
     setTransactions(transactionRows.map((row) => mapTransaction(row)));
+    setImportedTransactionIds(nextImportedIds);
     setSettledDiffByTransactionId(settledDiffs);
     setMonthlyPredictionAggregates(monthlyPredictionResult.aggregates);
     setPendingPredictions(
@@ -809,9 +860,28 @@ function LancamentosPageContent() {
     [accounts, categories],
   );
 
+  const transactionOriginsById = useMemo(() => {
+    const map = new Map<
+      string,
+      ReturnType<typeof resolveTransactionOrigin>
+    >();
+    for (const transaction of transactions) {
+      map.set(
+        transaction.id,
+        resolveTransactionOrigin(transaction.id, importedTransactionIds),
+      );
+    }
+    return map;
+  }, [importedTransactionIds, transactions]);
+
   const transactionSearchIndex = useMemo(
-    () => buildTransactionSearchIndex(transactions, searchLookups),
-    [searchLookups, transactions],
+    () =>
+      buildTransactionSearchIndex(
+        transactions,
+        searchLookups,
+        transactionOriginsById,
+      ),
+    [searchLookups, transactionOriginsById, transactions],
   );
 
   const filteredTransactions = useMemo(() => {
@@ -829,6 +899,11 @@ function LancamentosPageContent() {
     transactionSearchIndex,
     transactions,
   ]);
+
+  const transactionById = useMemo(
+    () => new Map(transactions.map((item) => [item.id, item])),
+    [transactions],
+  );
 
   const visiblePendingPredictions = useMemo(
     () =>
@@ -1087,12 +1162,17 @@ function LancamentosPageContent() {
   function resetForm() {
     setEditingId(null);
     setEditingRecurrenceId(null);
+    const defaultFrom = transferEligibleAccounts[0]?.id ?? postableAccounts[0]?.id ?? "";
+    const defaultTo =
+      transferEligibleAccounts.find((account) => account.id !== defaultFrom)?.id ??
+      "";
     setForm({
       description: "",
       amount: "",
       type: "expense",
       categoryId: getDefaultCategoryId("expense", activeCategories),
       accountId: postableAccounts[0]?.id ?? "",
+      toAccountId: defaultTo,
       date: new Date().toISOString().slice(0, 10),
       isRecurring: false,
       frequency: "monthly",
@@ -1113,6 +1193,7 @@ function LancamentosPageContent() {
       type: recurrence.type,
       categoryId: recurrence.categoryId ?? "",
       accountId: recurrence.accountId,
+      toAccountId: "",
       date: recurrence.startDate,
       isRecurring: true,
       frequency: recurrence.frequency,
@@ -1151,14 +1232,42 @@ function LancamentosPageContent() {
   }, [accountFilter, appliedSearchTerm, loading, period, router, searchParams]);
 
   function handleTypeChange(type: TransactionType) {
-    setForm((current) => ({
-      ...current,
-      type,
-      categoryId: getDefaultCategoryId(type, activeCategories),
-    }));
+    setForm((current) => {
+      const nextFrom =
+        type === "transfer"
+          ? transferEligibleAccounts.some((account) => account.id === current.accountId)
+            ? current.accountId
+            : transferEligibleAccounts[0]?.id ?? ""
+          : current.accountId || postableAccounts[0]?.id || "";
+
+      const nextTo =
+        type === "transfer"
+          ? transferEligibleAccounts.find((account) => account.id !== nextFrom)?.id ??
+            ""
+          : "";
+
+      return {
+        ...current,
+        type,
+        categoryId:
+          type === "transfer"
+            ? ""
+            : getDefaultCategoryId(type, activeCategories),
+        accountId: nextFrom,
+        toAccountId: nextTo,
+        isRecurring: type === "transfer" ? false : current.isRecurring,
+      };
+    });
   }
 
   function handleEdit(transaction: Transaction) {
+    if (isLinkedAccountTransfer(transaction)) {
+      toast.info(
+        "Transferências vinculadas não podem ser editadas nesta versão. Exclua o par e crie novamente.",
+      );
+      return;
+    }
+
     setEditingRecurrenceId(null);
     setEditingId(transaction.id);
     setForm({
@@ -1167,6 +1276,7 @@ function LancamentosPageContent() {
       type: transaction.type,
       categoryId: transaction.categoryId ?? "",
       accountId: transaction.accountId,
+      toAccountId: "",
       date: transaction.date,
       isRecurring: false,
       frequency: "monthly",
@@ -1216,6 +1326,28 @@ function LancamentosPageContent() {
   async function handleDelete(transaction: Transaction) {
     if (!canManageTransaction(transaction)) {
       toast.error("Você não tem permissão para excluir este lançamento.");
+      return;
+    }
+
+    if (isLinkedAccountTransfer(transaction)) {
+      const confirmed = await confirm({
+        title: "Excluir transferência",
+        description:
+          "Isso remove os dois lados da transferência (origem e destino) e reverte os saldos. Essa ação não pode ser desfeita.",
+        confirmLabel: "Excluir transferência",
+        destructive: true,
+      });
+
+      if (!confirmed) return;
+
+      const result = await deleteAccountTransfer(supabase, transaction.id);
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+
+      await loadData();
+      toast.success("Transferência excluída.");
       return;
     }
 
@@ -1433,8 +1565,16 @@ function LancamentosPageContent() {
     if (!user) return;
 
     const parsedAmount = Number(form.amount.replace(",", "."));
+    const isTransfer = form.type === "transfer";
 
-    if (!form.description.trim() || !parsedAmount || parsedAmount <= 0) {
+    if ((!isTransfer && !form.description.trim()) || !parsedAmount || parsedAmount <= 0) {
+      return;
+    }
+
+    if (isTransfer && isEditing) {
+      toast.error(
+        "Transferências vinculadas não podem ser editadas. Exclua o par e crie novamente.",
+      );
       return;
     }
 
@@ -1454,6 +1594,36 @@ function LancamentosPageContent() {
 
     if (recurrenceValidationError) {
       toast.error(recurrenceValidationError);
+      return;
+    }
+
+    if (isTransfer) {
+      if (transferEligibleAccounts.length < 2) {
+        toast.error(TRANSFER_NEED_ACCOUNTS_MESSAGE);
+        return;
+      }
+
+      setSaving(true);
+
+      const result = await createAccountTransfer(supabase, {
+        fromAccountId: form.accountId,
+        toAccountId: form.toAccountId,
+        amount: parsedAmount,
+        transactionDate: form.date,
+        description: form.description.trim() || null,
+      });
+
+      if (!result.ok) {
+        toast.error(result.message);
+        setSaving(false);
+        return;
+      }
+
+      await loadData();
+      resetForm();
+      setOpen(false);
+      setSaving(false);
+      toast.success("Transferência registrada.");
       return;
     }
 
@@ -1655,9 +1825,7 @@ function LancamentosPageContent() {
             <optgroup label="Contas">
               {bankAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
-                  {account.name}
-                  {account.account_mode === "forecast" ? " (provisão)" : ""}
-                  {account.is_family_shared ? " · familiar" : ""}
+                  {formatAccountSelectLabel(account, { includeScope: true })}
                 </option>
               ))}
             </optgroup>
@@ -1666,9 +1834,7 @@ function LancamentosPageContent() {
             <optgroup label="Cartões">
               {creditCards.map((account) => (
                 <option key={account.id} value={account.id}>
-                  {account.name}
-                  {account.account_mode === "forecast" ? " (provisão)" : ""}
-                  {account.is_family_shared ? " · familiar" : ""}
+                  {formatAccountSelectLabel(account, { includeScope: true })}
                 </option>
               ))}
             </optgroup>
@@ -1907,9 +2073,7 @@ function LancamentosPageContent() {
                 ) : null}
                 {postableAccounts.map((account) => (
                   <option key={account.id} value={account.id}>
-                    {account.name}
-                    {account.account_mode === "forecast" ? " (provisão)" : ""}
-                    {account.is_family_shared ? " (familiar)" : " (pessoal)"}
+                    {formatAccountSelectLabel(account, { includeScope: true })}
                   </option>
                 ))}
               </FormSelect>
@@ -2127,6 +2291,7 @@ function LancamentosPageContent() {
                 onChange={(event) =>
                   handleTypeChange(event.target.value as TransactionType)
                 }
+                disabled={isEditing || isEditingRecurrence}
               >
                 <option value="expense">Despesa</option>
                 <option value="income">Receita</option>
@@ -2135,7 +2300,11 @@ function LancamentosPageContent() {
 
               <FormInput
                 id="description"
-                label="Descrição"
+                label={
+                  form.type === "transfer"
+                    ? "Descrição (opcional)"
+                    : "Descrição"
+                }
                 type="text"
                 value={form.description}
                 onChange={(event) =>
@@ -2144,8 +2313,12 @@ function LancamentosPageContent() {
                     description: event.target.value,
                   }))
                 }
-                placeholder="Ex.: Supermercado, salário, TED..."
-                required
+                placeholder={
+                  form.type === "transfer"
+                    ? "Ex.: Reserva do mês, ajuste entre contas..."
+                    : "Ex.: Supermercado, salário, TED..."
+                }
+                required={form.type !== "transfer"}
               />
 
               <div className="grid gap-5 sm:grid-cols-2">
@@ -2184,49 +2357,128 @@ function LancamentosPageContent() {
                 />
               </div>
 
-              <div className="grid gap-5 sm:grid-cols-2">
-                <FormSelect
-                  id="category"
-                  label="Categoria"
-                  value={form.categoryId}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      categoryId: event.target.value,
-                    }))
-                  }
-                >
-                  {selectableFormCategories.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-                </FormSelect>
+              {form.type === "transfer" ? (
+                <div className="space-y-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-4">
+                  <p className="text-sm text-muted-foreground">
+                    {TRANSFER_FLOW_HINT}
+                  </p>
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <FormSelect
+                      id="transfer-from-account"
+                      label="Sai de"
+                      value={form.accountId}
+                      onChange={(event) =>
+                        setForm((current) => {
+                          const nextFrom = event.target.value;
+                          const nextTo =
+                            current.toAccountId === nextFrom
+                              ? transferEligibleAccounts.find(
+                                  (account) => account.id !== nextFrom,
+                                )?.id ?? ""
+                              : current.toAccountId;
+                          return {
+                            ...current,
+                            accountId: nextFrom,
+                            toAccountId: nextTo,
+                          };
+                        })
+                      }
+                      required
+                      data-testid="transfer-from-account"
+                    >
+                      <option value="">Selecione a origem</option>
+                      {transferEligibleAccounts.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {formatAccountSelectLabel(account, {
+                            includeType: true,
+                            includeScope: true,
+                          })}
+                        </option>
+                      ))}
+                    </FormSelect>
 
-                <FormSelect
-                  id="account"
-                  label="Conta"
-                  value={form.accountId}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      accountId: event.target.value,
-                    }))
-                  }
-                >
-                  {postableAccounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                      {account.account_mode === "forecast"
-                        ? " (provisão)"
-                        : ""}
-                      {account.is_family_shared ? " (familiar)" : " (pessoal)"}
-                    </option>
-                  ))}
-                </FormSelect>
-              </div>
+                    <FormSelect
+                      id="transfer-to-account"
+                      label="Entra em"
+                      value={form.toAccountId}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          toAccountId: event.target.value,
+                        }))
+                      }
+                      required
+                      data-testid="transfer-to-account"
+                    >
+                      <option value="">Selecione o destino</option>
+                      {transferEligibleAccounts
+                        .filter((account) => account.id !== form.accountId)
+                        .map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {formatAccountSelectLabel(account, {
+                              includeType: true,
+                              includeScope: true,
+                            })}
+                          </option>
+                        ))}
+                    </FormSelect>
+                  </div>
+                  {form.accountId && form.toAccountId ? (
+                    <p className="text-sm font-medium">
+                      Sai de{" "}
+                      <span className="text-destructive">
+                        {accounts.find((account) => account.id === form.accountId)
+                          ?.name ?? "origem"}
+                      </span>{" "}
+                      → entra em{" "}
+                      <span className="text-primary">
+                        {accounts.find((account) => account.id === form.toAccountId)
+                          ?.name ?? "destino"}
+                      </span>
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <FormSelect
+                    id="category"
+                    label="Categoria"
+                    value={form.categoryId}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        categoryId: event.target.value,
+                      }))
+                    }
+                  >
+                    {selectableFormCategories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </FormSelect>
 
-              {!isEditing || isEditingRecurrence ? (
+                  <FormSelect
+                    id="account"
+                    label="Conta"
+                    value={form.accountId}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        accountId: event.target.value,
+                      }))
+                    }
+                  >
+                    {postableAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {formatAccountSelectLabel(account, { includeScope: true })}
+                      </option>
+                    ))}
+                  </FormSelect>
+                </div>
+              )}
+
+              {form.type !== "transfer" && (!isEditing || isEditingRecurrence) ? (
                 <div className="space-y-4 rounded-xl border border-border/50 bg-muted/20 p-4">
                   {isEditingRecurrence ? (
                     <div className="space-y-1">
@@ -2500,9 +2752,7 @@ function LancamentosPageContent() {
               >
                 {postableAccounts.map((account) => (
                   <option key={account.id} value={account.id}>
-                    {account.name}
-                    {account.account_mode === "forecast" ? " (provisão)" : ""}
-                    {account.is_family_shared ? " (familiar)" : " (pessoal)"}
+                    {formatAccountSelectLabel(account, { includeScope: true })}
                   </option>
                 ))}
               </FormSelect>
@@ -3083,6 +3333,24 @@ function LancamentosPageContent() {
                   accountType: account?.type,
                 });
                 const invoiceLabel = getInvoicePaymentLabel(invoiceSignal);
+                const linkedTransfer = isLinkedAccountTransfer(transaction);
+                const origin = resolveTransactionOrigin(
+                  transaction.id,
+                  importedTransactionIds,
+                );
+                const originLabel = getTransactionOriginLabel(origin);
+                const linkedTransaction = transaction.linkedTransactionId
+                  ? transactionById.get(transaction.linkedTransactionId)
+                  : null;
+                const linkedAccount = linkedTransaction
+                  ? accountMap.get(linkedTransaction.accountId)
+                  : null;
+                const transferOut = isTransferOutDescription(
+                  transaction.description,
+                );
+                const transferIn = isTransferInDescription(
+                  transaction.description,
+                );
 
                 return (
                   <div
@@ -3090,9 +3358,12 @@ function LancamentosPageContent() {
                     className={cn(
                       "group -mx-2 flex flex-col gap-3 rounded-xl px-2 py-4 transition-colors first:pt-2 last:pb-2 hover:bg-muted/40 sm:flex-row sm:items-start sm:justify-between",
                       invoiceSignal && "bg-violet-500/5 hover:bg-violet-500/10",
+                      linkedTransfer && "bg-sky-500/5 hover:bg-sky-500/10",
                     )}
                     data-testid={`transaction-row-${transaction.id}`}
                     data-account-kind={accountKind}
+                    data-transfer-linked={linkedTransfer ? "true" : "false"}
+                    data-origin={origin}
                   >
                     <div className="flex min-w-0 flex-1 items-start gap-3">
                       <div
@@ -3111,9 +3382,41 @@ function LancamentosPageContent() {
                           {formatDate(transaction.date)}
                         </p>
                         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-                          <span>{category?.name ?? "Sem categoria"}</span>
+                          <span>
+                            {linkedTransfer
+                              ? "Transferência"
+                              : (category?.name ?? "Sem categoria")}
+                          </span>
                           <span aria-hidden>·</span>
-                          <span>{account?.name ?? "Conta"}</span>
+                          <span className="inline-flex min-w-0 items-center gap-1.5">
+                            {account ? (
+                              <AccountIdentityMark
+                                account={account}
+                                size="xs"
+                              />
+                            ) : null}
+                            <span className="truncate">
+                              {account?.name ?? "Conta"}
+                            </span>
+                          </span>
+                          {linkedAccount ? (
+                            <>
+                              <span aria-hidden>·</span>
+                              <span className="inline-flex min-w-0 items-center gap-1.5">
+                                <AccountIdentityMark
+                                  account={linkedAccount}
+                                  size="xs"
+                                />
+                                <span className="truncate">
+                                  {transferOut
+                                    ? `→ ${linkedAccount.name}`
+                                    : transferIn
+                                      ? `← ${linkedAccount.name}`
+                                      : `Vinculada a ${linkedAccount.name}`}
+                                </span>
+                              </span>
+                            </>
+                          ) : null}
                           <span aria-hidden>·</span>
                           <span>
                             {transaction.familyId ? "Compartilhado" : "Pessoal"}
@@ -3130,6 +3433,21 @@ function LancamentosPageContent() {
                           >
                             {accountKind}
                           </Badge>
+                          <Badge
+                            variant="outline"
+                            className={getTransactionOriginBadgeClass(origin)}
+                            data-testid={`transaction-origin-${transaction.id}`}
+                          >
+                            {originLabel}
+                          </Badge>
+                          {linkedTransfer ? (
+                            <Badge
+                              variant="outline"
+                              className="border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                            >
+                              Vinculada
+                            </Badge>
+                          ) : null}
                           {invoiceLabel ? (
                             <Badge
                               variant="outline"
@@ -3154,9 +3472,17 @@ function LancamentosPageContent() {
                           {config.label}
                         </Badge>
                         <span
-                          className={`text-base font-semibold tabular-nums ${config.valueClass}`}
+                          className={`text-base font-semibold tabular-nums ${
+                            transferOut
+                              ? typeMap.expense.valueClass
+                              : transferIn
+                                ? typeMap.income.valueClass
+                                : config.valueClass
+                          }`}
                         >
-                          {transaction.type === "expense" ? "-" : ""}
+                          {transaction.type === "expense" || transferOut
+                            ? "-"
+                            : ""}
                           {formatCurrency(transaction.amount)}
                         </span>
                       </div>
@@ -3175,19 +3501,23 @@ function LancamentosPageContent() {
                               </Button>
                             }
                           />
-                          <DropdownMenuContent align="end" className="w-40">
-                            <DropdownMenuItem
-                              onClick={() => handleEdit(transaction)}
-                            >
-                              <Pencil className="h-4 w-4" />
-                              Editar
-                            </DropdownMenuItem>
+                          <DropdownMenuContent align="end" className="w-44">
+                            {!linkedTransfer ? (
+                              <DropdownMenuItem
+                                onClick={() => handleEdit(transaction)}
+                              >
+                                <Pencil className="h-4 w-4" />
+                                Editar
+                              </DropdownMenuItem>
+                            ) : null}
                             <DropdownMenuItem
                               variant="destructive"
                               onClick={() => handleDelete(transaction)}
                             >
                               <Trash2 className="h-4 w-4" />
-                              Excluir
+                              {linkedTransfer
+                                ? "Excluir transferência"
+                                : "Excluir"}
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>

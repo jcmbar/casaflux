@@ -2,18 +2,14 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
-  CalendarClock,
-  Landmark,
   Loader2,
   Pencil,
-  PiggyBank,
   Plus,
   Trash2,
-  Users,
   Wallet,
 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
+import { AccountIdentity } from "@/components/finance/account-identity";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -67,41 +63,6 @@ const defaultForm: FormState = {
   allowFamilyView: true,
   allowFamilyPost: true,
   allowFamilyEdit: false,
-};
-
-const accountTypeMap: Record<
-  AccountType,
-  {
-    label: string;
-    icon: typeof Wallet;
-    badgeClass: string;
-  }
-> = {
-  checking: {
-    label: "Conta corrente",
-    icon: Landmark,
-    badgeClass: "border-primary/25 bg-primary/5 text-primary",
-  },
-  savings: {
-    label: "Poupança",
-    icon: PiggyBank,
-    badgeClass: "border-primary/20 bg-primary/5 text-primary",
-  },
-  cash: {
-    label: "Dinheiro",
-    icon: Wallet,
-    badgeClass: "border-border bg-muted/60 text-foreground",
-  },
-  credit_card: {
-    label: "Cartão de crédito",
-    icon: Wallet,
-    badgeClass: "border-destructive/25 bg-destructive/5 text-destructive",
-  },
-  investment: {
-    label: "Investimento",
-    icon: Landmark,
-    badgeClass: "border-border bg-muted/60 text-foreground",
-  },
 };
 
 export default function ContasPage() {
@@ -589,9 +550,7 @@ export default function ContasPage() {
           ) : (
             <div className="divide-y divide-border/60">
               {accounts.map((account) => {
-                const config = accountTypeMap[account.type];
                 const isForecast = account.account_mode === "forecast";
-                const Icon = isForecast ? CalendarClock : config.icon;
                 const editable = canManageAccount(account);
 
                 return (
@@ -603,52 +562,20 @@ export default function ContasPage() {
                         : "border-transparent hover:bg-muted/40"
                     }`}
                   >
-                    <div className="flex min-w-0 flex-1 items-start gap-3">
-                      <div
-                        className="flex size-10 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ring-black/5 dark:ring-white/10"
-                        style={{
-                          backgroundColor: `${account.color ?? "#0f766e"}18`,
-                          color: account.color ?? "#0f766e",
-                        }}
-                      >
-                        <Icon className="h-4 w-4" />
-                      </div>
-
-                      <div className="min-w-0 space-y-1.5">
-                        <p className="truncate font-medium">{account.name}</p>
-                        <div className="flex flex-wrap gap-1.5">
-                          <Badge
-                            variant="outline"
-                            className={config.badgeClass}
-                          >
-                            {config.label}
-                          </Badge>
-                          {isForecast ? (
-                            <Badge
-                              variant="outline"
-                              className="border-sky-300/70 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300"
-                            >
-                              <CalendarClock className="mr-1 h-3 w-3" />
-                              Provisão
-                            </Badge>
-                          ) : null}
-                          <Badge variant="outline" className="border-border/60">
-                            {account.is_family_shared ? (
-                              <>
-                                <Users className="mr-1 h-3 w-3" />
-                                Familiar
-                              </>
-                            ) : (
-                              "Pessoal"
-                            )}
-                          </Badge>
-                        </div>
-                        {account.families?.name ? (
-                          <p className="text-xs text-muted-foreground">
-                            Família: {account.families.name}
-                          </p>
-                        ) : null}
-                      </div>
+                    <div className="min-w-0 flex-1">
+                      <AccountIdentity
+                        account={account}
+                        size="lg"
+                        showName
+                        showType
+                        showScope
+                        description={
+                          account.families?.name
+                            ? `Família: ${account.families.name}`
+                            : null
+                        }
+                        className="w-full items-start"
+                      />
                     </div>
 
                     <div className="flex items-center justify-between gap-3 sm:justify-end">

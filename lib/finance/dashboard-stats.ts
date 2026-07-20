@@ -1,3 +1,4 @@
+import type { AccountType } from "@/types/account";
 import type { Transaction, TransactionRow } from "@/types/transaction";
 
 export function getMonthKey(referenceDate = new Date()) {
@@ -170,6 +171,8 @@ export type RecentTransactionItem = {
   date: string;
   categoryName: string | null;
   accountName: string | null;
+  accountType: AccountType | null;
+  accountColor: string | null;
 };
 
 export function getRecentTransactions(
@@ -197,6 +200,8 @@ export function getRecentTransactions(
       date: row.transaction_date,
       categoryName: row.categories?.name ?? null,
       accountName: row.accounts?.name ?? null,
+      accountType: row.accounts?.type ?? null,
+      accountColor: row.accounts?.color ?? null,
     }));
 }
 

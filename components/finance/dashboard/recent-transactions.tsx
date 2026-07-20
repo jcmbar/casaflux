@@ -6,6 +6,7 @@ import {
   Loader2,
 } from "lucide-react";
 
+import { AccountIdentityMark } from "@/components/finance/account-identity";
 import { DashboardPanelHeader } from "@/components/finance/dashboard/dashboard-panel-header";
 import { DashboardPanel } from "@/components/finance/dashboard/dashboard-panel";
 import { Badge } from "@/components/ui/badge";
@@ -112,7 +113,20 @@ export function RecentTransactions({
                     <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                       <span>{formatDate(transaction.date)}</span>
                       {transaction.accountName ? (
-                        <span>· {transaction.accountName}</span>
+                        <span className="inline-flex min-w-0 items-center gap-1.5">
+                          <span aria-hidden>·</span>
+                          <AccountIdentityMark
+                            account={{
+                              name: transaction.accountName,
+                              type: transaction.accountType,
+                              color: transaction.accountColor,
+                            }}
+                            size="xs"
+                          />
+                          <span className="truncate">
+                            {transaction.accountName}
+                          </span>
+                        </span>
                       ) : null}
                       {transaction.categoryName ? (
                         <span>· {transaction.categoryName}</span>

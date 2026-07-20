@@ -29,6 +29,7 @@ Apply these SQL files in order on your Supabase project (SQL Editor or Supabase 
 23. `20250624000023_commit_nubank_import.sql` — RPC `commit_nubank_import` (commit atômico de lançamentos + histórico)
 24. `20250624000024_import_category_on_commit.sql` — `category_id` opcional por transação no commit de importação
 25. `20250624000025_cleanup_include_import_history.sql` — limpeza financeira também remove `import_batches`/`import_batch_rows` (conta + cartão)
+26. `20250624000026_account_transfers.sql` — `linked_transaction_id` + RPCs `create_account_transfer` / `delete_account_transfer`
 
 ## Apply pending migrations
 

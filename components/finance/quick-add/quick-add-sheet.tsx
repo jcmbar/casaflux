@@ -10,6 +10,7 @@ import {
 import Link from "next/link";
 import { CalendarDays, Loader2, Plus, Repeat2 } from "lucide-react";
 
+import { AccountIdentityChipLabel } from "@/components/finance/account-identity";
 import { CurrencyInput } from "@/components/forms/currency-input";
 import { FormInput } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,19 @@ import {
 import { useAppContext } from "@/contexts/app-context";
 import { createRecurrence } from "@/lib/finance/create-recurrence";
 import { createTransaction } from "@/lib/finance/create-transaction";
+import {
+  createAccountTransfer,
+  TRANSFER_FLOW_HINT,
+  TRANSFER_NEED_ACCOUNTS_MESSAGE,
+} from "@/lib/finance/account-transfer";
+import {
+  QUICK_ADD_TYPE_OPTIONS,
+  buildQuickAddTransferInput,
+  getQuickAddTransferAccountsUiState,
+  isQuickAddTransferType,
+  listQuickAddTransferAccounts,
+  resolveQuickAddTransferAccounts,
+} from "@/lib/finance/quick-add-transfer";
 import {
   CATEGORIES_CHANGED_EVENT,
   notifyCategoriesChanged,
@@ -154,6 +168,7 @@ export function QuickAddSheet() {
   const [debouncedDescription, setDebouncedDescription] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [accountId, setAccountId] = useState("");
+  const [toAccountId, setToAccountId] = useState("");
   const [date, setDate] = useState(getTodayIsoDate);
   const [showDate, setShowDate] = useState(false);
   const [isRecurring, setIsRecurring] = useState(false);
@@ -168,22 +183,38 @@ export function QuickAddSheet() {
   const [showNewCategory, setShowNewCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
 
+  const userId = user?.id ?? null;
+  const activeFamilyId = activeFamily?.id ?? null;
+
   const scope = useMemo(
     () =>
-      user
+      userId
         ? getFinanceViewScope({
-            userId: user.id,
-            activeFamilyId: activeFamily?.id ?? null,
+            userId,
+            activeFamilyId,
           })
         : null,
-    [activeFamily?.id, user],
+    [activeFamilyId, userId],
   );
 
   const postableAccounts = useMemo(() => {
-    if (!user) return [];
+    if (!userId) return [];
 
-    return accounts.filter((account) => canPostToAccount(account, user.id));
-  }, [accounts, user]);
+    return accounts.filter((account) => canPostToAccount(account, userId));
+  }, [accounts, userId]);
+
+  // Same postable + type eligibility as /lancamentos (via shared helper).
+  const transferEligibleAccounts = useMemo(
+    () => (userId ? listQuickAddTransferAccounts(accounts, userId) : []),
+    [accounts, userId],
+  );
+
+  const transferAccountsUi = useMemo(
+    () => getQuickAddTransferAccountsUiState(transferEligibleAccounts.length),
+    [transferEligibleAccounts.length],
+  );
+
+  const isTransfer = isQuickAddTransferType(type);
 
   const categoriesForType = useMemo(
     () => categories.filter((category) => category.type === type),
@@ -209,6 +240,7 @@ export function QuickAddSheet() {
     setDebouncedDescription("");
     setCategoryId("");
     setAccountId("");
+    setToAccountId("");
     setDate(getTodayIsoDate());
     setShowDate(false);
     setIsRecurring(false);
@@ -223,20 +255,22 @@ export function QuickAddSheet() {
     setNewCategoryName("");
   }
 
-  async function loadQuickAddData() {
-    if (!scope || !user) return;
+  async function loadQuickAddData(options?: { silent?: boolean }) {
+    if (!scope || !userId) return;
 
-    setLoadingData(true);
+    if (!options?.silent) {
+      setLoadingData(true);
+    }
 
     const [accountsRes, categoriesRes, hiddenSystemCategoryIds] =
       await Promise.all([
-      supabase.from("accounts").select("*").order("name"),
-      supabase
-        .from("categories")
-        .select("id, name, type, owner_user_id, is_active")
-        .order("name"),
-      fetchHiddenSystemCategoryIds(supabase, user.id),
-    ]);
+        supabase.from("accounts").select("*").order("name"),
+        supabase
+          .from("categories")
+          .select("id, name, type, owner_user_id, is_active")
+          .order("name"),
+        fetchHiddenSystemCategoryIds(supabase, userId),
+      ]);
 
     if (accountsRes.error) {
       console.error(accountsRes.error);
@@ -291,26 +325,116 @@ export function QuickAddSheet() {
     setLoadingData(false);
   }
 
+  // Prefetch whenever finance scope is ready so transfer pickers aren't empty
+  // on first paint after opening the sheet.
+  useEffect(() => {
+    if (!scope || !userId) {
+      setAccounts([]);
+      setLoadingData(false);
+      return;
+    }
+
+    const activeScope = scope;
+    const activeUserId = userId;
+    let cancelled = false;
+
+    async function prefetch() {
+      setLoadingData(true);
+
+      const [accountsRes, categoriesRes, hiddenSystemCategoryIds] =
+        await Promise.all([
+          supabase.from("accounts").select("*").order("name"),
+          supabase
+            .from("categories")
+            .select("id, name, type, owner_user_id, is_active")
+            .order("name"),
+          fetchHiddenSystemCategoryIds(supabase, activeUserId),
+        ]);
+
+      if (cancelled) return;
+
+      if (accountsRes.error) {
+        console.error(accountsRes.error);
+      }
+
+      if (categoriesRes.error) {
+        console.error(categoriesRes.error);
+      }
+
+      const scopedAccounts = filterAccountsByFinanceScope(
+        (accountsRes.data ?? []) as Account[],
+        activeScope,
+      );
+      const scopedAccountIds = getScopedAccountIds(
+        (accountsRes.data ?? []) as Account[],
+        activeScope,
+      );
+
+      let transactionRows: TransactionRow[] = [];
+
+      if (scopedAccountIds.length > 0) {
+        const transactionsRes = await supabase
+          .from("transactions")
+          .select(TRANSACTIONS_SELECT)
+          .in("account_id", scopedAccountIds)
+          .order("transaction_date", { ascending: false })
+          .order("created_at", { ascending: false })
+          .limit(200);
+
+        if (cancelled) return;
+
+        if (transactionsRes.error) {
+          console.error(transactionsRes.error);
+        } else {
+          transactionRows = (transactionsRes.data ?? []) as TransactionRow[];
+        }
+      }
+
+      if (cancelled) return;
+
+      const visibilityContext: CategoryVisibilityContext = {
+        hiddenSystemCategoryIds,
+      };
+      const loadedCategories = (
+        (categoriesRes.data ?? []) as QuickAddCategory[]
+      ).map((category) => ({
+        ...category,
+        is_active: category.is_active ?? true,
+      }));
+
+      setAccounts(scopedAccounts);
+      setCategories(
+        filterActiveCategories(loadedCategories, visibilityContext),
+      );
+      setHistory(transactionRows.map((row) => mapTransaction(row)));
+      setLoadingData(false);
+    }
+
+    void prefetch();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [scope, supabase, userId]);
+
   useEffect(() => {
     if (!open) {
       resetForm();
       return;
     }
 
-    void loadQuickAddData();
-
     const timer = window.setTimeout(() => {
       amountRef.current?.focus();
     }, 150);
 
     return () => window.clearTimeout(timer);
-  }, [open, scope, user]);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
 
     function handleCategoriesChanged() {
-      void loadQuickAddData();
+      void loadQuickAddData({ silent: true });
     }
 
     window.addEventListener(CATEGORIES_CHANGED_EVENT, handleCategoriesChanged);
@@ -320,7 +444,7 @@ export function QuickAddSheet() {
         handleCategoriesChanged,
       );
     };
-  }, [open, scope, user]);
+  }, [open, scope, userId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -331,7 +455,27 @@ export function QuickAddSheet() {
   }, [description]);
 
   useEffect(() => {
-    if (!open || loadingData || !user || postableAccounts.length === 0) return;
+    if (!open || loadingData || !userId) return;
+
+    if (isTransfer) {
+      if (transferEligibleAccounts.length === 0 || userPickedAccount) return;
+
+      const resolved = resolveQuickAddTransferAccounts({
+        accounts: transferEligibleAccounts,
+        fromAccountId: accountId,
+        toAccountId,
+      });
+
+      if (resolved.fromAccountId && resolved.fromAccountId !== accountId) {
+        setAccountId(resolved.fromAccountId);
+      }
+      if (resolved.toAccountId && resolved.toAccountId !== toAccountId) {
+        setToAccountId(resolved.toAccountId);
+      }
+      return;
+    }
+
+    if (postableAccounts.length === 0) return;
 
     const suggestion = suggestTransactionDraft({
       type,
@@ -339,7 +483,7 @@ export function QuickAddSheet() {
       categories,
       accounts: postableAccounts,
       history,
-      userId: user.id,
+      userId,
     });
 
     if (!userPickedAccount && suggestion.accountId) {
@@ -353,17 +497,21 @@ export function QuickAddSheet() {
     open,
     loadingData,
     type,
+    isTransfer,
     debouncedDescription,
     categories,
     postableAccounts,
+    transferEligibleAccounts,
     history,
-    user,
+    userId,
     userPickedAccount,
     userPickedCategory,
+    accountId,
+    toAccountId,
   ]);
 
   useEffect(() => {
-    if (!open || userPickedCategory) return;
+    if (!open || userPickedCategory || isTransfer) return;
 
     if (
       categoryId &&
@@ -371,7 +519,7 @@ export function QuickAddSheet() {
     ) {
       setCategoryId(categoriesForType[0]?.id ?? "");
     }
-  }, [open, type, categoryId, categoriesForType, userPickedCategory]);
+  }, [open, type, categoryId, categoriesForType, userPickedCategory, isTransfer]);
 
   function handleTypeChange(nextType: TransactionType) {
     setType(nextType);
@@ -379,6 +527,18 @@ export function QuickAddSheet() {
     setUserPickedAccount(false);
     setShowNewCategory(false);
     setNewCategoryName("");
+
+    if (nextType === "transfer") {
+      setIsRecurring(false);
+      setCategoryId("");
+      const resolved = resolveQuickAddTransferAccounts({
+        accounts: transferEligibleAccounts,
+        fromAccountId: "",
+        toAccountId: "",
+      });
+      setAccountId(resolved.fromAccountId);
+      setToAccountId(resolved.toAccountId);
+    }
   }
 
   function handleCategorySelect(nextCategoryId: string) {
@@ -396,6 +556,25 @@ export function QuickAddSheet() {
   function handleAccountSelect(nextAccountId: string) {
     setUserPickedAccount(true);
     setAccountId(nextAccountId);
+
+    if (isTransfer && nextAccountId === toAccountId) {
+      const nextTo =
+        transferEligibleAccounts.find((account) => account.id !== nextAccountId)
+          ?.id ?? "";
+      setToAccountId(nextTo);
+    }
+  }
+
+  function handleToAccountSelect(nextAccountId: string) {
+    setUserPickedAccount(true);
+    setToAccountId(nextAccountId);
+
+    if (nextAccountId === accountId) {
+      const nextFrom =
+        transferEligibleAccounts.find((account) => account.id !== nextAccountId)
+          ?.id ?? "";
+      setAccountId(nextFrom);
+    }
   }
 
   async function handleCreateCategory() {
@@ -447,6 +626,39 @@ export function QuickAddSheet() {
 
     if (!isPositiveCents(amountCents)) {
       toast.error("Informe um valor válido.");
+      return;
+    }
+
+    if (isTransfer) {
+      if (!transferAccountsUi.canSubmitWithAccounts) {
+        toast.error(TRANSFER_NEED_ACCOUNTS_MESSAGE);
+        return;
+      }
+
+      const transferInput = buildQuickAddTransferInput({
+        fromAccountId: accountId,
+        toAccountId,
+        amountCents,
+        transactionDate: date,
+        description,
+      });
+
+      if ("error" in transferInput) {
+        toast.error(transferInput.error);
+        return;
+      }
+
+      setSaving(true);
+      const result = await createAccountTransfer(supabase, transferInput);
+      setSaving(false);
+
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+
+      toast.success("Transferência registrada.");
+      closeQuickAdd();
       return;
     }
 
@@ -524,11 +736,18 @@ export function QuickAddSheet() {
     closeQuickAdd();
   }
 
-  const canSubmit =
-    !loadingData &&
-    !saving &&
-    postableAccounts.length > 0 &&
-    isPositiveCents(amountCents);
+  const canSubmit = isTransfer
+    ? !loadingData &&
+      !saving &&
+      transferAccountsUi.canSubmitWithAccounts &&
+      Boolean(accountId) &&
+      Boolean(toAccountId) &&
+      accountId !== toAccountId &&
+      isPositiveCents(amountCents)
+    : !loadingData &&
+      !saving &&
+      postableAccounts.length > 0 &&
+      isPositiveCents(amountCents);
 
   return (
     <Sheet
@@ -550,21 +769,25 @@ export function QuickAddSheet() {
           className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5"
           onSubmit={handleSubmit}
         >
-          <div className="mb-4 grid grid-cols-2 gap-2">
-            {(["expense", "income"] as const).map((option) => (
+          <div className="mb-4 grid grid-cols-3 gap-2">
+            {QUICK_ADD_TYPE_OPTIONS.map((option) => (
               <Button
-                key={option}
+                key={option.value}
                 type="button"
-                variant={type === option ? "default" : "outline"}
+                variant={type === option.value ? "default" : "outline"}
                 className={cn(
-                  "h-11",
-                  type === option &&
-                    option === "expense" &&
+                  "h-11 px-2 text-sm",
+                  type === option.value &&
+                    option.value === "expense" &&
                     "bg-destructive text-white hover:bg-destructive/90",
+                  type === option.value &&
+                    option.value === "transfer" &&
+                    "bg-sky-600 text-white hover:bg-sky-600/90",
                 )}
-                onClick={() => handleTypeChange(option)}
+                onClick={() => handleTypeChange(option.value)}
+                data-testid={`quick-add-type-${option.value}`}
               >
-                {option === "expense" ? "Despesa" : "Receita"}
+                {option.label}
               </Button>
             ))}
           </div>
@@ -589,137 +812,253 @@ export function QuickAddSheet() {
 
           <FormInput
             id="quick-add-description"
-            label="Descrição"
-            placeholder="Ex.: mercado, salário, aluguel"
+            label={isTransfer ? "Descrição (opcional)" : "Descrição"}
+            placeholder={
+              isTransfer
+                ? "Ex.: reserva do mês, ajuste entre contas"
+                : "Ex.: mercado, salário, aluguel"
+            }
             value={description}
             onChange={(event) => setDescription(event.target.value)}
             autoComplete="off"
             data-testid="quick-add-description"
           />
 
-          <div className="mt-4 space-y-2">
-            <p className="text-sm font-medium">Conta</p>
-            {loadingData ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
-                Carregando contas…
-              </div>
-            ) : postableAccounts.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Nenhuma conta disponível para lançamento.
+          {isTransfer ? (
+            <div className="mt-4 space-y-4 rounded-xl border border-sky-500/20 bg-sky-500/5 p-3">
+              <p className="text-xs text-muted-foreground">
+                {TRANSFER_FLOW_HINT}
               </p>
-            ) : (
-              <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
-                {postableAccounts.map((account) => {
-                  const selected = account.id === accountId;
 
-                  return (
-                    <button
-                      key={account.id}
-                      type="button"
-                      onClick={() => handleAccountSelect(account.id)}
-                      className={cn(
-                        "shrink-0 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
-                        selected
-                          ? "border-primary bg-primary/10 text-primary"
-                          : "border-border bg-background text-foreground hover:bg-muted/60",
-                      )}
-                      data-testid={`quick-add-account-${account.id}`}
-                    >
-                      {account.name}
-                      {account.account_mode === "forecast"
-                        ? " · Provisão"
-                        : ""}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="mt-4 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium">Categoria</p>
-              <Link
-                href="/categorias"
-                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-                onClick={() => closeQuickAdd()}
-              >
-                Gerenciar categorias
-              </Link>
-            </div>
-
-            {showNewCategory ? (
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={newCategoryName}
-                  onChange={(event) => setNewCategoryName(event.target.value)}
-                  placeholder="Nome da categoria"
-                  className="h-10 min-w-0 flex-1 rounded-lg border border-input bg-surface-sunken/60 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/40"
-                  data-testid="quick-add-new-category-name"
-                  autoFocus
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  className="shrink-0"
-                  disabled={creatingCategory || !newCategoryName.trim()}
-                  onClick={() => void handleCreateCategory()}
-                  data-testid="quick-add-new-category-save"
+              {transferAccountsUi.showNeedMoreAccountsMessage && !loadingData ? (
+                <p
+                  className="text-sm text-muted-foreground"
+                  data-testid="quick-add-transfer-need-accounts"
                 >
-                  {creatingCategory ? (
+                  {TRANSFER_NEED_ACCOUNTS_MESSAGE}
+                </p>
+              ) : null}
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Sai de</p>
+                {loadingData ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    "Salvar"
-                  )}
-                </Button>
+                    Carregando contas…
+                  </div>
+                ) : transferAccountsUi.showFromPicker ? (
+                  <div
+                    className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
+                    data-testid="quick-add-transfer-from-list"
+                  >
+                    {transferEligibleAccounts.map((account) => {
+                      const selected = account.id === accountId;
+
+                      return (
+                        <button
+                          key={`from-${account.id}`}
+                          type="button"
+                          onClick={() => handleAccountSelect(account.id)}
+                          className={cn(
+                            "shrink-0 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
+                            selected
+                              ? "border-destructive/40 bg-destructive/10 text-destructive"
+                              : "border-border bg-background text-foreground hover:bg-muted/60",
+                          )}
+                          data-testid={`quick-add-transfer-from-${account.id}`}
+                        >
+                          <AccountIdentityChipLabel
+                            account={account}
+                            showType
+                          />
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
 
-            {categoriesForType.length === 0 && !showNewCategory ? (
-              <p className="text-sm text-muted-foreground">
-                Nenhuma categoria para este tipo.
-              </p>
-            ) : (
-              <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowNewCategory(true);
-                    setNewCategoryName("");
-                  }}
-                  className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-                  data-testid="quick-add-new-category"
-                >
-                  <Plus className="size-3.5" />
-                  Nova
-                </button>
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Entra em</p>
+                {loadingData ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" />
+                    Carregando contas…
+                  </div>
+                ) : transferAccountsUi.showToPicker ? (
+                  <div
+                    className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
+                    data-testid="quick-add-transfer-to-list"
+                  >
+                    {transferEligibleAccounts
+                      .filter((account) => account.id !== accountId)
+                      .map((account) => {
+                        const selected = account.id === toAccountId;
 
-                {categoriesForType.map((category) => {
-                  const selected = category.id === categoryId;
+                        return (
+                          <button
+                            key={`to-${account.id}`}
+                            type="button"
+                            onClick={() => handleToAccountSelect(account.id)}
+                            className={cn(
+                              "shrink-0 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
+                              selected
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-border bg-background text-foreground hover:bg-muted/60",
+                            )}
+                            data-testid={`quick-add-transfer-to-${account.id}`}
+                          >
+                            <AccountIdentityChipLabel
+                              account={account}
+                              showType
+                            />
+                          </button>
+                        );
+                      })}
+                  </div>
+                ) : null}
+              </div>
 
-                  return (
-                    <button
-                      key={category.id}
+              {accountId && toAccountId ? (
+                <p className="text-sm font-medium" data-testid="quick-add-transfer-summary">
+                  Sai de{" "}
+                  <span className="text-destructive">
+                    {accounts.find((account) => account.id === accountId)?.name ??
+                      "origem"}
+                  </span>{" "}
+                  → entra em{" "}
+                  <span className="text-primary">
+                    {accounts.find((account) => account.id === toAccountId)?.name ??
+                      "destino"}
+                  </span>
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <>
+              <div className="mt-4 space-y-2">
+                <p className="text-sm font-medium">Conta</p>
+                {loadingData ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin" />
+                    Carregando contas…
+                  </div>
+                ) : postableAccounts.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Nenhuma conta disponível para lançamento.
+                  </p>
+                ) : (
+                  <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                    {postableAccounts.map((account) => {
+                      const selected = account.id === accountId;
+
+                      return (
+                        <button
+                          key={account.id}
+                          type="button"
+                          onClick={() => handleAccountSelect(account.id)}
+                          className={cn(
+                            "inline-flex shrink-0 items-center rounded-full border px-2.5 py-1.5 text-sm font-medium transition-colors",
+                            selected
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border bg-background text-foreground hover:bg-muted/60",
+                          )}
+                          data-testid={`quick-add-account-${account.id}`}
+                        >
+                          <AccountIdentityChipLabel account={account} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium">Categoria</p>
+                  <Link
+                    href="/categorias"
+                    className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+                    onClick={() => closeQuickAdd()}
+                  >
+                    Gerenciar categorias
+                  </Link>
+                </div>
+
+                {showNewCategory ? (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newCategoryName}
+                      onChange={(event) => setNewCategoryName(event.target.value)}
+                      placeholder="Nome da categoria"
+                      className="h-10 min-w-0 flex-1 rounded-lg border border-input bg-surface-sunken/60 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/40"
+                      data-testid="quick-add-new-category-name"
+                      autoFocus
+                    />
+                    <Button
                       type="button"
-                      onClick={() => handleCategorySelect(category.id)}
-                      className={cn(
-                        "shrink-0 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
-                        selected
-                          ? "border-primary bg-primary/10 text-primary"
-                          : "border-border bg-background text-foreground hover:bg-muted/60",
-                      )}
-                      data-testid={`quick-add-category-${category.id}`}
+                      size="sm"
+                      className="shrink-0"
+                      disabled={creatingCategory || !newCategoryName.trim()}
+                      onClick={() => void handleCreateCategory()}
+                      data-testid="quick-add-new-category-save"
                     >
-                      {category.name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+                      {creatingCategory ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        "Salvar"
+                      )}
+                    </Button>
+                  </div>
+                ) : null}
 
+                {categoriesForType.length === 0 && !showNewCategory ? (
+                  <p className="text-sm text-muted-foreground">
+                    Nenhuma categoria para este tipo.
+                  </p>
+                ) : (
+                  <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowNewCategory(true);
+                        setNewCategoryName("");
+                      }}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                      data-testid="quick-add-new-category"
+                    >
+                      <Plus className="size-3.5" />
+                      Nova
+                    </button>
+
+                    {categoriesForType.map((category) => {
+                      const selected = category.id === categoryId;
+
+                      return (
+                        <button
+                          key={category.id}
+                          type="button"
+                          onClick={() => handleCategorySelect(category.id)}
+                          className={cn(
+                            "shrink-0 rounded-full border px-3 py-2 text-sm font-medium transition-colors",
+                            selected
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border bg-background text-foreground hover:bg-muted/60",
+                          )}
+                          data-testid={`quick-add-category-${category.id}`}
+                        >
+                          {category.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {!isTransfer ? (
           <div
             className={cn(
               "mt-4 rounded-xl border transition-colors",
@@ -895,9 +1234,10 @@ export function QuickAddSheet() {
               </div>
             ) : null}
           </div>
+          ) : null}
 
           <div className="mt-4 pb-2">
-            {isRecurring ? null : showDate ? (
+            {isRecurring && !isTransfer ? null : showDate ? (
               <FormInput
                 id="quick-add-date"
                 label="Data"
@@ -934,8 +1274,12 @@ export function QuickAddSheet() {
                   <Loader2 className="size-4 animate-spin" />
                   Salvando…
                 </>
+              ) : isTransfer ? (
+                "Salvar transferência"
+              ) : isRecurring ? (
+                "Salvar recorrência"
               ) : (
-                isRecurring ? "Salvar recorrência" : "Salvar lançamento"
+                "Salvar lançamento"
               )}
             </Button>
           </SheetFooter>

@@ -8,6 +8,7 @@ export const TRANSACTIONS_SELECT = `
     id,
     name,
     type,
+    color,
     is_family_shared
   )
 `;

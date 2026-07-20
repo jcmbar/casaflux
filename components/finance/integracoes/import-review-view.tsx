@@ -61,6 +61,7 @@ import type {
   ImportRowHistoricalStatus,
 } from "@/lib/integrations/types";
 import type { Category } from "@/types/category";
+import { formatAccountSelectLabel } from "@/lib/finance/account-identity";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
@@ -717,7 +718,7 @@ export function ImportReviewView() {
               <option value="">Selecione o cartão de destino</option>
               {creditCardAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
-                  {account.name}
+                  {formatAccountSelectLabel(account)}
                 </option>
               ))}
             </FormSelect>
@@ -734,7 +735,7 @@ export function ImportReviewView() {
               <option value="">Selecione a conta corrente de destino</option>
               {checkingAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
-                  {account.name}
+                  {formatAccountSelectLabel(account)}
                 </option>
               ))}
             </FormSelect>
@@ -1077,10 +1078,10 @@ export function ImportReviewView() {
                         >
                           <option value="">Selecione a conta bancária de origem</option>
                           {checkingAccounts.map((account) => (
-                            <option key={account.id} value={account.id}>
-                              {account.name}
-                            </option>
-                          ))}
+                <option key={account.id} value={account.id}>
+                  {formatAccountSelectLabel(account)}
+                </option>
+              ))}
                         </FormSelect>
                       </div>
                     ) : null}
@@ -1194,10 +1195,10 @@ export function ImportReviewView() {
                                 Selecione a conta bancária de origem
                               </option>
                               {checkingAccounts.map((account) => (
-                                <option key={account.id} value={account.id}>
-                                  {account.name}
-                                </option>
-                              ))}
+                <option key={account.id} value={account.id}>
+                  {formatAccountSelectLabel(account)}
+                </option>
+              ))}
                             </FormSelect>
                           </div>
                         ) : null}

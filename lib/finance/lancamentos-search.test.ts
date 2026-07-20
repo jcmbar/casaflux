@@ -99,6 +99,16 @@ const invoiceCard = makeTx({
   date: "2026-06-26",
 });
 
+const transferManual = makeTx({
+  id: "t-transfer",
+  description: "Transferência para Carteira",
+  amount: 200,
+  type: "transfer",
+  categoryId: null,
+  accountId: "checking-1",
+  date: "2026-07-12",
+});
+
 const allTx = [netflix, unimed, salary, invoiceCard];
 
 describe("normalizeSearchText", () => {
@@ -198,6 +208,42 @@ describe("filterTransactionsBySearch", () => {
       index,
     );
     expect(rows.map((row) => row.id)).toContain("t-invoice-card");
+  });
+
+  it("finds by origin Manual and Importado", () => {
+    const origins = new Map([
+      ["t-netflix", "imported" as const],
+      ["t-unimed", "manual" as const],
+      ["t-salary", "manual" as const],
+      ["t-invoice-card", "imported" as const],
+      ["t-transfer", "manual" as const],
+    ]);
+    const withOrigins = buildTransactionSearchIndex(
+      [...allTx, transferManual],
+      lookups,
+      origins,
+    );
+
+    const imported = filterTransactionsBySearch(
+      [...allTx, transferManual],
+      "importado",
+      withOrigins,
+    );
+    expect(imported.map((row) => row.id).sort()).toEqual([
+      "t-invoice-card",
+      "t-netflix",
+    ]);
+
+    const manual = filterTransactionsBySearch(
+      [...allTx, transferManual],
+      "manual",
+      withOrigins,
+    );
+    expect(manual.map((row) => row.id).sort()).toEqual([
+      "t-salary",
+      "t-transfer",
+      "t-unimed",
+    ]);
   });
 });
 

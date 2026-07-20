@@ -8,6 +8,11 @@ import {
   getAccountKindLabel,
   getInvoicePaymentLabel,
 } from "./lancamentos-filters";
+import { resolveInstitutionFromName } from "./institutions";
+import {
+  getTransactionOriginLabel,
+  type TransactionOrigin,
+} from "./transaction-origin";
 
 /** Debounce for auto-apply while typing (hybrid UX). */
 export const LANCAMENTOS_SEARCH_DEBOUNCE_MS = 350;
@@ -105,6 +110,7 @@ export function buildTransactionSearchTokens(
     "id" | "description" | "amount" | "type" | "categoryId" | "accountId" | "date"
   >,
   lookups: LancamentosSearchLookups,
+  options?: { origin?: TransactionOrigin },
 ): string[] {
   const account = lookups.accountsById.get(transaction.accountId);
   const category = transaction.categoryId
@@ -118,6 +124,8 @@ export function buildTransactionSearchTokens(
     }),
   );
 
+  const origin = options?.origin;
+
   const tokens: string[] = [
     transaction.description,
     ...typeSearchTokens(transaction.type),
@@ -130,10 +138,18 @@ export function buildTransactionSearchTokens(
 
   if (account) {
     tokens.push(ACCOUNT_TYPE_LABELS[account.type]);
+    const institution = resolveInstitutionFromName(account.name);
+    if (institution.id !== "other") {
+      tokens.push(institution.name, institution.id);
+    }
   }
 
   if (invoiceLabel) {
     tokens.push(invoiceLabel);
+  }
+
+  if (origin) {
+    tokens.push(origin, getTransactionOriginLabel(origin));
   }
 
   return tokens.filter(Boolean);
@@ -145,9 +161,10 @@ export function buildTransactionSearchDocument(
     "id" | "description" | "amount" | "type" | "categoryId" | "accountId" | "date"
   >,
   lookups: LancamentosSearchLookups,
+  options?: { origin?: TransactionOrigin },
 ): LancamentosSearchDocument {
   const haystack = normalizeSearchText(
-    buildTransactionSearchTokens(transaction, lookups).join(" "),
+    buildTransactionSearchTokens(transaction, lookups, options).join(" "),
   );
 
   return {
@@ -161,11 +178,17 @@ export function buildTransactionSearchIndex<
     Transaction,
     "id" | "description" | "amount" | "type" | "categoryId" | "accountId" | "date"
   >,
->(transactions: T[], lookups: LancamentosSearchLookups): Map<string, string> {
+>(
+  transactions: T[],
+  lookups: LancamentosSearchLookups,
+  originsByTransactionId?: ReadonlyMap<string, TransactionOrigin>,
+): Map<string, string> {
   const index = new Map<string, string>();
 
   for (const transaction of transactions) {
-    const document = buildTransactionSearchDocument(transaction, lookups);
+    const document = buildTransactionSearchDocument(transaction, lookups, {
+      origin: originsByTransactionId?.get(transaction.id),
+    });
     index.set(document.transactionId, document.haystack);
   }
 

@@ -3,6 +3,7 @@ import type { Transaction } from "@/types/transaction";
 const mockDefaults = {
   createdBy: "mock-user",
   familyId: null,
+  linkedTransactionId: null,
 } as const;
 
 export const mockTransactions: Transaction[] = [
