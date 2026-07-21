@@ -5,12 +5,14 @@ import {
   ChevronLeft,
   ChevronRight,
   List,
+  Search,
   SkipForward,
   Sparkles,
   Wand2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { useConfirm } from "@/components/feedback/confirm-dialog-provider";
 import { ImportRowCategoryField } from "@/components/finance/import-row-category-field";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,8 +22,16 @@ import {
   ProgressLabel,
   ProgressValue,
 } from "@/components/ui/progress";
-import { applyHighConfidenceWithPropagation } from "@/lib/integrations/categories/import-category-propagation";
 import {
+  applyCategoryToImportRowsBatch,
+  filterImportRowsByCategoryKeyword,
+  formatBatchCategoryApplyMessage,
+  IMPORT_CATEGORY_BATCH_TYPE_FILTER_LABELS,
+  resolveBatchApplyTargetLines,
+  type ImportCategoryBatchTypeFilter,
+} from "@/lib/integrations/categories/import-category-batch-filter";
+import {
+  applyHighConfidenceWithPropagation,
   formatImportCategoryPropagationLabel,
   getSimilarUncategorizedLines,
   type ImportCategoryPropagationOffer,
@@ -45,6 +55,10 @@ import type { ImportPreviewRow } from "@/lib/integrations/types";
 import type { Category } from "@/types/category";
 import { cn } from "@/lib/utils";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { toast } from "@/lib/toast";
+import { FormSelect, formSelectClassName } from "@/components/forms/form-controls";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 const categorySourceLabels: Record<
   NonNullable<ImportPreviewRow["categorySuggestion"]>["source"],
@@ -325,6 +339,389 @@ function AssistedCategoryReview({
   );
 }
 
+function BatchCategoryFilterPanel({
+  rows,
+  categories,
+  categoryCatalog,
+  onRowsChange,
+}: {
+  rows: ImportPreviewRow[];
+  categories: Category[];
+  categoryCatalog: CategorySuggestionCatalogItem[];
+  onRowsChange: (rows: ImportPreviewRow[]) => void;
+}) {
+  const confirm = useConfirm();
+  const [keyword, setKeyword] = useState("");
+  const [typeFilter, setTypeFilter] =
+    useState<ImportCategoryBatchTypeFilter>("all");
+  const [selectedLines, setSelectedLines] = useState<number[]>([]);
+  const [batchCategoryId, setBatchCategoryId] = useState("");
+  const [includeConfirmed, setIncludeConfirmed] = useState(false);
+
+  const filteredRows = useMemo(
+    () =>
+      filterImportRowsByCategoryKeyword(rows, keyword, {
+        includeConfirmed,
+        typeFilter,
+      }),
+    [includeConfirmed, keyword, rows, typeFilter],
+  );
+
+  const selectedCategory = categories.find(
+    (category) => category.id === batchCategoryId,
+  );
+
+  const categoriesForBatch = useMemo(() => {
+    if (typeFilter !== "all") {
+      return categories.filter((category) => category.type === typeFilter);
+    }
+
+    if (filteredRows.length === 0) {
+      return categories;
+    }
+
+    const types = new Set(
+      filteredRows.map((row) => resolveImportRowTransactionType(row)),
+    );
+    return categories.filter((category) => types.has(category.type));
+  }, [categories, filteredRows, typeFilter]);
+
+  useEffect(() => {
+    setSelectedLines((current) =>
+      current.filter((line) =>
+        filteredRows.some((row) => row.sourceLine === line),
+      ),
+    );
+  }, [filteredRows]);
+
+  useEffect(() => {
+    if (
+      batchCategoryId &&
+      !categoriesForBatch.some((category) => category.id === batchCategoryId)
+    ) {
+      setBatchCategoryId("");
+    }
+  }, [batchCategoryId, categoriesForBatch]);
+
+  function toggleLine(sourceLine: number) {
+    setSelectedLines((current) =>
+      current.includes(sourceLine)
+        ? current.filter((line) => line !== sourceLine)
+        : [...current, sourceLine],
+    );
+  }
+
+  function selectAllFiltered() {
+    setSelectedLines(filteredRows.map((row) => row.sourceLine));
+  }
+
+  function clearSelection() {
+    setSelectedLines([]);
+  }
+
+  async function applyBatch(scope: "selected" | "filtered") {
+    if (!selectedCategory) {
+      toast.error("Selecione uma categoria para aplicar em lote.");
+      return;
+    }
+
+    if (scope === "selected" && selectedLines.length === 0) {
+      toast.error("Selecione ao menos um lançamento filtrado.");
+      return;
+    }
+
+    const targetLines = resolveBatchApplyTargetLines({
+      filteredRows,
+      selectedSourceLines: selectedLines,
+      scope,
+      includeConfirmed,
+    });
+
+    if (targetLines.length === 0) {
+      toast.error("Nenhum lançamento elegível para aplicar a categoria.");
+      return;
+    }
+
+    const typeMatchedLines = targetLines.filter((sourceLine) => {
+      const row = filteredRows.find((item) => item.sourceLine === sourceLine);
+      return (
+        row != null &&
+        resolveImportRowTransactionType(row) === selectedCategory.type
+      );
+    });
+
+    if (typeMatchedLines.length === 0) {
+      toast.error(
+        `Nenhum lançamento filtrado combina com o tipo da categoria "${selectedCategory.name}".`,
+      );
+      return;
+    }
+
+    const skippedTypeCount = targetLines.length - typeMatchedLines.length;
+
+    const confirmed = await confirm({
+      title: "Aplicar categoria em lote",
+      description: [
+        formatBatchCategoryApplyMessage({
+          categoryName: selectedCategory.name,
+          appliedCount: typeMatchedLines.length,
+          skippedConfirmedCount: 0,
+        }),
+        includeConfirmed
+          ? "Lançamentos já confirmados na lista serão reclassificados."
+          : null,
+        skippedTypeCount > 0
+          ? `${skippedTypeCount} ignorado(s) por tipo incompatível.`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      confirmLabel: "Aplicar",
+      cancelLabel: "Cancelar",
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    const result = applyCategoryToImportRowsBatch({
+      rows,
+      sourceLines: typeMatchedLines,
+      categoryId: selectedCategory.id,
+      catalog: categoryCatalog,
+      includeConfirmed,
+    });
+
+    onRowsChange(result.rows);
+    setSelectedLines((current) =>
+      current.filter((line) => !result.appliedLines.includes(line)),
+    );
+    toast.success(
+      `${result.appliedLines.length} lançamento(s) categorizados como "${selectedCategory.name}".`,
+    );
+  }
+
+  const hasKeyword = keyword.trim().length > 0;
+  const typeFilterOptions: ImportCategoryBatchTypeFilter[] = [
+    "all",
+    "expense",
+    "income",
+  ];
+
+  return (
+    <div
+      className="space-y-3 rounded-xl border border-border/50 bg-muted/10 px-4 py-4"
+      data-testid="import-category-batch-filter"
+    >
+      <div className="space-y-1">
+        <p className="text-sm font-medium">Filtro e aplicação em lote</p>
+        <p className="text-sm text-muted-foreground">
+          Busque por descrição ou merchant (ex.: ifood) e aplique uma categoria
+          aos resultados ou à seleção.
+        </p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(11rem,14rem)] sm:items-end">
+        <div className="space-y-2">
+          <Label htmlFor="import-category-batch-keyword">Busca</Label>
+          <div className="relative">
+            <Search
+              aria-hidden
+              className="pointer-events-none absolute top-1/2 left-3 z-10 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              id="import-category-batch-keyword"
+              value={keyword}
+              onChange={(event) => setKeyword(event.target.value)}
+              placeholder="Filtrar por palavra-chave…"
+              className="h-10 bg-surface-sunken/60 pr-3 pl-10 dark:bg-input/40"
+              data-testid="import-category-batch-keyword"
+              aria-label="Filtrar lançamentos por palavra-chave"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="import-category-batch-type-filter">Tipo</Label>
+          <select
+            id="import-category-batch-type-filter"
+            value={typeFilter}
+            onChange={(event) =>
+              setTypeFilter(event.target.value as ImportCategoryBatchTypeFilter)
+            }
+            className={cn(formSelectClassName, "min-w-0")}
+            data-testid="import-category-batch-type-filter"
+          >
+            {typeFilterOptions.map((option) => (
+              <option key={option} value={option}>
+                {IMPORT_CATEGORY_BATCH_TYPE_FILTER_LABELS[option]}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="flex items-start gap-2">
+        <input
+          id="import-category-batch-include-confirmed"
+          type="checkbox"
+          checked={includeConfirmed}
+          onChange={(event) => setIncludeConfirmed(event.target.checked)}
+          className="mt-0.5 size-4 accent-primary"
+          data-testid="import-category-batch-include-confirmed"
+        />
+        <Label
+          htmlFor="import-category-batch-include-confirmed"
+          className="text-xs font-normal text-muted-foreground"
+        >
+          Incluir lançamentos já confirmados na lista (permite reclassificar)
+        </Label>
+      </div>
+
+      {!hasKeyword ? (
+        <p className="text-xs text-muted-foreground">
+          Digite um termo para listar lançamentos compatíveis.
+        </p>
+      ) : filteredRows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {includeConfirmed
+            ? `Nenhum lançamento encontrado para “${keyword.trim()}”${
+                typeFilter === "all"
+                  ? ""
+                  : ` em ${IMPORT_CATEGORY_BATCH_TYPE_FILTER_LABELS[typeFilter].toLowerCase()}`
+              }.`
+            : `Nenhum lançamento pendente encontrado para “${keyword.trim()}”${
+                typeFilter === "all"
+                  ? ""
+                  : ` em ${IMPORT_CATEGORY_BATCH_TYPE_FILTER_LABELS[typeFilter].toLowerCase()}`
+              }. Marque “incluir já confirmados” para vê-los.`}
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">
+              {filteredRows.length} resultado(s) · {selectedLines.length}{" "}
+              selecionado(s)
+              {!includeConfirmed ? " · só pendentes" : null}
+              {typeFilter !== "all"
+                ? ` · ${IMPORT_CATEGORY_BATCH_TYPE_FILTER_LABELS[typeFilter]}`
+                : null}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={selectAllFiltered}
+                data-testid="import-category-batch-select-all"
+              >
+                Selecionar todos
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={clearSelection}
+                disabled={selectedLines.length === 0}
+                data-testid="import-category-batch-clear-selection"
+              >
+                Limpar seleção
+              </Button>
+            </div>
+          </div>
+
+          <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+            {filteredRows.map((row) => {
+              const checked = selectedLines.includes(row.sourceLine);
+              const checkboxId = `batch-filter-row-${row.sourceLine}`;
+
+              return (
+                <label
+                  key={checkboxId}
+                  htmlFor={checkboxId}
+                  className={cn(
+                    "flex cursor-pointer items-start gap-3 rounded-lg border border-border/50 px-3 py-2.5",
+                    checked && "border-primary/30 bg-primary/5",
+                    row.categoryStatus === "confirmed" && "bg-emerald-500/5",
+                  )}
+                  data-testid={`import-category-batch-row-${row.sourceLine}`}
+                >
+                  <input
+                    id={checkboxId}
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleLine(row.sourceLine)}
+                    className="mt-1 size-4 accent-primary"
+                  />
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">L{row.sourceLine}</Badge>
+                      <span className="truncate text-sm font-medium">
+                        {row.description}
+                      </span>
+                      <Badge variant="outline">
+                        {resolveImportCategoryStatusLabel(
+                          row.categoryStatus ?? "none",
+                        )}
+                      </Badge>
+                    </div>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span>{formatDate(row.date)}</span>
+                      <span>{formatCurrency(Math.abs(row.amount))}</span>
+                      {row.normalizedMerchant ? (
+                        <span className="truncate">{row.normalizedMerchant}</span>
+                      ) : null}
+                    </div>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+
+          <div className="grid gap-3 border-t border-border/40 pt-3 sm:grid-cols-[1fr_auto]">
+            <FormSelect
+              id="import-category-batch-category"
+              label="Categoria em lote"
+              value={batchCategoryId}
+              onChange={(event) => setBatchCategoryId(event.target.value)}
+              data-testid="import-category-batch-category"
+            >
+              <option value="">Selecione…</option>
+              {categoriesForBatch.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </FormSelect>
+
+            <div className="flex flex-col justify-end gap-2 sm:flex-row sm:items-end">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void applyBatch("selected")}
+                disabled={!batchCategoryId || selectedLines.length === 0}
+                data-testid="import-category-batch-apply-selected"
+              >
+                Aplicar aos selecionados
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => void applyBatch("filtered")}
+                disabled={!batchCategoryId}
+                data-testid="import-category-batch-apply-filtered"
+              >
+                Aplicar a todos filtrados
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ManualCategoryReviewList({
   rows,
   allRows,
@@ -580,6 +977,13 @@ export function ImportCategoryReviewPanel({
             </p>
           </div>
         </div>
+
+        <BatchCategoryFilterPanel
+          rows={rows}
+          categories={categories}
+          categoryCatalog={categoryCatalog}
+          onRowsChange={onRowsChange}
+        />
 
         {mode === "automatic" ? (
           <div className="space-y-4">
