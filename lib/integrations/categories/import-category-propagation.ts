@@ -2,9 +2,11 @@ import { shouldAutoConfirmConfidence } from "./category-confidence";
 import {
   applyConfirmedCategoryToRow,
   applyHighConfidenceCategorySuggestions,
-  type CategorySuggestionCatalogItem,
 } from "./category-suggestion-service";
-import { resolveImportRowTransactionType } from "./category-suggester";
+import {
+  resolveImportRowTransactionType,
+  type CategorySuggestionCatalogItem,
+} from "./category-suggester";
 import type { ImportCategoryReviewMode } from "./import-category-review";
 import { isImportCategoryReviewPending, isImportRowCategorizable } from "./import-category-review";
 import {

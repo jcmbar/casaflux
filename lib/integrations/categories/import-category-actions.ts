@@ -1,10 +1,8 @@
 import type { Category } from "@/types/category";
 
 import type { ImportPreviewRow } from "../types";
-import {
-  applyConfirmedCategoryToRow,
-  type CategorySuggestionCatalogItem,
-} from "./category-suggestion-service";
+import { applyConfirmedCategoryToRow } from "./category-suggestion-service";
+import type { CategorySuggestionCatalogItem } from "./category-suggester";
 
 export function refreshImportRowCategoryLabel(
   row: ImportPreviewRow,

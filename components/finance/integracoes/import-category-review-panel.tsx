@@ -66,7 +66,7 @@ function CategoryReviewProgressBar({
     <Progress value={progress.percent} className="w-full">
       <ProgressLabel>Categorização</ProgressLabel>
       <ProgressValue>
-        {progress.resolved}/{progress.total}
+        {() => `${progress.resolved}/${progress.total}`}
       </ProgressValue>
     </Progress>
   );
@@ -686,7 +686,7 @@ export function ImportCategoryReviewPanel({
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => setFullListVisible((current) => !current)}
+            onClick={() => setFullListVisible(!fullListVisible)}
             data-testid="import-category-toggle-full-list"
           >
             <List className="size-3.5" />
