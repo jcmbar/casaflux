@@ -176,7 +176,71 @@ describe("commitImportPreview selection", () => {
       fileName: "partial.csv",
       contentHash: hashImportContent(content),
     });
-    expect(validationError).toBe("Não há linhas novas e prontas para importar.");
+    expect(validationError).toBe("Todas as linhas deste arquivo já haviam sido importadas.");
+  });
+
+  it("allows partial overlap when only some rows are new", () => {
+    const store = new InMemoryImportHistoryStore();
+    const content = [
+      "date,title,amount",
+      '2026-07-01,Store,"10,00"',
+      '2026-07-02,Other,"20,00"',
+    ].join("\n");
+
+    const firstPreview = buildImportPreview({
+      content,
+      cardAccountId: CARD_ACCOUNT_ID,
+    });
+
+    store.registerBatch(
+      buildRegisterInputFromPreview({
+        preview: {
+          ...firstPreview,
+          rows: [firstPreview.rows[0]!],
+        },
+        ownerUserId: "user-1",
+        familyId: null,
+        accountId: CARD_ACCOUNT_ID,
+        fileName: "partial.csv",
+        contentHash: hashImportContent(content),
+      })!,
+    );
+
+    const overlapPreview = buildImportPreview({
+      content,
+      cardAccountId: CARD_ACCOUNT_ID,
+    });
+
+    const history = store.fetchContext({
+      ownerUserId: "user-1",
+      accountId: CARD_ACCOUNT_ID,
+      contentHash: hashImportContent(content),
+      identityKeys: overlapPreview.rows.map((row) =>
+        buildImportRowIdentityKey(row, CARD_ACCOUNT_ID),
+      ),
+      externalIds: [],
+    });
+
+    const enriched = enrichImportPreviewWithHistory(
+      overlapPreview,
+      history,
+      CARD_ACCOUNT_ID,
+    );
+
+    const committable = getCommittableImportRows(enriched.rows, {});
+    expect(committable).toHaveLength(1);
+    expect(committable[0]?.description).toBe("Other");
+
+    const validationError = getCommitImportPreviewValidationError({
+      preview: enriched,
+      targetAccountId: CARD_ACCOUNT_ID,
+      invoiceSourceAccounts: {},
+      ownerUserId: "user-1",
+      familyId: null,
+      fileName: "partial.csv",
+      contentHash: hashImportContent(content),
+    });
+    expect(validationError).toBeNull();
   });
 
   it("builds RPC payload only for committable rows", () => {

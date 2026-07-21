@@ -19,6 +19,13 @@ import {
 } from "../invoice-payment/suggest-invoice-payment-reconcile";
 import type { ImportPreview } from "../types";
 import {
+  buildImportSkippedRowsMessage,
+  fetchExistingImportIdentityKeys,
+  mergeCommitSkippedRows,
+  partitionCommitPayloadByExistingIdentities,
+  type CommitSkippedImportRow,
+} from "./filter-commit-duplicates";
+import {
   buildCommitImportRowPayload,
   getCommitImportValidationError,
   getCommittableImportRows,
@@ -62,12 +69,42 @@ export type CommitImportPreviewInput = {
 export type CommitImportPreviewResult =
   | {
       ok: true;
-      batchId: string;
+      batchId: string | null;
       committedRows: number;
       createdTransactions: number;
       reconciledInvoicePayments: number;
+      skippedRows: CommitSkippedImportRow[];
     }
   | { ok: false; message: string };
+
+function parseRpcSkippedRows(
+  value: unknown,
+): CommitSkippedImportRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const skippedRows: CommitSkippedImportRow[] = [];
+
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    const sourceLine = Number(
+      (item as { source_line?: unknown }).source_line,
+    );
+    const identityKey = (item as { identity_key?: unknown }).identity_key;
+
+    if (!Number.isFinite(sourceLine) || typeof identityKey !== "string") {
+      continue;
+    }
+
+    skippedRows.push({ sourceLine, identityKey });
+  }
+
+  return skippedRows;
+}
 
 function buildReconcileBatchItems(input: CommitImportPreviewInput) {
   const decisions = input.invoicePaymentReconcileDecisions ?? {};
@@ -168,13 +205,44 @@ export async function commitImportPreview(
 
   const rowsPayload = buildCommitImportRpcPayload(input);
 
+  let prefetchedSkippedRows: CommitSkippedImportRow[] = [];
+  let rowsToCommit = rowsPayload;
+
+  try {
+    const existingIdentityKeys = await fetchExistingImportIdentityKeys(supabase, {
+      ownerUserId: input.ownerUserId,
+      accountId: input.targetAccountId,
+      identityKeys: rowsPayload.map((row) => row.identity_key),
+    });
+    const partitioned = partitionCommitPayloadByExistingIdentities(
+      rowsPayload,
+      existingIdentityKeys,
+    );
+    rowsToCommit = partitioned.committable;
+    prefetchedSkippedRows = partitioned.skipped;
+  } catch (error) {
+    console.error(error);
+  }
+
+  if (rowsToCommit.length === 0) {
+    const skippedRows = mergeCommitSkippedRows(prefetchedSkippedRows);
+    return {
+      ok: true,
+      batchId: null,
+      committedRows: 0,
+      createdTransactions: 0,
+      reconciledInvoicePayments: 0,
+      skippedRows,
+    };
+  }
+
   const { data, error } = await supabase.rpc("commit_nubank_import", {
     p_family_id: input.familyId,
     p_account_id: input.targetAccountId,
     p_source: input.preview.source,
     p_file_name: input.fileName,
     p_content_hash: input.contentHash,
-    p_rows: rowsPayload,
+    p_rows: rowsToCommit,
   });
 
   if (error) {
@@ -186,12 +254,15 @@ export async function commitImportPreview(
   }
 
   const result = data as {
-    batch_id?: string;
+    batch_id?: string | null;
     committed_rows?: number;
     created_transactions?: number;
+    skipped_rows?: unknown;
   };
 
   const batchId = result.batch_id ?? "";
+  const rpcSkippedRows = parseRpcSkippedRows(result.skipped_rows);
+  const skippedRows = mergeCommitSkippedRows(prefetchedSkippedRows, rpcSkippedRows);
   let reconciledInvoicePayments = 0;
 
   if (batchId) {
@@ -212,9 +283,10 @@ export async function commitImportPreview(
 
   return {
     ok: true,
-    batchId,
+    batchId: batchId || null,
     committedRows: result.committed_rows ?? 0,
     createdTransactions: result.created_transactions ?? 0,
     reconciledInvoicePayments,
+    skippedRows,
   };
 }

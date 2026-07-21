@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ImportRowCategoryField } from "@/components/finance/import-row-category-field";
+import { ImportCategoryReviewPanel } from "@/components/finance/integracoes/import-category-review-panel";
 import { upsertCategoryInList } from "@/lib/finance/category-list-utils";
 import { FormSelect } from "@/components/forms/form-controls";
 import { PageIntro } from "@/components/layout/page-intro";
@@ -43,6 +44,11 @@ import {
   commitImportPreview,
   getCommitImportPreviewValidationError,
 } from "@/lib/integrations/commit/commit-import-preview";
+import {
+  buildImportSkippedRowsMessage,
+  formatCommitSkippedSourceLines,
+  type CommitSkippedImportRow,
+} from "@/lib/integrations/commit/filter-commit-duplicates";
 import { getCommittableImportRows } from "@/lib/integrations/commit/map-import-row";
 import {
   buildImportDuplicateAttention,
@@ -86,7 +92,6 @@ import { addDaysIso, getCreditCardBillingConfig } from "@/lib/finance/credit-car
 import { formatAccountSelectLabel } from "@/lib/finance/account-identity";
 import {
   applyConfirmedCategoryToRow,
-  applyHighConfidenceCategorySuggestions,
   enrichPreviewWithCategorySuggestions,
   fetchCategoryHistoryTransactions,
   mapCategoriesToSuggestionCatalog,
@@ -103,6 +108,11 @@ import {
   isImportCategoryFeedbackActive,
   pruneExpiredImportCategoryFeedback,
 } from "@/lib/integrations/categories/import-category-feedback";
+import type { ImportCategoryReviewMode } from "@/lib/integrations/categories/import-category-review";
+import {
+  applyCategoryPropagation,
+  type ImportCategoryPropagationOffer,
+} from "@/lib/integrations/categories/import-category-propagation";
 import { resolveImportRowTransactionType } from "@/lib/integrations/categories/category-suggester";
 import {
   fetchHiddenSystemCategoryIds,
@@ -429,6 +439,15 @@ export function ImportReviewView() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
+  const [commitSkippedRows, setCommitSkippedRows] = useState<
+    CommitSkippedImportRow[]
+  >([]);
+  const [categoryReviewMode, setCategoryReviewMode] =
+    useState<ImportCategoryReviewMode>("assisted");
+  const [showFullCategoryList, setShowFullCategoryList] = useState(false);
+  const [propagationOffer, setPropagationOffer] = useState<
+    ImportCategoryPropagationOffer | null
+  >(null);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryRows, setCategoryRows] = useState<ImportPreviewRow[]>([]);
@@ -630,18 +649,6 @@ export function ImportReviewView() {
 
     return filterRows(activePreview.rows, rowFilter);
   }, [activePreview, rowFilter]);
-
-  const highConfidencePendingCount = useMemo(() => {
-    if (!activePreview) {
-      return 0;
-    }
-
-    return activePreview.rows.filter(
-      (row) =>
-        row.categoryStatus === "suggested" &&
-        row.categorySuggestion?.confidence === "high",
-    ).length;
-  }, [activePreview]);
 
   const selectedCardAccount = useMemo(
     () => creditCardAccounts.find((account) => account.id === cardAccountId) ?? null,
@@ -1164,24 +1171,46 @@ export function ImportReviewView() {
     };
   }, [accounts, preview, supabase, user, historyRefreshKey]);
 
-  function handleApplyHighConfidenceCategories() {
-    setCategoryRows((current) =>
-      applyHighConfidenceCategorySuggestions(
-        current.length > 0 ? current : (preview?.rows ?? []),
-        categoryCatalog,
-      ),
-    );
+  function handleCategoryRowsChange(nextRows: ImportPreviewRow[]) {
+    setCategoryRows(nextRows);
+  }
+
+  function propagateCategoryOnRows(
+    baseRows: ImportPreviewRow[],
+    sourceLine: number,
+    categoryId: string,
+    forcePropagate = false,
+  ) {
+    return applyCategoryPropagation({
+      rows: baseRows,
+      sourceLine,
+      categoryId,
+      catalog: categoryCatalog,
+      mode: categoryReviewMode,
+      forcePropagate,
+    });
   }
 
   function handleRowCategoryChange(sourceLine: number, categoryId: string) {
-    setCategoryRows((current) => {
-      const baseRows = current.length > 0 ? current : (preview?.rows ?? []);
-      return baseRows.map((row) =>
-        row.sourceLine === sourceLine
-          ? applyConfirmedCategoryToRow(row, categoryId || null, categoryCatalog)
-          : row,
+    const baseRows = categoryRows.length > 0 ? categoryRows : (preview?.rows ?? []);
+
+    if (!categoryId) {
+      setPropagationOffer(null);
+      setCategoryRows(
+        baseRows.map((row) =>
+          row.sourceLine === sourceLine
+            ? applyConfirmedCategoryToRow(row, null, categoryCatalog)
+            : row,
+        ),
       );
-    });
+      return;
+    }
+
+    const result = propagateCategoryOnRows(baseRows, sourceLine, categoryId);
+    setCategoryRows(result.rows);
+    setPropagationOffer(
+      result.offer && categoryReviewMode === "assisted" ? result.offer : null,
+    );
   }
 
   function handleImportCategorySaved(
@@ -1191,47 +1220,78 @@ export function ImportReviewView() {
   ) {
     const nextCategories = upsertCategoryInList(categories, category);
     const nextCatalog = mapCategoriesToSuggestionCatalog(nextCategories);
+    const baseRows = categoryRows.length > 0 ? categoryRows : (preview?.rows ?? []);
+
+    let nextRows = syncImportRowsAfterCategorySaved({
+      rows: baseRows,
+      category,
+      catalog: nextCatalog,
+      sourceLine,
+      mode,
+    });
 
     setCategories(nextCategories);
-    setCategoryRows((current) => {
-      const baseRows = current.length > 0 ? current : (preview?.rows ?? []);
-      const nextRows = syncImportRowsAfterCategorySaved({
-        rows: baseRows,
-        category,
-        catalog: nextCatalog,
+    setCategoryFeedbackByLine((feedbackCurrent) => ({
+      ...feedbackCurrent,
+      ...buildImportCategoryFeedbackForSave({
+        rows: nextRows,
+        categoryId: category.id,
         sourceLine,
         mode,
+      }),
+    }));
+
+    if (mode === "create") {
+      const propagation = applyCategoryPropagation({
+        rows: nextRows,
+        sourceLine,
+        categoryId: category.id,
+        catalog: nextCatalog,
+        mode: categoryReviewMode,
       });
+      nextRows = propagation.rows;
+      setPropagationOffer(
+        propagation.offer && categoryReviewMode === "assisted"
+          ? propagation.offer
+          : null,
+      );
+    }
 
-      setCategoryFeedbackByLine((feedbackCurrent) => ({
-        ...feedbackCurrent,
-        ...buildImportCategoryFeedbackForSave({
-          rows: nextRows,
-          categoryId: category.id,
-          sourceLine,
-          mode,
-        }),
-      }));
-
-      return nextRows;
-    });
+    setCategoryRows(nextRows);
   }
 
   function handleConfirmSuggestion(sourceLine: number) {
-    setCategoryRows((current) => {
-      const baseRows = current.length > 0 ? current : (preview?.rows ?? []);
-      return baseRows.map((row) => {
-        if (row.sourceLine !== sourceLine || !row.categorySuggestion) {
-          return row;
-        }
+    const baseRows = categoryRows.length > 0 ? categoryRows : (preview?.rows ?? []);
+    const row = baseRows.find((item) => item.sourceLine === sourceLine);
+    if (!row?.categorySuggestion) {
+      return;
+    }
 
-        return applyConfirmedCategoryToRow(
-          row,
-          row.categorySuggestion.categoryId,
-          categoryCatalog,
-        );
-      });
-    });
+    const result = propagateCategoryOnRows(
+      baseRows,
+      sourceLine,
+      row.categorySuggestion.categoryId,
+    );
+    setCategoryRows(result.rows);
+    setPropagationOffer(
+      result.offer && categoryReviewMode === "assisted" ? result.offer : null,
+    );
+  }
+
+  function handleAcceptCategoryPropagation() {
+    if (!propagationOffer) {
+      return;
+    }
+
+    const baseRows = categoryRows.length > 0 ? categoryRows : (preview?.rows ?? []);
+    const result = propagateCategoryOnRows(
+      baseRows,
+      propagationOffer.sourceLine,
+      propagationOffer.categoryId,
+      true,
+    );
+    setCategoryRows(result.rows);
+    setPropagationOffer(null);
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -1245,6 +1305,9 @@ export function ImportReviewView() {
     setFileConfirmed(false);
     setPreview(null);
     setCategoryFeedbackByLine({});
+    setCommitSkippedRows([]);
+    setShowFullCategoryList(false);
+    setPropagationOffer(null);
     setInvoiceSourceAccounts({});
     setInvoicePaymentModes({});
     setInvoicePaymentCycleTargets({});
@@ -1294,6 +1357,7 @@ export function ImportReviewView() {
     }
 
     setCommitting(true);
+    setCommitSkippedRows([]);
 
     const targetAccount =
       accounts.find((account) => account.id === targetAccountId) ?? null;
@@ -1320,13 +1384,30 @@ export function ImportReviewView() {
       return;
     }
 
+    if (result.skippedRows.length > 0) {
+      setCommitSkippedRows(result.skippedRows);
+    }
+
+    const skippedMessage = buildImportSkippedRowsMessage(result.skippedRows);
+
+    if (result.committedRows === 0) {
+      toast.info(
+        skippedMessage ||
+          "Nenhuma linha nova foi importada. Todas as linhas elegíveis já existiam no histórico.",
+      );
+      setHistoryRefreshKey((current) => current + 1);
+      return;
+    }
+
     const reconcileNote =
       result.reconciledInvoicePayments > 0
         ? ` ${result.reconciledInvoicePayments} pagamento(s) conciliado(s) com lançamento(s) manual(is).`
         : "";
 
+    const skippedNote = skippedMessage ? ` ${skippedMessage}` : "";
+
     toast.success(
-      `${result.createdTransactions} lançamento(s) criado(s) a partir de ${result.committedRows} linha(s).${reconcileNote}`,
+      `${result.createdTransactions} lançamento(s) criado(s) a partir de ${result.committedRows} linha(s).${skippedNote}${reconcileNote}`,
     );
     setHistoryRefreshKey((current) => current + 1);
 
@@ -1347,6 +1428,9 @@ export function ImportReviewView() {
     setCategoryFeedbackByLine({});
     setHistoryError(null);
     setCommitting(false);
+    setCommitSkippedRows([]);
+    setShowFullCategoryList(false);
+    setPropagationOffer(null);
     setInvoiceSourceAccounts({});
     setInvoicePaymentModes({});
     setInvoicePaymentCycleTargets({});
@@ -1651,6 +1735,19 @@ export function ImportReviewView() {
         </Alert>
       ) : null}
 
+      {commitSkippedRows.length > 0 ? (
+        <Alert>
+          <History className="size-4" />
+          <AlertTitle>Linhas ignoradas na importação</AlertTitle>
+          <AlertDescription>
+            {buildImportSkippedRowsMessage(commitSkippedRows)}
+            <span className="mt-1 block text-xs text-muted-foreground">
+              Linhas: {formatCommitSkippedSourceLines(commitSkippedRows, 12)}
+            </span>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {categoriesLoading ? (
         <Alert>
           <Loader2 className="size-4 animate-spin" />
@@ -1753,47 +1850,26 @@ export function ImportReviewView() {
             />
           </div>
 
-          {activePreview.categorySummary ? (
-            <Card className="border-border/50 shadow-sm">
-              <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <CardTitle className="text-base">Sugestões de categoria</CardTitle>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Baseadas no histórico de lançamentos já categorizados. Nada é
-                    aplicado automaticamente no commit.
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={highConfidencePendingCount === 0 || categoriesLoading}
-                  onClick={handleApplyHighConfidenceCategories}
-                >
-                  Confirmar {highConfidencePendingCount} sugestão(ões) de alta confiança
-                </Button>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <SummaryCard
-                    label="Sugeridas"
-                    value={activePreview.categorySummary.suggestedCount}
-                  />
-                  <SummaryCard
-                    label="Alta confiança"
-                    value={activePreview.categorySummary.highConfidenceCount}
-                  />
-                  <SummaryCard
-                    label="Confirmadas"
-                    value={activePreview.categorySummary.confirmedCount}
-                  />
-                  <SummaryCard
-                    label="Sem categoria"
-                    value={activePreview.categorySummary.withoutCategoryCount}
-                  />
-                </div>
-              </CardContent>
-            </Card>
+          {activePreview.categorySummary && user ? (
+            <ImportCategoryReviewPanel
+              rows={activePreview.rows}
+              categories={categories}
+              categoryCatalog={categoryCatalog}
+              categoryFeedbackByLine={categoryFeedbackByLine}
+              userId={user.id}
+              loading={categoriesLoading}
+              mode={categoryReviewMode}
+              onModeChange={setCategoryReviewMode}
+              onRowsChange={handleCategoryRowsChange}
+              onCategoryChange={handleRowCategoryChange}
+              onCategorySaved={handleImportCategorySaved}
+              onConfirmSuggestion={handleConfirmSuggestion}
+              showFullList={showFullCategoryList}
+              onShowFullListChange={setShowFullCategoryList}
+              propagationOffer={propagationOffer}
+              onAcceptPropagation={handleAcceptCategoryPropagation}
+              onDismissPropagation={() => setPropagationOffer(null)}
+            />
           ) : null}
 
           <div className="grid gap-4 lg:grid-cols-3">
@@ -2197,7 +2273,8 @@ export function ImportReviewView() {
                           />
                         ) : null}
 
-                        {row.historicalStatus === "new" &&
+                        {showFullCategoryList &&
+                        row.historicalStatus === "new" &&
                         row.reviewStatus !== "invalid" &&
                         row.reviewStatus !== "already_imported" &&
                         user ? (

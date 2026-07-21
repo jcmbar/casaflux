@@ -225,6 +225,17 @@ export function getCommitImportValidationError(input: {
   );
 
   if (committableRows.length === 0) {
+    const alreadyImportedCount = input.previewRows.filter(
+      (row) => row.historicalStatus === "already_imported",
+    ).length;
+
+    if (
+      alreadyImportedCount > 0 &&
+      input.previewRows.every((row) => row.historicalStatus === "already_imported")
+    ) {
+      return "Todas as linhas deste arquivo já haviam sido importadas.";
+    }
+
     return "Não há linhas novas e prontas para importar.";
   }
 

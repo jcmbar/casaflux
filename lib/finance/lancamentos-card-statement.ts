@@ -9,6 +9,7 @@ import {
   getStatementCycleClosingInMonth,
   getStatementSettlement,
   hasCreditCardBillingConfig,
+  isTransactionInStatementCycleView,
   type CreditCardBillingConfig,
   type StatementCycle,
   type StatementSettlement,
@@ -91,6 +92,60 @@ export function resolveContasCardStatementContext(input: {
   });
 }
 
+type CardCycleFilterContext = {
+  accountId: string;
+  config: CreditCardBillingConfig;
+  cycle: StatementCycle;
+};
+
+function buildCardCycleFiltersForMonth(
+  accounts: Account[],
+  monthKey: string,
+): Map<string, CardCycleFilterContext> {
+  const filters = new Map<string, CardCycleFilterContext>();
+
+  for (const account of accounts) {
+    if (!hasCreditCardBillingConfig(account)) {
+      continue;
+    }
+
+    const config = getCreditCardBillingConfig(account);
+    if (!config) {
+      continue;
+    }
+
+    filters.set(account.id, {
+      accountId: account.id,
+      config,
+      cycle: getStatementCycleClosingInMonth(config, monthKey),
+    });
+  }
+
+  return filters;
+}
+
+function filterTransactionsForAllAccountsMonthView(
+  transactions: Transaction[],
+  period: PeriodFilter,
+  accounts: Account[],
+): Transaction[] {
+  const cardCycles = buildCardCycleFiltersForMonth(accounts, period.monthKey);
+
+  return transactions.filter((transaction) => {
+    const cardCycle = cardCycles.get(transaction.accountId);
+    if (cardCycle) {
+      return isTransactionInStatementCycleView({
+        transaction,
+        accountId: cardCycle.accountId,
+        cycle: cardCycle.cycle,
+        config: cardCycle.config,
+      });
+    }
+
+    return transaction.date.slice(0, 7) === period.monthKey;
+  });
+}
+
 /**
  * Period + account filtering for `/lancamentos`.
  * Credit cards with billing config use the statement cycle in month mode.
@@ -101,6 +156,7 @@ export function filterLancamentosTransactions(input: {
   accountFilter: string;
   allAccountsFilter: string;
   cardStatement: CardStatementPeriodContext | null;
+  accounts?: Account[];
 }): Transaction[] {
   const {
     transactions,
@@ -108,6 +164,7 @@ export function filterLancamentosTransactions(input: {
     accountFilter,
     allAccountsFilter,
     cardStatement,
+    accounts = [],
   } = input;
 
   if (
@@ -119,6 +176,18 @@ export function filterLancamentosTransactions(input: {
       cycle: cardStatement.cycle,
       config: cardStatement.config,
     });
+  }
+
+  if (
+    period.mode === "month" &&
+    accountFilter === allAccountsFilter &&
+    accounts.length > 0
+  ) {
+    return filterTransactionsForAllAccountsMonthView(
+      transactions,
+      period,
+      accounts,
+    );
   }
 
   const byPeriod = filterTransactionsByPeriod(transactions, period);

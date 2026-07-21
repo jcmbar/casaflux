@@ -1084,6 +1084,7 @@ function LancamentosPageContent() {
       accountFilter,
       allAccountsFilter: ALL_ACCOUNTS_FILTER,
       cardStatement,
+      accounts,
     });
     const byQuickFilters = applyLancamentosQuickFilters({
       transactions: byPeriodAndAccount,
@@ -1098,6 +1099,7 @@ function LancamentosPageContent() {
     );
   }, [
     accountFilter,
+    accounts,
     appliedSearchTerm,
     cardStatement,
     originFilter,

@@ -202,6 +202,52 @@ describe("lancamentos card filter uses statement cycle", () => {
     ).toBe(4152.34);
   });
 
+  it("includes late-June card purchases when filtering Todas as contas by July", () => {
+    const filtered = filterLancamentosTransactions({
+      transactions,
+      period: { mode: "month", monthKey: "2026-07" },
+      accountFilter: ALL_ACCOUNTS_FILTER,
+      allAccountsFilter: ALL_ACCOUNTS_FILTER,
+      cardStatement: null,
+      accounts: [card, checking],
+    });
+
+    expect(filtered.map((row) => row.id).sort()).toEqual([
+      "checking-exp",
+      "jul",
+      "jun",
+    ]);
+  });
+
+  it("keeps calendar month filter for checking in Todas as contas view", () => {
+    const withCheckingJune = [
+      ...transactions,
+      makeTx({
+        id: "checking-jun",
+        accountId: "checking-1",
+        date: "2026-06-15",
+        type: "expense",
+        amount: 12,
+        description: "Corrente junho",
+      }),
+    ];
+
+    const filtered = filterLancamentosTransactions({
+      transactions: withCheckingJune,
+      period: { mode: "month", monthKey: "2026-07" },
+      accountFilter: ALL_ACCOUNTS_FILTER,
+      allAccountsFilter: ALL_ACCOUNTS_FILTER,
+      cardStatement: null,
+      accounts: [card, checking],
+    });
+
+    expect(filtered.map((row) => row.id).sort()).toEqual([
+      "checking-exp",
+      "jul",
+      "jun",
+    ]);
+  });
+
   it("keeps calendar month filter for non-card accounts", () => {
     const cardStatement = resolveCardStatementPeriodContext({
       account: checking,
