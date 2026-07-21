@@ -70,14 +70,14 @@ export function ExpenseCategories({
         }
       />
 
-      <CardContent className="pt-0">
+      <CardContent className="pt-0 pb-1">
         {loading ? (
-          <div className="flex min-h-[240px] items-center justify-center text-sm text-muted-foreground">
+          <div className="flex min-h-[260px] items-center justify-center text-sm text-muted-foreground">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             Carregando...
           </div>
         ) : categories.length === 0 ? (
-          <div className="flex min-h-[240px] flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-muted/20 px-6 text-center">
+          <div className="flex min-h-[260px] flex-col items-center justify-center rounded-xl border border-dashed border-border/60 bg-muted/20 px-6 text-center">
             <p className="text-sm font-medium">Nenhuma despesa neste mês</p>
             <Link
               href={`/lancamentos?month=${monthKey}&new=1`}
@@ -88,76 +88,78 @@ export function ExpenseCategories({
           </div>
         ) : (
           <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,0.95fr)] md:items-center">
-            <ChartContainer
-              config={chartConfig}
-              className="mx-auto aspect-square max-h-[220px] w-full"
-            >
-              <PieChart>
-                <ChartTooltip
-                  content={
-                    <ChartTooltipContent
-                      hideLabel
-                      formatter={(value, name) => [
-                        formatCurrency(Number(value)),
-                        String(name),
-                      ]}
-                    />
-                  }
-                />
-
-                <Pie
-                  data={categories}
-                  dataKey="amount"
-                  nameKey="name"
-                  innerRadius="62%"
-                  outerRadius="90%"
-                  paddingAngle={3}
-                  strokeWidth={3}
-                  stroke="var(--card)"
-                  isAnimationActive
-                  animationDuration={850}
-                  animationEasing="ease-out"
-                >
-                  {categories.map((category) => (
-                    <Cell key={category.name} fill={category.fill} />
-                  ))}
-
-                  <Label
-                    content={({ viewBox }) => {
-                      if (!viewBox || !("cx" in viewBox) || !("cy" in viewBox)) {
-                        return null;
-                      }
-
-                      return (
-                        <text
-                          x={viewBox.cx}
-                          y={viewBox.cy}
-                          textAnchor="middle"
-                          dominantBaseline="middle"
-                        >
-                          <tspan
-                            x={viewBox.cx}
-                            y={(viewBox.cy ?? 0) - 8}
-                            className="fill-foreground text-xl font-semibold"
-                          >
-                            {centerValue}
-                          </tspan>
-                          <tspan
-                            x={viewBox.cx}
-                            y={(viewBox.cy ?? 0) + 14}
-                            className="fill-foreground/70 text-[11px] font-medium"
-                          >
-                            {centerLabel}
-                          </tspan>
-                        </text>
-                      );
-                    }}
+            <div className="flex min-h-[240px] items-center justify-center py-1">
+              <ChartContainer
+                config={chartConfig}
+                className="mx-auto aspect-square size-[220px] max-w-full shrink-0"
+              >
+                <PieChart margin={{ top: 10, right: 10, bottom: 10, left: 10 }}>
+                  <ChartTooltip
+                    content={
+                      <ChartTooltipContent
+                        hideLabel
+                        formatter={(value, name) => [
+                          formatCurrency(Number(value)),
+                          String(name),
+                        ]}
+                      />
+                    }
                   />
-                </Pie>
-              </PieChart>
-            </ChartContainer>
 
-            <div className="space-y-2.5">
+                  <Pie
+                    data={categories}
+                    dataKey="amount"
+                    nameKey="name"
+                    innerRadius="58%"
+                    outerRadius="78%"
+                    paddingAngle={3}
+                    strokeWidth={3}
+                    stroke="var(--card)"
+                    isAnimationActive
+                    animationDuration={850}
+                    animationEasing="ease-out"
+                  >
+                    {categories.map((category) => (
+                      <Cell key={category.name} fill={category.fill} />
+                    ))}
+
+                    <Label
+                      content={({ viewBox }) => {
+                        if (!viewBox || !("cx" in viewBox) || !("cy" in viewBox)) {
+                          return null;
+                        }
+
+                        return (
+                          <text
+                            x={viewBox.cx}
+                            y={viewBox.cy}
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                          >
+                            <tspan
+                              x={viewBox.cx}
+                              y={(viewBox.cy ?? 0) - 8}
+                              className="fill-foreground text-xl font-semibold"
+                            >
+                              {centerValue}
+                            </tspan>
+                            <tspan
+                              x={viewBox.cx}
+                              y={(viewBox.cy ?? 0) + 14}
+                              className="fill-foreground/70 text-[11px] font-medium"
+                            >
+                              {centerLabel}
+                            </tspan>
+                          </text>
+                        );
+                      }}
+                    />
+                  </Pie>
+                </PieChart>
+              </ChartContainer>
+            </div>
+
+            <div className="min-w-0 space-y-2.5">
               {categories.map((category) => (
                 <div
                   key={category.name}
