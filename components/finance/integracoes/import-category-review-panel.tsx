@@ -32,6 +32,7 @@ import {
 } from "@/lib/integrations/categories/import-category-batch-filter";
 import {
   applyHighConfidenceWithPropagation,
+  buildImportCategoryGroup,
   formatImportCategoryPropagationLabel,
   getSimilarUncategorizedLines,
   type ImportCategoryPropagationOffer,
@@ -154,8 +155,10 @@ function SimilarLinesHint({
   sourceLine: number;
   mode: ImportCategoryReviewMode;
 }) {
+  const sourceRow = rows.find((row) => row.sourceLine === sourceLine);
+  const group = sourceRow ? buildImportCategoryGroup(sourceRow) : null;
   const similarCount = getSimilarUncategorizedLines(rows, sourceLine).length;
-  if (similarCount === 0) {
+  if (similarCount === 0 || !group) {
     return null;
   }
 
@@ -164,6 +167,8 @@ function SimilarLinesHint({
       className="text-xs text-sky-800 dark:text-sky-200"
       data-testid={`import-category-similar-hint-${sourceLine}`}
     >
+      {group.reason}
+      {" · "}
       {mode === "manual"
         ? `${similarCount} linha(s) semelhante(s) aguardando revisão.`
         : formatImportCategoryPropagationLabel(similarCount)}
@@ -189,7 +194,7 @@ function PropagationOfferBanner({
         Aplicar &quot;{offer.categoryName}&quot; às linhas semelhantes?
       </p>
       <p className="mt-1 text-sm text-muted-foreground">
-        Grupo {offer.group.label} ·{" "}
+        {offer.group.reason} ·{" "}
         {formatImportCategoryPropagationLabel(offer.similarLines.length)}
       </p>
       <div className="mt-3 flex flex-wrap gap-2">

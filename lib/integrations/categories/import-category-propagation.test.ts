@@ -20,12 +20,14 @@ function buildRow(
   partial: Partial<ImportPreviewRow> & Pick<ImportPreviewRow, "sourceLine" | "description">,
 ): ImportPreviewRow {
   return {
+    source: "nubank_credit_card",
     date: "2026-07-01",
     amount: 10,
     direction: "out",
     kind: "card_purchase",
     externalFingerprint: `fp-${partial.sourceLine}`,
     externalId: null,
+    metadata: {},
     reviewStatus: "ready",
     historicalStatus: "new",
     categoryStatus: "none",
@@ -43,6 +45,7 @@ describe("import category propagation groups", () => {
   it("detects strong merchant prefixes from origin markers", () => {
     expect(detectStrongMerchantPrefix("Ifd*Silene Lopes de Al")).toBe("ifd");
     expect(detectStrongMerchantPrefix("Ebn *Playstation - Parcela 1/2")).toBe("ebn");
+    expect(detectStrongMerchantPrefix("IFD*50.039.745 Daniel")).toBe("ifd");
   });
 
   it("groups ifd* lines by strong prefix instead of full merchant text", () => {
@@ -55,6 +58,11 @@ describe("import category propagation groups", () => {
       }),
       buildRow({
         sourceLine: 3,
+        description: "IFD*50.039.745 Daniel",
+        normalizedMerchant: "ifd 50 039 745 daniel",
+      }),
+      buildRow({
+        sourceLine: 4,
         description: "Uber Trip",
         normalizedMerchant: "uber trip",
       }),
@@ -63,6 +71,49 @@ describe("import category propagation groups", () => {
     expect(buildImportCategoryGroup(rows[0])?.kind).toBe("strong_prefix");
     expect(buildImportCategoryGroup(rows[0])?.key).toBe(
       buildImportCategoryGroup(rows[1])?.key,
+    );
+    expect(buildImportCategoryGroup(rows[0])?.key).toBe(
+      buildImportCategoryGroup(rows[2])?.key,
+    );
+    expect(buildImportCategoryGroup(rows[0])?.reason).toBe(
+      "Similar por prefixo forte: IFD",
+    );
+    expect(buildImportCategoryGroup(rows[3])?.key).not.toBe(
+      buildImportCategoryGroup(rows[0])?.key,
+    );
+  });
+
+  it("groups bank transfers by semantic pattern regardless of person name", () => {
+    const rows = [
+      buildRow({
+        sourceLine: 1,
+        description: "Transferência recebida pelo Pix - Jefferson Calmon",
+        direction: "in",
+        kind: "bank_income",
+        source: "nubank_checking",
+      }),
+      buildRow({
+        sourceLine: 2,
+        description: "Transferência recebida - Maria Silva",
+        direction: "in",
+        kind: "bank_income",
+        source: "nubank_checking",
+      }),
+      buildRow({
+        sourceLine: 3,
+        description: "Transferência enviada - Outro Nome",
+        direction: "out",
+        kind: "bank_transfer_out",
+        source: "nubank_checking",
+      }),
+    ];
+
+    expect(buildImportCategoryGroup(rows[0])?.kind).toBe("semantic_pattern");
+    expect(buildImportCategoryGroup(rows[0])?.key).toBe(
+      buildImportCategoryGroup(rows[1])?.key,
+    );
+    expect(buildImportCategoryGroup(rows[0])?.reason).toBe(
+      "Similar por padrão: transferência recebida",
     );
     expect(buildImportCategoryGroup(rows[2])?.key).not.toBe(
       buildImportCategoryGroup(rows[0])?.key,
@@ -225,5 +276,34 @@ describe("applyCategoryPropagation", () => {
 
     expect(result.autoPropagated).toBe(false);
     expect(result.offer?.similarLines).toEqual([11]);
+  });
+
+  it("does not auto-propagate weak cleaned-description signatures", () => {
+    const weakRows = [
+      buildRow({
+        sourceLine: 20,
+        description: "Compra Avulsa Local 998877",
+        normalizedMerchant: "ab",
+      }),
+      buildRow({
+        sourceLine: 21,
+        description: "Compra Avulsa Local 112233",
+        normalizedMerchant: "ab",
+      }),
+    ];
+
+    expect(buildImportCategoryGroup(weakRows[0])?.strength).toBe("low");
+
+    const result = applyCategoryPropagation({
+      rows: weakRows,
+      sourceLine: 20,
+      categoryId: "cat-food",
+      catalog: CATEGORIES,
+      mode: "automatic",
+    });
+
+    expect(result.autoPropagated).toBe(false);
+    expect(result.offer?.similarLines).toEqual([21]);
+    expect(result.offer?.group.reason).toContain("Similar por descrição:");
   });
 });

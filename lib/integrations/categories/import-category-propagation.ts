@@ -3,24 +3,26 @@ import {
   applyConfirmedCategoryToRow,
   applyHighConfidenceCategorySuggestions,
 } from "./category-suggestion-service";
-import {
-  resolveImportRowTransactionType,
-  type CategorySuggestionCatalogItem,
-} from "./category-suggester";
+import type { CategorySuggestionCatalogItem } from "./category-suggester";
 import type { ImportCategoryReviewMode } from "./import-category-review";
-import { isImportCategoryReviewPending, isImportRowCategorizable } from "./import-category-review";
+import { isImportCategoryReviewPending } from "./import-category-review";
 import {
-  normalizeImportDescription,
-  normalizeMerchant,
-} from "./normalize-merchant";
+  buildImportCategorySimilaritySignature,
+  detectStrongMerchantPrefix,
+  type ImportCategorySimilarityKind,
+  type ImportCategorySimilaritySignature,
+  type ImportCategorySimilarityStrength,
+} from "./import-category-similarity";
 import type { ImportPreviewRow } from "../types";
 
-export type ImportCategoryGroupKind = "strong_prefix" | "exact_merchant";
+export type ImportCategoryGroupKind = ImportCategorySimilarityKind;
 
 export type ImportCategoryGroup = {
   key: string;
   kind: ImportCategoryGroupKind;
   label: string;
+  reason: string;
+  strength: ImportCategorySimilarityStrength;
 };
 
 export type ImportCategoryPropagationOffer = {
@@ -31,48 +33,31 @@ export type ImportCategoryPropagationOffer = {
   similarLines: number[];
 };
 
-export function detectStrongMerchantPrefix(description: string): string | null {
-  const normalized = normalizeImportDescription(description);
-  const attachedMatch = normalized.match(/^([a-z]{2,})\*/);
-  if (attachedMatch?.[1]) {
-    return attachedMatch[1];
-  }
+export {
+  detectStrongMerchantPrefix,
+  detectSemanticBankPattern,
+  cleanDescriptionForSimilarity,
+  buildImportCategorySimilaritySignature,
+  formatImportCategorySimilarityReason,
+} from "./import-category-similarity";
 
-  const spacedMatch = normalized.match(/\b([a-z]{2,})\s+\*/);
-  if (spacedMatch?.[1]) {
-    return spacedMatch[1];
-  }
-
-  return null;
+function signatureToGroup(
+  signature: ImportCategorySimilaritySignature,
+): ImportCategoryGroup {
+  return {
+    key: signature.key,
+    kind: signature.kind,
+    label: signature.label,
+    reason: signature.reason,
+    strength: signature.strength,
+  };
 }
 
-export function buildImportCategoryGroup(row: ImportPreviewRow): ImportCategoryGroup | null {
-  if (!isImportRowCategorizable(row)) {
-    return null;
-  }
-
-  const transactionType = resolveImportRowTransactionType(row);
-  const normalizedMerchant =
-    row.normalizedMerchant ?? normalizeMerchant(row.description);
-  const strongPrefix = detectStrongMerchantPrefix(row.description);
-
-  if (strongPrefix) {
-    return {
-      key: `${transactionType}:strong:${strongPrefix}`,
-      kind: "strong_prefix",
-      label: strongPrefix,
-    };
-  }
-
-  if (normalizedMerchant.length >= 4) {
-    return {
-      key: `${transactionType}:merchant:${normalizedMerchant}`,
-      kind: "exact_merchant",
-      label: normalizedMerchant,
-    };
-  }
-
-  return null;
+export function buildImportCategoryGroup(
+  row: ImportPreviewRow,
+): ImportCategoryGroup | null {
+  const signature = buildImportCategorySimilaritySignature(row);
+  return signature ? signatureToGroup(signature) : null;
 }
 
 export function buildImportCategoryGroups(
@@ -120,8 +105,12 @@ export function resolveGroupPropagationConfidence(
   group: ImportCategoryGroup,
   sourceRow: ImportPreviewRow,
 ): "high" | "medium" | "low" | null {
-  if (group.kind === "strong_prefix") {
+  if (group.strength === "high") {
     return "high";
+  }
+
+  if (group.strength === "low") {
+    return "low";
   }
 
   if (
@@ -139,7 +128,7 @@ export function resolveGroupPropagationConfidence(
     return "low";
   }
 
-  return null;
+  return group.strength;
 }
 
 export function shouldAutoPropagateCategory(
