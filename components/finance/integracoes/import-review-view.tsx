@@ -17,6 +17,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ImportRowCategoryField } from "@/components/finance/import-row-category-field";
+import { upsertCategoryInList } from "@/lib/finance/category-list-utils";
 import { FormSelect } from "@/components/forms/form-controls";
 import { PageIntro } from "@/components/layout/page-intro";
 import { useConfirm } from "@/components/feedback/confirm-dialog-provider";
@@ -91,6 +93,16 @@ import {
   resolveImportCategoryStatusLabel,
   withCategorySummary,
 } from "@/lib/integrations/categories/category-suggestion-service";
+import {
+  getImportRowSelectedCategoryId,
+  syncImportRowsAfterCategorySaved,
+} from "@/lib/integrations/categories/import-category-actions";
+import type { ImportCategoryFeedback } from "@/lib/integrations/categories/import-category-feedback";
+import {
+  buildImportCategoryFeedbackForSave,
+  isImportCategoryFeedbackActive,
+  pruneExpiredImportCategoryFeedback,
+} from "@/lib/integrations/categories/import-category-feedback";
 import { resolveImportRowTransactionType } from "@/lib/integrations/categories/category-suggester";
 import {
   fetchHiddenSystemCategoryIds,
@@ -420,6 +432,9 @@ export function ImportReviewView() {
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryRows, setCategoryRows] = useState<ImportPreviewRow[]>([]);
+  const [categoryFeedbackByLine, setCategoryFeedbackByLine] = useState<
+    Record<number, ImportCategoryFeedback>
+  >({});
   const [categoriesLoading, setCategoriesLoading] = useState(false);
   const [invoiceSourceAccounts, setInvoiceSourceAccounts] = useState<
     Record<number, string>
@@ -1066,6 +1081,23 @@ export function ImportReviewView() {
   const isGuidedReimport = Boolean(guidedReimport.fromBatchId);
 
   useEffect(() => {
+    if (Object.keys(categoryFeedbackByLine).length === 0) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setCategoryFeedbackByLine((current) => {
+        const next = pruneExpiredImportCategoryFeedback(current);
+        return Object.keys(next).length === Object.keys(current).length
+          ? current
+          : next;
+      });
+    }, 200);
+
+    return () => window.clearInterval(timer);
+  }, [categoryFeedbackByLine]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadCategorySuggestions() {
@@ -1152,6 +1184,39 @@ export function ImportReviewView() {
     });
   }
 
+  function handleImportCategorySaved(
+    category: Category,
+    sourceLine: number,
+    mode: "create" | "update",
+  ) {
+    const nextCategories = upsertCategoryInList(categories, category);
+    const nextCatalog = mapCategoriesToSuggestionCatalog(nextCategories);
+
+    setCategories(nextCategories);
+    setCategoryRows((current) => {
+      const baseRows = current.length > 0 ? current : (preview?.rows ?? []);
+      const nextRows = syncImportRowsAfterCategorySaved({
+        rows: baseRows,
+        category,
+        catalog: nextCatalog,
+        sourceLine,
+        mode,
+      });
+
+      setCategoryFeedbackByLine((feedbackCurrent) => ({
+        ...feedbackCurrent,
+        ...buildImportCategoryFeedbackForSave({
+          rows: nextRows,
+          categoryId: category.id,
+          sourceLine,
+          mode,
+        }),
+      }));
+
+      return nextRows;
+    });
+  }
+
   function handleConfirmSuggestion(sourceLine: number) {
     setCategoryRows((current) => {
       const baseRows = current.length > 0 ? current : (preview?.rows ?? []);
@@ -1179,6 +1244,7 @@ export function ImportReviewView() {
     setFileName(file.name);
     setFileConfirmed(false);
     setPreview(null);
+    setCategoryFeedbackByLine({});
     setInvoiceSourceAccounts({});
     setInvoicePaymentModes({});
     setInvoicePaymentCycleTargets({});
@@ -1278,6 +1344,7 @@ export function ImportReviewView() {
     setCheckingAccountId("");
     setPreview(null);
     setCategoryRows([]);
+    setCategoryFeedbackByLine({});
     setHistoryError(null);
     setCommitting(false);
     setInvoiceSourceAccounts({});
@@ -1964,6 +2031,13 @@ export function ImportReviewView() {
                   {filteredRows.map((row) => {
                     const isDuplicate = duplicateSourceLines.has(row.sourceLine);
                     const isInvoicePayment = row.kind === "card_invoice_payment";
+                    const rowCategoryFeedback =
+                      categoryFeedbackByLine[row.sourceLine] ?? null;
+                    const selectedCategoryId = getImportRowSelectedCategoryId(row);
+                    const highlightCategoryLabel = isImportCategoryFeedbackActive(
+                      rowCategoryFeedback,
+                      selectedCategoryId,
+                    );
 
                     return (
                       <div
@@ -2004,7 +2078,19 @@ export function ImportReviewView() {
                               </p>
                             ) : null}
                             {row.categorySuggestion ? (
-                              <p className="text-xs text-muted-foreground">
+                              <p
+                                className={cn(
+                                  "text-xs text-muted-foreground",
+                                  highlightCategoryLabel &&
+                                    "rounded-md bg-emerald-500/10 px-2 py-1 text-foreground",
+                                )}
+                                data-testid={`import-row-category-suggestion-${row.sourceLine}`}
+                                data-category-feedback={
+                                  highlightCategoryLabel
+                                    ? rowCategoryFeedback?.kind ?? "none"
+                                    : "none"
+                                }
+                              >
                                 Sugestão:{" "}
                                 <span className="font-medium text-foreground">
                                   {row.categorySuggestion.categoryName}
@@ -2113,38 +2199,21 @@ export function ImportReviewView() {
 
                         {row.historicalStatus === "new" &&
                         row.reviewStatus !== "invalid" &&
-                        row.reviewStatus !== "already_imported" ? (
+                        row.reviewStatus !== "already_imported" &&
+                        user ? (
                           <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
-                            <div className="max-w-md flex-1">
-                              <FormSelect
-                                id={`row-category-${row.sourceLine}`}
-                                label="Categoria"
-                                value={
-                                  row.confirmedCategoryId ??
-                                  row.categorySuggestion?.categoryId ??
-                                  ""
-                                }
-                                onChange={(event) =>
-                                  handleRowCategoryChange(
-                                    row.sourceLine,
-                                    event.target.value,
-                                  )
-                                }
-                              >
-                                <option value="">Sem categoria</option>
-                                {categories
-                                  .filter(
-                                    (category) =>
-                                      category.type ===
-                                      resolveImportRowTransactionType(row),
-                                  )
-                                  .map((category) => (
-                                    <option key={category.id} value={category.id}>
-                                      {category.name}
-                                    </option>
-                                  ))}
-                              </FormSelect>
-                            </div>
+                            <ImportRowCategoryField
+                              sourceLine={row.sourceLine}
+                              transactionType={resolveImportRowTransactionType(row)}
+                              categories={categories}
+                              selectedCategoryId={selectedCategoryId}
+                              categoryFeedback={rowCategoryFeedback}
+                              onCategoryChange={(categoryId) =>
+                                handleRowCategoryChange(row.sourceLine, categoryId)
+                              }
+                              onCategorySaved={handleImportCategorySaved}
+                              userId={user.id}
+                            />
                             {row.categoryStatus === "suggested" &&
                             row.categorySuggestion ? (
                               <Button
