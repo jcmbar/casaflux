@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
   deriveStatementStatus,
@@ -7,7 +8,10 @@ import {
   type CreditCardBillingConfig,
 } from "@/lib/finance/credit-card-billing";
 import {
+  createCreditCardInvoicePayment,
+  getInvoicePaymentSourceAccounts,
   getInvoicePaymentValidationError,
+  isInvoicePaymentSourceEligibleAccount,
   resolveInvoicePaymentTarget,
 } from "@/lib/finance/create-invoice-payment";
 
@@ -21,6 +25,15 @@ const CARD = {
 const CONFIG: CreditCardBillingConfig = {
   statementClosingDay: 25,
   statementDueDay: 1,
+};
+
+const CHECKING = {
+  id: "checking-1",
+  type: "checking" as const,
+  account_mode: "real" as const,
+  is_family_shared: false,
+  allow_family_post: false,
+  owner_user_id: "user-1",
 };
 
 describe("manual invoice payment", () => {
@@ -70,6 +83,69 @@ describe("manual invoice payment", () => {
         hasBillingConfig: true,
       }),
     ).toMatch(/data/i);
+  });
+
+  it("blocks ineligible source accounts with a specific message", () => {
+    expect(
+      isInvoicePaymentSourceEligibleAccount(
+        { ...CHECKING, type: "credit_card" },
+        "user-1",
+      ),
+    ).toBe(false);
+
+    expect(
+      isInvoicePaymentSourceEligibleAccount(
+        { ...CHECKING, account_mode: "forecast" },
+        "user-1",
+      ),
+    ).toBe(false);
+
+    expect(
+      getInvoicePaymentValidationError({
+        amount: 100,
+        sourceAccountId: CHECKING.id,
+        cardAccountId: CARD.id,
+        paymentDate: "2026-08-01",
+        statementCycleId: "2026-07-25",
+        hasBillingConfig: true,
+        sourceAccount: { ...CHECKING, owner_user_id: "other-user" },
+        userId: "user-1",
+      }),
+    ).toMatch(/não pode ser usada como origem/i);
+  });
+
+  it("reuses transfer eligibility for source account lists", () => {
+    const accounts = [
+      CHECKING,
+      {
+        id: "card-x",
+        type: "credit_card" as const,
+        account_mode: "real" as const,
+        is_family_shared: false,
+        allow_family_post: false,
+        owner_user_id: "user-1",
+      },
+      {
+        id: "forecast-1",
+        type: "checking" as const,
+        account_mode: "forecast" as const,
+        is_family_shared: false,
+        allow_family_post: false,
+        owner_user_id: "user-1",
+      },
+      {
+        id: "cash-1",
+        type: "cash" as const,
+        account_mode: "real" as const,
+        is_family_shared: false,
+        allow_family_post: false,
+        owner_user_id: "user-1",
+      },
+    ];
+
+    expect(
+      getInvoicePaymentSourceAccounts(accounts, "user-1").map((a) => a.id),
+    ).toEqual(["checking-1", "cash-1"]);
   });
 
   it("links to the UI fatura cycle even when payment date would pick another cycle", () => {
@@ -239,5 +315,75 @@ describe("manual invoice payment", () => {
     expect(settlement.remainingTotal).toBe(0);
     expect(settlement.status).toBe("paid");
     expect(settlement.paymentCount).toBe(1);
+  });
+});
+
+describe("createCreditCardInvoicePayment RPC payload", () => {
+  it("sends the selected source account and cycle to the shared RPC", async () => {
+    const rpc = vi.fn().mockResolvedValue({
+      data: {
+        sourceTransactionId: "tx-source",
+        cardTransactionId: "tx-card",
+        statementCycleId: "2026-07-25",
+        origin: "manual",
+      },
+      error: null,
+    });
+
+    const supabase = { rpc } as unknown as SupabaseClient;
+
+    const result = await createCreditCardInvoicePayment(supabase, {
+      cardAccount: CARD,
+      sourceAccountId: CHECKING.id,
+      sourceAccount: CHECKING,
+      amount: 150.5,
+      paymentDate: "2026-08-01",
+      userId: "user-1",
+      statementCycleId: "2026-07-25",
+      notes: "pago no app",
+      origin: "manual",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      statementCycleId: "2026-07-25",
+      sourceTransactionId: "tx-source",
+      cardTransactionId: "tx-card",
+      origin: "manual",
+    });
+
+    expect(rpc).toHaveBeenCalledWith("create_credit_card_invoice_payment", {
+      p_card_account_id: CARD.id,
+      p_source_account_id: CHECKING.id,
+      p_amount: 150.5,
+      p_payment_date: "2026-08-01",
+      p_statement_cycle_id: "2026-07-25",
+      p_notes: "pago no app",
+      p_origin: "manual",
+    });
+  });
+
+  it("maps origin permission failures to a specific message", async () => {
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({
+        data: null,
+        error: { message: "Not allowed to post to origin account" },
+      }),
+    } as unknown as SupabaseClient;
+
+    const result = await createCreditCardInvoicePayment(supabase, {
+      cardAccount: CARD,
+      sourceAccountId: CHECKING.id,
+      sourceAccount: CHECKING,
+      amount: 10,
+      paymentDate: "2026-08-01",
+      userId: "user-1",
+      statementCycleId: "2026-07-25",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toMatch(/permissão.*origem/i);
+    }
   });
 });

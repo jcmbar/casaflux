@@ -1,9 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import {
-  adjustAccountBalance,
-  getTransactionBalanceDelta,
-} from "@/lib/finance/account-balance";
+  getTransferEligiblePostableAccounts,
+  isTransferEligibleAccount,
+} from "@/lib/finance/account-transfer";
 import {
   buildStatementCycle,
   getCreditCardBillingConfig,
@@ -11,8 +11,11 @@ import {
   type StatementCycle,
 } from "@/lib/finance/credit-card-billing";
 import { notifyTransactionsChanged } from "@/lib/finance/create-transaction";
-import { INVOICE_PAYMENT_CARD_DESCRIPTION } from "@/lib/finance/lancamentos-filters";
-import type { Account } from "@/types/account";
+import {
+  canPostToAccount,
+  isRealAccount,
+  type Account,
+} from "@/types/account";
 
 export type InvoicePaymentOrigin = "manual" | "imported";
 
@@ -25,7 +28,7 @@ export type CreateInvoicePaymentInput = {
   amount: number;
   paymentDate: string;
   userId: string;
-  familyId: string | null;
+  familyId?: string | null;
   /**
    * Target statement cycle (closing-date ISO). Prefer the fatura shown in UI.
    * Falls back to date-based resolution when omitted.
@@ -33,6 +36,16 @@ export type CreateInvoicePaymentInput = {
   statementCycleId?: string | null;
   notes?: string | null;
   origin?: InvoicePaymentOrigin;
+  /** Optional: validate eligibility against the selected account row. */
+  sourceAccount?: Pick<
+    Account,
+    | "id"
+    | "type"
+    | "account_mode"
+    | "is_family_shared"
+    | "allow_family_post"
+    | "owner_user_id"
+  > | null;
 };
 
 export type CreateInvoicePaymentResult =
@@ -51,6 +64,41 @@ export type ResolvedInvoicePaymentTarget = {
 };
 
 /**
+ * Same eligibility used by transfers, restricted to real accounts (not forecast).
+ */
+export function isInvoicePaymentSourceEligibleAccount(
+  account: Pick<
+    Account,
+    | "type"
+    | "account_mode"
+    | "is_family_shared"
+    | "allow_family_post"
+    | "owner_user_id"
+  > | null | undefined,
+  userId: string,
+): boolean {
+  if (!account) return false;
+  if (!isRealAccount(account)) return false;
+  if (!isTransferEligibleAccount(account)) return false;
+  return canPostToAccount(account, userId);
+}
+
+export function getInvoicePaymentSourceAccounts<
+  T extends Pick<
+    Account,
+    | "type"
+    | "account_mode"
+    | "is_family_shared"
+    | "allow_family_post"
+    | "owner_user_id"
+  >,
+>(accounts: T[], userId: string): T[] {
+  return getTransferEligiblePostableAccounts(accounts, userId).filter(
+    isRealAccount,
+  );
+}
+
+/**
  * Pure validation for the manual invoice payment form / service.
  */
 export function getInvoicePaymentValidationError(input: {
@@ -60,6 +108,16 @@ export function getInvoicePaymentValidationError(input: {
   paymentDate: string;
   statementCycleId?: string | null;
   hasBillingConfig: boolean;
+  sourceAccount?: Pick<
+    Account,
+    | "id"
+    | "type"
+    | "account_mode"
+    | "is_family_shared"
+    | "allow_family_post"
+    | "owner_user_id"
+  > | null;
+  userId?: string;
 }): string | null {
   if (!(input.amount > 0)) {
     return "Informe um valor válido para o pagamento.";
@@ -79,6 +137,15 @@ export function getInvoicePaymentValidationError(input: {
 
   if (!input.hasBillingConfig && !input.statementCycleId) {
     return "Configure fechamento e vencimento do cartão para vincular a fatura.";
+  }
+
+  if (input.sourceAccount && input.userId) {
+    if (input.sourceAccount.id !== input.sourceAccountId) {
+      return "A conta de origem selecionada é inválida.";
+    }
+    if (!isInvoicePaymentSourceEligibleAccount(input.sourceAccount, input.userId)) {
+      return "Esta conta não pode ser usada como origem do pagamento.";
+    }
   }
 
   return null;
@@ -120,17 +187,53 @@ export function resolveInvoicePaymentTarget(input: {
   };
 }
 
-function withOptionalNotes(baseDescription: string, notes: string | null) {
-  if (!notes) return baseDescription;
-  return `${baseDescription} — ${notes}`;
+function mapInvoicePaymentRpcError(message: string | undefined): string {
+  const raw = (message ?? "").toLowerCase();
+
+  if (raw.includes("source account must differ")) {
+    return "A conta de origem deve ser diferente do cartão.";
+  }
+  if (raw.includes("invalid invoice payment amount")) {
+    return "Informe um valor válido para o pagamento.";
+  }
+  if (raw.includes("payment date is required")) {
+    return "Informe a data do pagamento.";
+  }
+  if (raw.includes("source account cannot be a credit card")) {
+    return "Cartão de crédito não pode ser a conta de origem. Escolha uma conta corrente, dinheiro ou similar.";
+  }
+  if (raw.includes("destination must be a credit card")) {
+    return "O pagamento precisa ser vinculado a um cartão de crédito.";
+  }
+  if (raw.includes("not allowed to post to origin")) {
+    return "Você não tem permissão para registrar a saída nesta conta de origem.";
+  }
+  if (raw.includes("not allowed to post to card")) {
+    return "Você não tem permissão para registrar o pagamento neste cartão.";
+  }
+  if (raw.includes("source account not found")) {
+    return "Conta de origem não encontrada. Atualize a página e tente de novo.";
+  }
+  if (raw.includes("card account not found")) {
+    return "Cartão não encontrado. Atualize a página e tente de novo.";
+  }
+  if (raw.includes("not authenticated")) {
+    return "Sua sessão expirou. Entre novamente para continuar.";
+  }
+  if (
+    raw.includes("invoice_payment_origin") ||
+    raw.includes("statement_cycle_id") ||
+    raw.includes("schema cache")
+  ) {
+    return "O banco ainda não está pronto para pagamentos de fatura. Aplique as migrations mais recentes.";
+  }
+
+  return "Não foi possível registrar o pagamento da fatura.";
 }
 
 /**
- * Registers an invoice payment: expense on the source account + income on the
- * card, both linked to the statement cycle and tagged with payment origin.
- *
- * `reconciled_with_transaction_id` stays null until a future reconciliation
- * step links this manual payment to an imported equivalent.
+ * Registers an invoice payment via atomic RPC: expense on the source account +
+ * income on the card, both linked to the statement cycle.
  */
 export async function createCreditCardInvoicePayment(
   supabase: SupabaseClient,
@@ -144,6 +247,8 @@ export async function createCreditCardInvoicePayment(
     paymentDate: input.paymentDate,
     statementCycleId: input.statementCycleId,
     hasBillingConfig: Boolean(config),
+    sourceAccount: input.sourceAccount,
+    userId: input.userId,
   });
 
   if (validationError) {
@@ -159,91 +264,45 @@ export async function createCreditCardInvoicePayment(
   const statementCycleId = target?.statementCycleId ?? null;
   const notes = input.notes?.trim() ? input.notes.trim() : null;
 
-  const sourceDescription = withOptionalNotes(
-    `Pagamento fatura (origem) — ${INVOICE_PAYMENT_CARD_DESCRIPTION}`,
-    notes,
-  );
-  const cardDescription = withOptionalNotes(
-    INVOICE_PAYMENT_CARD_DESCRIPTION,
-    notes,
+  const { data, error } = await supabase.rpc(
+    "create_credit_card_invoice_payment",
+    {
+      p_card_account_id: input.cardAccount.id,
+      p_source_account_id: input.sourceAccountId,
+      p_amount: input.amount,
+      p_payment_date: input.paymentDate,
+      p_statement_cycle_id: statementCycleId,
+      p_notes: notes,
+      p_origin: origin,
+    },
   );
 
-  const { data: sourceRow, error: sourceError } = await supabase
-    .from("transactions")
-    .insert({
-      description: sourceDescription,
-      amount: input.amount,
-      type: "expense",
-      category_id: null,
-      account_id: input.sourceAccountId,
-      transaction_date: input.paymentDate,
-      created_by: input.userId,
-      family_id: input.familyId,
-      statement_cycle_id: statementCycleId,
-      invoice_payment_origin: origin,
-      reconciled_with_transaction_id: null,
-    })
-    .select("id")
-    .single();
-
-  if (sourceError || !sourceRow) {
-    console.error(sourceError);
-    return { ok: false, message: "Não foi possível registrar a saída da origem." };
+  if (error) {
+    console.error(error);
+    return { ok: false, message: mapInvoicePaymentRpcError(error.message) };
   }
 
-  const { data: cardRow, error: cardError } = await supabase
-    .from("transactions")
-    .insert({
-      description: cardDescription,
-      amount: input.amount,
-      type: "income",
-      category_id: null,
-      account_id: input.cardAccount.id,
-      transaction_date: input.paymentDate,
-      created_by: input.userId,
-      family_id: input.familyId,
-      statement_cycle_id: statementCycleId,
-      invoice_payment_origin: origin,
-      reconciled_with_transaction_id: null,
-      linked_transaction_id: sourceRow.id,
-    })
-    .select("id")
-    .single();
+  const row = (data ?? {}) as Record<string, unknown>;
+  const sourceTransactionId = String(row.sourceTransactionId ?? "");
+  const cardTransactionId = String(row.cardTransactionId ?? "");
 
-  if (cardError || !cardRow) {
-    console.error(cardError);
-    await supabase.from("transactions").delete().eq("id", sourceRow.id);
+  if (!sourceTransactionId || !cardTransactionId) {
     return {
       ok: false,
-      message: "Não foi possível registrar o pagamento no cartão.",
+      message: "Resposta inválida ao registrar o pagamento da fatura.",
     };
-  }
-
-  await supabase
-    .from("transactions")
-    .update({ linked_transaction_id: cardRow.id })
-    .eq("id", sourceRow.id);
-
-  try {
-    await adjustAccountBalance(supabase, {
-      accountId: input.sourceAccountId,
-      delta: getTransactionBalanceDelta("expense", input.amount),
-    });
-    await adjustAccountBalance(supabase, {
-      accountId: input.cardAccount.id,
-      delta: getTransactionBalanceDelta("income", input.amount),
-    });
-  } catch (balanceError) {
-    console.error(balanceError);
   }
 
   notifyTransactionsChanged();
 
   return {
     ok: true,
-    statementCycleId,
-    sourceTransactionId: sourceRow.id,
-    cardTransactionId: cardRow.id,
+    statementCycleId:
+      typeof row.statementCycleId === "string" && row.statementCycleId
+        ? row.statementCycleId
+        : statementCycleId,
+    sourceTransactionId,
+    cardTransactionId,
     origin,
   };
 }

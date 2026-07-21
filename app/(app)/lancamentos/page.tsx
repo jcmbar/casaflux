@@ -76,6 +76,7 @@ import {
   TRANSFER_FLOW_HINT,
   TRANSFER_NEED_ACCOUNTS_MESSAGE,
 } from "@/lib/finance/account-transfer";
+import { getInvoicePaymentSourceAccounts } from "@/lib/finance/create-invoice-payment";
 import {
   adjustAccountBalance,
   getTransactionBalanceDelta,
@@ -567,6 +568,12 @@ function LancamentosPageContent() {
       user
         ? getTransferEligiblePostableAccounts(accounts, user.id)
         : [],
+    [accounts, user],
+  );
+
+  const invoicePaymentSourceAccounts = useMemo(
+    () =>
+      user ? getInvoicePaymentSourceAccounts(accounts, user.id) : [],
     [accounts, user],
   );
 
@@ -2214,7 +2221,7 @@ function LancamentosPageContent() {
           referenceDate={statementReferenceDate}
           className="animate-enter"
           onPayInvoice={() => setPayInvoiceOpen(true)}
-          payInvoiceDisabled={transferEligibleAccounts.length === 0}
+          payInvoiceDisabled={invoicePaymentSourceAccounts.length === 0}
         />
       ) : null}
 
@@ -2228,7 +2235,7 @@ function LancamentosPageContent() {
           cardAccount={selectedAccount}
           cycle={cardStatement.cycle}
           remainingAmount={cardStatement.settlement.remainingTotal}
-          sourceAccounts={transferEligibleAccounts}
+          sourceAccounts={invoicePaymentSourceAccounts}
           userId={user.id}
           onSuccess={loadData}
         />

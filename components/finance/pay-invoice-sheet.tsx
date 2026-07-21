@@ -72,6 +72,12 @@ export function PayInvoiceSheet({
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const selectedSourceAccount = useMemo(
+    () =>
+      sourceAccounts.find((account) => account.id === sourceAccountId) ?? null,
+    [sourceAccountId, sourceAccounts],
+  );
+
   useEffect(() => {
     if (!open) return;
 
@@ -97,6 +103,8 @@ export function PayInvoiceSheet({
       paymentDate,
       statementCycleId: cycle.cycleId,
       hasBillingConfig: true,
+      sourceAccount: selectedSourceAccount,
+      userId,
     });
 
     if (validationError) {
@@ -114,6 +122,7 @@ export function PayInvoiceSheet({
     const result = await createCreditCardInvoicePayment(supabase, {
       cardAccount,
       sourceAccountId,
+      sourceAccount: selectedSourceAccount,
       amount,
       paymentDate,
       userId,
