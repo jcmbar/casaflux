@@ -31,7 +31,7 @@ const BLOCK_OPTIONS: BlockOption[] = [
     id: "transactions",
     label: "Lançamentos",
     description:
-      "Remove lançamentos de contas e cartões, previsões, recorrências e histórico de importação CSV. Zera o saldo das contas e cartões mantidos.",
+      "Remove lançamentos de contas e cartões, previsões, recorrências e histórico de importação CSV. Zera o saldo das contas e cartões mantidos. As referências de categorias e aprendizados de classificação são preservadas.",
   },
   {
     id: "accounts",
@@ -161,7 +161,8 @@ export default function ConfiguracoesPage() {
         <CardContent className="space-y-2 text-sm text-muted-foreground">
           <p>
             Esta área limpa apenas dados financeiros. Autenticação, perfil,
-            família, convites e categorias permanecem intactos.
+            família, convites, categorias e aprendizados de classificação
+            permanecem intactos.
           </p>
           <p>
             Para gerenciar membros e convites, use{" "}

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CLEANUP_ALL_CONFIRMATION_PHRASE,
+  CLEANUP_PRESERVED_LEARNING_ENTITIES,
   cleanupFinanceData,
   formatCleanupSummary,
   getCleanupFinanceValidationError,
@@ -180,5 +181,13 @@ describe("cleanup scope documentation", () => {
     expect(summary).toContain("3 lançamentos");
     expect(summary).toContain("2 saldos zerados");
     expect(summary).toContain("1 histórico de importação");
+  });
+
+  it("preserves category learning entities outside transactional wipe", () => {
+    expect(CLEANUP_PRESERVED_LEARNING_ENTITIES).toEqual([
+      "categories",
+      "user_hidden_categories",
+      "category_classification_memory",
+    ]);
   });
 });

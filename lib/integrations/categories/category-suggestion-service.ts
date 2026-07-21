@@ -5,6 +5,10 @@ import type { Category } from "@/types/category";
 import type { ImportCategoryStatus, ImportPreview, ImportPreviewRow } from "../types";
 import { shouldAutoConfirmConfidence } from "./category-confidence";
 import {
+  fetchCategoryClassificationMemory,
+  mergeCategoryHistorySources,
+} from "./category-classification-memory";
+import {
   buildCategoryHistoryIndex,
   suggestCategoryForImportRow,
   type CategoryHistoryTransaction,
@@ -134,46 +138,64 @@ export async function fetchCategoryHistoryTransactions(
   supabase: SupabaseClient,
   accountIds: string[],
   limit = 500,
+  ownerUserId?: string | null,
 ): Promise<CategoryHistoryTransaction[]> {
-  if (accountIds.length === 0) {
-    return [];
-  }
+  const liveLimit = Math.max(1, Math.floor(limit * 0.7));
+  const memoryLimit = Math.max(1, limit - liveLimit);
 
-  const { data, error } = await supabase
-    .from("transactions")
-    .select("description, type, category_id, categories ( id, name )")
-    .in("account_id", accountIds)
-    .not("category_id", "is", null)
-    .order("transaction_date", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(limit);
+  let live: CategoryHistoryTransaction[] = [];
 
-  if (error) {
-    throw error;
-  }
+  if (accountIds.length > 0) {
+    const { data, error } = await supabase
+      .from("transactions")
+      .select("description, type, category_id, categories ( id, name )")
+      .in("account_id", accountIds)
+      .not("category_id", "is", null)
+      .order("transaction_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(liveLimit);
 
-  const rows = (data ?? []) as unknown as Array<{
-    description: string;
-    type: TransactionType;
-    category_id: string;
-    categories: { id: string; name: string } | { id: string; name: string }[] | null;
-  }>;
-
-  return rows.flatMap((row) => {
-    const category = Array.isArray(row.categories) ? row.categories[0] : row.categories;
-    if (!category) {
-      return [];
+    if (error) {
+      throw error;
     }
 
-    return [
-      {
-        description: row.description,
-        type: row.type,
-        categoryId: row.category_id,
-        categoryName: category.name,
-      },
-    ];
-  });
+    const rows = (data ?? []) as unknown as Array<{
+      description: string;
+      type: TransactionType;
+      category_id: string;
+      categories: { id: string; name: string } | { id: string; name: string }[] | null;
+    }>;
+
+    live = rows.flatMap((row) => {
+      const category = Array.isArray(row.categories)
+        ? row.categories[0]
+        : row.categories;
+      if (!category) {
+        return [];
+      }
+
+      return [
+        {
+          description: row.description,
+          type: row.type,
+          categoryId: row.category_id,
+          categoryName: category.name,
+        },
+      ];
+    });
+  }
+
+  let memory: CategoryHistoryTransaction[] = [];
+  if (ownerUserId) {
+    memory = await fetchCategoryClassificationMemory(
+      supabase,
+      ownerUserId,
+      memoryLimit,
+    );
+    return mergeCategoryHistorySources(live, memory, limit);
+  }
+
+  return live.slice(0, limit);
 }
 
 export function summarizeCategoryStates(rows: ImportPreviewRow[]) {

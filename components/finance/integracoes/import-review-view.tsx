@@ -1140,7 +1140,12 @@ export function ImportReviewView() {
         setCategories(loadedCategories);
 
         const accountIds = filterRealAccounts(accounts).map((account) => account.id);
-        const history = await fetchCategoryHistoryTransactions(supabase, accountIds);
+        const history = await fetchCategoryHistoryTransactions(
+          supabase,
+          accountIds,
+          500,
+          user.id,
+        );
         const catalog = mapCategoriesToSuggestionCatalog(loadedCategories);
         const enriched = enrichPreviewWithCategorySuggestions(preview, history, catalog);
 

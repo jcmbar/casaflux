@@ -15,6 +15,13 @@ export type CleanupFinanceBlock = (typeof CLEANUP_BLOCKS)[number];
 
 export const CLEANUP_ALL_CONFIRMATION_PHRASE = "APAGAR TUDO";
 
+/** Entities that transactional cleanup must never delete. */
+export const CLEANUP_PRESERVED_LEARNING_ENTITIES = [
+  "categories",
+  "user_hidden_categories",
+  "category_classification_memory",
+] as const;
+
 export type CleanupFinanceCounts = {
   transactions: number;
   predictions: number;
@@ -190,7 +197,10 @@ export function formatCleanupSummary(counts: CleanupFinanceCounts): string {
  * Scope includes bank accounts and credit cards equally.
  * When wiping transactions/accounts, also clears import_batches
  * (and cascaded import_batch_rows) for those accounts.
- * Does not delete auth, profile, family graph, or categories.
+ * Before deleting transactions, categorized descriptions are snapshotted into
+ * category_classification_memory so import suggestions keep working.
+ * Does not delete auth, profile, family graph, categories,
+ * user_hidden_categories, or category_classification_memory.
  * Balance consistency: transactions-only wipe resets balances to 0;
  * accounts wipe deletes the accounts entirely.
  */
