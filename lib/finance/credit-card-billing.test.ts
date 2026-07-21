@@ -7,6 +7,7 @@ import {
   formatStatementPeriodLabel,
   getClosingDateForTransactionDate,
   getCreditCardBillingValidationError,
+  getCreditCardBillingConfig,
   getCurrentStatementCycle,
   getDueDateForClosingDate,
   getStatementCycleForDate,
@@ -138,6 +139,11 @@ describe("credit card statement cycle", () => {
       }),
     ).toBe(false);
 
+    expect(hasCreditCardBillingConfig(null)).toBe(false);
+    expect(hasCreditCardBillingConfig(undefined)).toBe(false);
+    expect(getCreditCardBillingConfig(null)).toBeNull();
+    expect(getCreditCardBillingConfig(undefined)).toBeNull();
+
     expect(
       getTransactionStatementRelation({
         account: {
@@ -150,6 +156,19 @@ describe("credit card statement cycle", () => {
         referenceDate: "2026-07-15",
       }),
     ).toBeNull();
+  });
+
+  it("returns billing config for a valid credit card account", () => {
+    expect(
+      getCreditCardBillingConfig({
+        type: "credit_card",
+        statement_closing_day: 25,
+        statement_due_day: 3,
+      }),
+    ).toEqual({
+      statementClosingDay: 25,
+      statementDueDay: 3,
+    });
   });
 
   it("validates closing/due fields for credit cards", () => {

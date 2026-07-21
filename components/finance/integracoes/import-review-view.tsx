@@ -47,7 +47,17 @@ import {
   getImportRowDuplicateReason,
 } from "@/lib/integrations/core/import-duplicate-attention";
 import { buildImportReviewDiagnosis } from "@/lib/integrations/core/import-review-diagnosis";
-import { buildImportReviewContext } from "@/lib/integrations/core/import-review-context";
+import {
+  buildImportReviewContext,
+  collectUniqueInvoicePeriodLabels,
+} from "@/lib/integrations/core/import-review-context";
+import {
+  buildInvoicePaymentCycleTargetOptions,
+  buildInvoicePaymentFutureCycleOptions,
+  getInvoicePaymentCycleTargetSelection,
+  resolveImportedInvoicePaymentCycleId,
+  type InvoicePaymentCycleTargetSelection,
+} from "@/lib/integrations/invoice-payment/invoice-payment-cycle-target";
 import {
   getInvoicePaymentImportMode,
   resolveImportedInvoicePaymentForAccount,
@@ -62,7 +72,15 @@ import {
   type ManualInvoicePaymentCandidate,
 } from "@/lib/integrations/invoice-payment/suggest-invoice-payment-reconcile";
 import { fetchManualInvoicePaymentCandidates } from "@/lib/finance/reconcile-invoice-payment";
-import { addDaysIso } from "@/lib/finance/credit-card-billing";
+import { fetchAllTransactionsForAccounts } from "@/lib/finance/fetch-transactions";
+import {
+  buildPreviewPurchaseSettlementTransactions,
+  getInvoicePaymentEstimateTransactionWindow,
+  mapPersistedRowsToSettlementTransactions,
+  mergeSettlementTransactionsForEstimate,
+} from "@/lib/integrations/invoice-payment/invoice-payment-cycle-estimate";
+import type { StatementSettlementTransaction } from "@/lib/finance/credit-card-billing";
+import { addDaysIso, getCreditCardBillingConfig } from "@/lib/finance/credit-card-billing";
 import { formatAccountSelectLabel } from "@/lib/finance/account-identity";
 import {
   applyConfirmedCategoryToRow,
@@ -409,11 +427,17 @@ export function ImportReviewView() {
   const [invoicePaymentModes, setInvoicePaymentModes] = useState<
     Record<number, InvoicePaymentImportMode>
   >({});
+  const [invoicePaymentCycleTargets, setInvoicePaymentCycleTargets] = useState<
+    Record<number, InvoicePaymentCycleTargetSelection>
+  >({});
   const [invoiceReconcileDecisions, setInvoiceReconcileDecisions] = useState<
     Record<number, InvoicePaymentReconcileDecision>
   >({});
   const [manualInvoiceCandidates, setManualInvoiceCandidates] = useState<
     ManualInvoicePaymentCandidate[]
+  >([]);
+  const [cardSettlementTransactions, setCardSettlementTransactions] = useState<
+    StatementSettlementTransaction[]
   >([]);
   const [rowFilter, setRowFilter] = useState<RowFilter>("all");
   const [readingFile, setReadingFile] = useState(false);
@@ -609,6 +633,72 @@ export function ImportReviewView() {
     [cardAccountId, creditCardAccounts],
   );
 
+  const cardBillingConfig = useMemo(
+    () => getCreditCardBillingConfig(selectedCardAccount),
+    [selectedCardAccount],
+  );
+
+  const invoicePaymentCycleContext = useMemo(() => {
+    if (!activePreview || !cardBillingConfig) {
+      return {} as Record<
+        number,
+        {
+          options: ReturnType<typeof buildInvoicePaymentCycleTargetOptions>;
+          futureOptions: ReturnType<typeof buildInvoicePaymentFutureCycleOptions>;
+          selection: InvoicePaymentCycleTargetSelection;
+        }
+      >;
+    }
+
+    const context: Record<
+      number,
+      {
+        options: ReturnType<typeof buildInvoicePaymentCycleTargetOptions>;
+        futureOptions: ReturnType<typeof buildInvoicePaymentFutureCycleOptions>;
+        selection: InvoicePaymentCycleTargetSelection;
+      }
+    > = {};
+
+    for (const row of activePreview.rows) {
+      if (row.kind !== "card_invoice_payment") {
+        continue;
+      }
+
+      context[row.sourceLine] = {
+        options: buildInvoicePaymentCycleTargetOptions(
+          cardBillingConfig,
+          row.date,
+        ),
+        futureOptions: buildInvoicePaymentFutureCycleOptions(
+          cardBillingConfig,
+          row.date,
+        ),
+        selection: getInvoicePaymentCycleTargetSelection(
+          invoicePaymentCycleTargets,
+          row.sourceLine,
+        ),
+      };
+    }
+
+    return context;
+  }, [activePreview, cardBillingConfig, invoicePaymentCycleTargets]);
+
+  const invoicePaymentSettlementTransactions = useMemo(() => {
+    if (!activePreview || !cardAccountId) {
+      return [] as StatementSettlementTransaction[];
+    }
+
+    const previewPurchases = buildPreviewPurchaseSettlementTransactions({
+      cardAccountId,
+      previewRows: activePreview.rows,
+    });
+
+    return mergeSettlementTransactionsForEstimate(
+      cardSettlementTransactions,
+      previewPurchases,
+    );
+  }, [activePreview, cardAccountId, cardSettlementTransactions]);
+
   const invoiceReconcileSuggestions = useMemo(() => {
     if (!activePreview || !cardAccountId || detectedSource !== "nubank_credit_card") {
       return {} as Record<number, InvoicePaymentReconcileSuggestion>;
@@ -632,7 +722,17 @@ export function ImportReviewView() {
           imported: {
             amount: row.amount,
             paymentDate: row.date,
-            cycleId: resolution?.cycleId ?? null,
+            cycleId:
+              resolveImportedInvoicePaymentCycleId({
+                billingConfig: cardBillingConfig,
+                paymentDate: row.date,
+                selection: getInvoicePaymentCycleTargetSelection(
+                  invoicePaymentCycleTargets,
+                  row.sourceLine,
+                ),
+              }) ??
+              resolution?.cycleId ??
+              null,
             cardAccountId,
             sourceAccountId: invoiceSourceAccounts[row.sourceLine] ?? null,
           },
@@ -646,7 +746,9 @@ export function ImportReviewView() {
   }, [
     activePreview,
     cardAccountId,
+    cardBillingConfig,
     detectedSource,
+    invoicePaymentCycleTargets,
     invoicePaymentModes,
     invoiceSourceAccounts,
     manualInvoiceCandidates,
@@ -685,15 +787,17 @@ export function ImportReviewView() {
     const destinationAccount =
       accounts.find((account) => account.id === targetAccountId) ?? null;
 
-    const invoicePeriodLabels = activePreview.rows
-      .filter((row) => row.kind === "card_invoice_payment")
-      .map(
-        (row) =>
-          resolveImportedInvoicePaymentForAccount({
-            paymentDate: row.date,
-            cardAccount: selectedCardAccount,
-          })?.periodLabel,
-      );
+    const invoicePeriodLabels = collectUniqueInvoicePeriodLabels(
+      activePreview.rows
+        .filter((row) => row.kind === "card_invoice_payment")
+        .map(
+          (row) =>
+            resolveImportedInvoicePaymentForAccount({
+              paymentDate: row.date,
+              cardAccount: selectedCardAccount,
+            })?.periodLabel,
+        ),
+    );
 
     return buildImportReviewContext({
       destinationAccountLabel: destinationAccount
@@ -834,6 +938,76 @@ export function ImportReviewView() {
       cancelled = true;
     };
   }, [activePreview, cardAccountId, detectedSource, supabase]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCardSettlementTransactions() {
+      if (
+        !activePreview ||
+        !cardAccountId ||
+        !cardBillingConfig ||
+        detectedSource !== "nubank_credit_card"
+      ) {
+        setCardSettlementTransactions([]);
+        return;
+      }
+
+      const paymentRows = activePreview.rows.filter(
+        (row) => row.kind === "card_invoice_payment",
+      );
+
+      if (paymentRows.length === 0) {
+        setCardSettlementTransactions([]);
+        return;
+      }
+
+      const window = getInvoicePaymentEstimateTransactionWindow({
+        billingConfig: cardBillingConfig,
+        paymentDates: paymentRows.map((row) => row.date),
+      });
+
+      const { data, error } = await fetchAllTransactionsForAccounts<{
+        amount: number;
+        type: "income" | "expense" | "transfer";
+        account_id: string;
+        transaction_date: string;
+        statement_cycle_id: string | null;
+        invoice_payment_origin: "manual" | "imported" | null;
+        reconciled_with_transaction_id: string | null;
+      }>(supabase, {
+        accountIds: [cardAccountId],
+        select:
+          "amount, type, account_id, transaction_date, statement_cycle_id, invoice_payment_origin, reconciled_with_transaction_id",
+        dateFrom: window.dateFrom,
+        dateTo: window.dateTo,
+      });
+
+      if (cancelled) {
+        return;
+      }
+
+      if (error) {
+        console.error(error);
+        setCardSettlementTransactions([]);
+        return;
+      }
+
+      setCardSettlementTransactions(mapPersistedRowsToSettlementTransactions(data));
+    }
+
+    void loadCardSettlementTransactions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activePreview,
+    cardAccountId,
+    cardBillingConfig,
+    detectedSource,
+    supabase,
+  ]);
 
   useEffect(() => {
     async function loadAccounts() {
@@ -1007,8 +1181,10 @@ export function ImportReviewView() {
     setPreview(null);
     setInvoiceSourceAccounts({});
     setInvoicePaymentModes({});
+    setInvoicePaymentCycleTargets({});
     setInvoiceReconcileDecisions({});
     setManualInvoiceCandidates([]);
+    setCardSettlementTransactions([]);
     setRowFilter("all");
 
     const reader = new FileReader();
@@ -1061,6 +1237,7 @@ export function ImportReviewView() {
       targetAccountId,
       invoiceSourceAccounts,
       invoicePaymentModes,
+      invoicePaymentCycleTargets,
       invoicePaymentReconcileDecisions: invoiceReconcileDecisions,
       invoicePaymentReconcileSuggestions: invoiceReconcileSuggestions,
       ownerUserId: user.id,
@@ -1105,8 +1282,10 @@ export function ImportReviewView() {
     setCommitting(false);
     setInvoiceSourceAccounts({});
     setInvoicePaymentModes({});
+    setInvoicePaymentCycleTargets({});
     setInvoiceReconcileDecisions({});
     setManualInvoiceCandidates([]);
+    setCardSettlementTransactions([]);
     setRowFilter("all");
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -1679,6 +1858,43 @@ export function ImportReviewView() {
                           paymentDate: row.date,
                           cardAccount: selectedCardAccount,
                         })}
+                        cycleTargetOptions={
+                          invoicePaymentCycleContext[row.sourceLine]?.options ??
+                          []
+                        }
+                        cycleTargetSelection={
+                          invoicePaymentCycleContext[row.sourceLine]?.selection ?? {
+                            target: "previous",
+                          }
+                        }
+                        futureCycleOptions={
+                          invoicePaymentCycleContext[row.sourceLine]
+                            ?.futureOptions ?? []
+                        }
+                        onCycleTargetChange={(target) =>
+                          setInvoicePaymentCycleTargets((current) => ({
+                            ...current,
+                            [row.sourceLine]: {
+                              ...getInvoicePaymentCycleTargetSelection(
+                                current,
+                                row.sourceLine,
+                              ),
+                              target,
+                            },
+                          }))
+                        }
+                        onFutureCycleChange={(cycleId) =>
+                          setInvoicePaymentCycleTargets((current) => ({
+                            ...current,
+                            [row.sourceLine]: {
+                              target: "future",
+                              futureCycleId: cycleId,
+                            },
+                          }))
+                        }
+                        billingConfig={cardBillingConfig}
+                        cardAccountId={cardAccountId}
+                        settlementTransactions={invoicePaymentSettlementTransactions}
                         mode={getInvoicePaymentImportMode(
                           invoicePaymentModes,
                           row.sourceLine,
@@ -1820,6 +2036,45 @@ export function ImportReviewView() {
                               paymentDate: row.date,
                               cardAccount: selectedCardAccount,
                             })}
+                            cycleTargetOptions={
+                              invoicePaymentCycleContext[row.sourceLine]?.options ??
+                              []
+                            }
+                            cycleTargetSelection={
+                              invoicePaymentCycleContext[row.sourceLine]?.selection ?? {
+                                target: "previous",
+                              }
+                            }
+                            futureCycleOptions={
+                              invoicePaymentCycleContext[row.sourceLine]
+                                ?.futureOptions ?? []
+                            }
+                            onCycleTargetChange={(target) =>
+                              setInvoicePaymentCycleTargets((current) => ({
+                                ...current,
+                                [row.sourceLine]: {
+                                  ...getInvoicePaymentCycleTargetSelection(
+                                    current,
+                                    row.sourceLine,
+                                  ),
+                                  target,
+                                },
+                              }))
+                            }
+                            onFutureCycleChange={(cycleId) =>
+                              setInvoicePaymentCycleTargets((current) => ({
+                                ...current,
+                                [row.sourceLine]: {
+                                  target: "future",
+                                  futureCycleId: cycleId,
+                                },
+                              }))
+                            }
+                            billingConfig={cardBillingConfig}
+                            cardAccountId={cardAccountId}
+                            settlementTransactions={
+                              invoicePaymentSettlementTransactions
+                            }
                             mode={getInvoicePaymentImportMode(
                               invoicePaymentModes,
                               row.sourceLine,

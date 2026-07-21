@@ -1,9 +1,24 @@
 "use client";
 
+import { useMemo } from "react";
+
 import { FormSelect } from "@/components/forms/form-controls";
 import { Button } from "@/components/ui/button";
 import { formatAccountSelectLabel } from "@/lib/finance/account-identity";
+import type { CreditCardBillingConfig } from "@/lib/finance/credit-card-billing";
+import type { StatementSettlementTransaction } from "@/lib/finance/credit-card-billing";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { getInvoicePaymentCycleTargetEstimatedEffect } from "@/lib/integrations/invoice-payment/invoice-payment-cycle-estimate";
+import {
+  classifyImportedInvoicePaymentSuggestionConfidence,
+} from "@/lib/integrations/invoice-payment/invoice-payment-suggestion-confidence";
+import {
+  getInvoicePaymentCycleTargetImpactMessage,
+  type InvoicePaymentCycleTarget,
+  type InvoicePaymentCycleTargetOption,
+  type InvoicePaymentCycleTargetSelection,
+  type InvoicePaymentFutureCycleOption,
+} from "@/lib/integrations/invoice-payment/invoice-payment-cycle-target";
 import type { InvoicePaymentImportMode } from "@/lib/integrations/invoice-payment/resolve-invoice-payment";
 import type { ImportedInvoicePaymentResolution } from "@/lib/integrations/invoice-payment/resolve-invoice-payment";
 import type {
@@ -12,11 +27,20 @@ import type {
 } from "@/lib/integrations/invoice-payment/suggest-invoice-payment-reconcile";
 import type { Account } from "@/types/account";
 import type { ImportPreviewRow } from "@/lib/integrations/types";
+import { InvoicePaymentCycleTargetRadioGroup } from "@/components/finance/integracoes/invoice-payment-cycle-target-radio-group";
 
 export function InvoicePaymentImportPanel({
   row,
   cardName,
   resolution,
+  cycleTargetOptions,
+  cycleTargetSelection,
+  futureCycleOptions,
+  onCycleTargetChange,
+  onFutureCycleChange,
+  billingConfig = null,
+  cardAccountId = "",
+  settlementTransactions = [],
   mode,
   sourceAccountId,
   checkingAccounts,
@@ -29,6 +53,14 @@ export function InvoicePaymentImportPanel({
   row: ImportPreviewRow;
   cardName: string;
   resolution: ImportedInvoicePaymentResolution | null;
+  cycleTargetOptions: InvoicePaymentCycleTargetOption[];
+  cycleTargetSelection: InvoicePaymentCycleTargetSelection;
+  futureCycleOptions: InvoicePaymentFutureCycleOption[];
+  onCycleTargetChange: (target: InvoicePaymentCycleTarget) => void;
+  onFutureCycleChange: (cycleId: string) => void;
+  billingConfig?: CreditCardBillingConfig | null;
+  cardAccountId?: string;
+  settlementTransactions?: StatementSettlementTransaction[];
   mode: InvoicePaymentImportMode;
   sourceAccountId: string;
   checkingAccounts: Account[];
@@ -38,6 +70,58 @@ export function InvoicePaymentImportPanel({
   reconcileDecision?: InvoicePaymentReconcileDecision;
   onReconcileDecisionChange?: (decision: InvoicePaymentReconcileDecision) => void;
 }) {
+  const cycleTargetImpact = getInvoicePaymentCycleTargetImpactMessage({
+    cycleTargetOptions,
+    cycleTargetSelection,
+    futureCycleOptions,
+  });
+  const estimatedEffect = useMemo(() => {
+    if (!billingConfig || !cardAccountId || mode !== "payment") {
+      return null;
+    }
+
+    return getInvoicePaymentCycleTargetEstimatedEffect({
+      billingConfig,
+      cardAccountId,
+      paymentDate: row.date,
+      creditAmount: row.amount,
+      cycleTargetSelection,
+      transactions: settlementTransactions,
+    });
+  }, [
+    billingConfig,
+    cardAccountId,
+    cycleTargetSelection,
+    mode,
+    row.amount,
+    row.date,
+    settlementTransactions,
+  ]);
+  const suggestionConfidence = useMemo(() => {
+    if (!billingConfig || !cardAccountId || !resolution) {
+      return null;
+    }
+
+    return classifyImportedInvoicePaymentSuggestionConfidence({
+      billingConfig,
+      cardAccountId,
+      paymentDate: row.date,
+      creditAmount: row.amount,
+      transactions: settlementTransactions,
+    });
+  }, [
+    billingConfig,
+    cardAccountId,
+    resolution,
+    row.amount,
+    row.date,
+    settlementTransactions,
+  ]);
+  const showFutureSelector =
+    mode === "payment" &&
+    cycleTargetSelection.target === "future" &&
+    futureCycleOptions.length > 0;
+
   return (
     <div
       className="mt-3 space-y-3 rounded-xl border border-violet-500/25 bg-violet-500/5 px-3 py-3"
@@ -60,14 +144,29 @@ export function InvoicePaymentImportPanel({
           <li>
             Data: <span className="text-foreground">{formatDate(row.date)}</span>
           </li>
-          <li>
-            Provável fatura quitada:{" "}
-            <span className="text-foreground">
-              {resolution
-                ? `período ${resolution.periodLabel}, vencimento ${resolution.dueDateLabel}`
-                : "configure fechamento/vencimento do cartão para inferir o ciclo"}
-            </span>
-          </li>
+          {resolution ? (
+            <>
+              <li>
+                Sugestão: fatura anterior —{" "}
+                <span className="text-foreground">
+                  período {resolution.periodLabel}, vencimento{" "}
+                  {resolution.dueDateLabel}
+                </span>
+              </li>
+              {suggestionConfidence ? (
+                <li
+                  data-testid={`invoice-suggestion-confidence-${row.sourceLine}`}
+                  data-confidence={suggestionConfidence.confidence}
+                >
+                  {suggestionConfidence.message}
+                </li>
+              ) : null}
+            </>
+          ) : (
+            <li>
+              Sugestão indisponível: configure fechamento e vencimento do cartão.
+            </li>
+          )}
         </ul>
       </div>
 
@@ -91,6 +190,66 @@ export function InvoicePaymentImportPanel({
           Manter como lançamento comum
         </Button>
       </div>
+
+      {mode === "payment" && cycleTargetOptions.length > 0 ? (
+        <InvoicePaymentCycleTargetRadioGroup
+          sourceLine={row.sourceLine}
+          options={cycleTargetOptions}
+          selection={cycleTargetSelection}
+          onTargetChange={onCycleTargetChange}
+        />
+      ) : null}
+
+      {showFutureSelector ? (
+        <FormSelect
+          id={`invoice-future-cycle-${row.sourceLine}`}
+          label="Qual fatura futura?"
+          value={
+            cycleTargetSelection.futureCycleId ??
+            futureCycleOptions[0]?.cycleId ??
+            ""
+          }
+          onChange={(event) => onFutureCycleChange(event.target.value)}
+          data-testid={`invoice-future-cycle-select-${row.sourceLine}`}
+        >
+          {futureCycleOptions.map((option) => (
+            <option key={option.cycleId} value={option.cycleId}>
+              {option.periodLabel} · vence {option.dueDateLabel}
+            </option>
+          ))}
+        </FormSelect>
+      ) : null}
+
+      {mode === "payment" && cycleTargetImpact ? (
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid={`invoice-cycle-impact-${row.sourceLine}`}
+          data-target={cycleTargetSelection.target}
+        >
+          {cycleTargetImpact.highlight ? (
+            <>
+              {cycleTargetImpact.text.split(cycleTargetImpact.highlight)[0]}
+              <span className="font-medium text-foreground">
+                {cycleTargetImpact.highlight}
+              </span>
+              {cycleTargetImpact.text.split(cycleTargetImpact.highlight)[1]}
+            </>
+          ) : (
+            cycleTargetImpact.text
+          )}
+        </p>
+      ) : null}
+
+      {mode === "payment" && estimatedEffect ? (
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid={`invoice-cycle-estimate-${row.sourceLine}`}
+          data-target={estimatedEffect.target}
+          data-remaining={estimatedEffect.remainingAfterCredit}
+        >
+          {estimatedEffect.text}
+        </p>
+      ) : null}
 
       {mode === "payment" ? (
         <FormSelect

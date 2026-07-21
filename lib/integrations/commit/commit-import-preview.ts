@@ -8,6 +8,7 @@ import {
 import { applyInvoicePaymentReconciliationsForBatch } from "@/lib/finance/reconcile-invoice-payment";
 import type { Account } from "@/types/account";
 import { buildImportRowIdentityKey } from "../history/row-identity";
+import type { InvoicePaymentCycleTargetSelection } from "../invoice-payment/invoice-payment-cycle-target";
 import type { InvoicePaymentImportMode } from "../invoice-payment/resolve-invoice-payment";
 import type {
   InvoicePaymentReconcileDecision,
@@ -30,6 +31,11 @@ export type CommitImportPreviewInput = {
   invoiceSourceAccounts: Record<number, string>;
   /** Confirm as payment (default) or import as common card income. */
   invoicePaymentModes?: Record<number, InvoicePaymentImportMode>;
+  /** Statement cycle target per invoice payment row (default: previous). */
+  invoicePaymentCycleTargets?: Record<
+    number,
+    InvoicePaymentCycleTargetSelection
+  >;
   /**
    * Opt-in reconcile decisions per source line. Default is skip when unset.
    * Only `"link"` rows with a matching suggestion are applied after commit.
@@ -124,6 +130,7 @@ export function resolveImportBillingConfig(
 
 export function buildCommitImportRpcPayload(input: CommitImportPreviewInput) {
   const modes = input.invoicePaymentModes ?? {};
+  const cycleTargets = input.invoicePaymentCycleTargets ?? {};
   const committableRows = getCommittableImportRows(
     input.preview.rows,
     input.invoiceSourceAccounts,
@@ -140,6 +147,7 @@ export function buildCommitImportRpcPayload(input: CommitImportPreviewInput) {
         input.invoiceSourceAccounts,
         billingConfig,
         modes,
+        cycleTargets,
       ),
     ),
   );

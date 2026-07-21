@@ -2,7 +2,11 @@ import type { TransactionType } from "@/types/transaction";
 import type { ImportPreviewRow, NormalizedImportKind } from "../types";
 import { getConfirmedCategoryForCommit } from "../categories/category-suggestion-service";
 import type { CreditCardBillingConfig } from "@/lib/finance/credit-card-billing";
-import { getStatementCyclePaidByPaymentDate } from "@/lib/finance/credit-card-billing";
+import {
+  getInvoicePaymentCycleTargetSelection,
+  resolveImportedInvoicePaymentCycleId,
+  type InvoicePaymentCycleTargetSelection,
+} from "../invoice-payment/invoice-payment-cycle-target";
 import {
   getInvoicePaymentImportMode,
   type InvoicePaymentImportMode,
@@ -47,6 +51,10 @@ export function mapImportRowToTransactions(
   invoiceSourceAccountId?: string,
   billingConfig?: CreditCardBillingConfig | null,
   invoicePaymentMode: InvoicePaymentImportMode = "payment",
+  invoicePaymentCycleTargets: Record<
+    number,
+    InvoicePaymentCycleTargetSelection
+  > = {},
 ): CommitImportTransactionDraft[] {
   const base = {
     amount: row.amount,
@@ -70,7 +78,14 @@ export function mapImportRowToTransactions(
     }
 
     const statementCycleId = billingConfig
-      ? getStatementCyclePaidByPaymentDate(billingConfig, row.date).cycleId
+      ? resolveImportedInvoicePaymentCycleId({
+          billingConfig,
+          paymentDate: row.date,
+          selection: getInvoicePaymentCycleTargetSelection(
+            invoicePaymentCycleTargets,
+            row.sourceLine,
+          ),
+        })
       : null;
 
     return [
@@ -242,6 +257,10 @@ export function buildCommitImportRowPayload(
   invoiceSourceAccounts: Record<number, string>,
   billingConfig?: CreditCardBillingConfig | null,
   invoicePaymentModes: Record<number, InvoicePaymentImportMode> = {},
+  invoicePaymentCycleTargets: Record<
+    number,
+    InvoicePaymentCycleTargetSelection
+  > = {},
 ): CommitImportRowPayload {
   const invoiceSourceAccountId = invoiceSourceAccounts[row.sourceLine];
   const invoicePaymentMode = getInvoicePaymentImportMode(
@@ -256,6 +275,7 @@ export function buildCommitImportRowPayload(
       invoiceSourceAccountId,
       billingConfig,
       invoicePaymentMode,
+      invoicePaymentCycleTargets,
     ),
     invoicePaymentMode,
   );

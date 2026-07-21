@@ -35,6 +35,7 @@ export function AppHeader() {
           <ThemeToggle />
           <UserMenu />
           <Button
+            nativeButton={false}
             render={<Link href="/lancamentos?new=1" />}
             className="hidden shadow-sm sm:inline-flex"
           >
@@ -42,6 +43,7 @@ export function AppHeader() {
             Novo lançamento
           </Button>
           <Button
+            nativeButton={false}
             render={<Link href="/lancamentos?new=1" />}
             size="icon"
             className="sm:hidden"

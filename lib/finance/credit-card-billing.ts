@@ -76,11 +76,18 @@ export function isValidStatementDay(day: number): boolean {
 }
 
 export function hasCreditCardBillingConfig(
-  account: Pick<Account, "type" | "statement_closing_day" | "statement_due_day">,
+  account:
+    | Pick<Account, "type" | "statement_closing_day" | "statement_due_day">
+    | null
+    | undefined,
 ): account is CreditCardBillingAccount & {
   statement_closing_day: number;
   statement_due_day: number;
 } {
+  if (!account) {
+    return false;
+  }
+
   return (
     account.type === "credit_card" &&
     isValidStatementDay(account.statement_closing_day ?? NaN) &&
@@ -89,7 +96,10 @@ export function hasCreditCardBillingConfig(
 }
 
 export function getCreditCardBillingConfig(
-  account: Pick<Account, "type" | "statement_closing_day" | "statement_due_day">,
+  account:
+    | Pick<Account, "type" | "statement_closing_day" | "statement_due_day">
+    | null
+    | undefined,
 ): CreditCardBillingConfig | null {
   if (!hasCreditCardBillingConfig(account)) {
     return null;
