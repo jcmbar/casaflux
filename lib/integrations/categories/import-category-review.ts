@@ -37,6 +37,13 @@ export const DEFAULT_IMPORT_CATEGORY_REVIEW_MODE: ImportCategoryReviewMode =
   "assisted";
 
 export function isImportRowCategorizable(row: ImportPreviewRow): boolean {
+  if (row.kind === "card_invoice_payment") {
+    // Invoice payments use a dedicated confirmation flow (source account +
+    // statement cycle). Keep them out of category review unless treated as a
+    // common launch later in the invoice panel.
+    return false;
+  }
+
   return (
     row.historicalStatus === "new" &&
     row.reviewStatus !== "invalid" &&

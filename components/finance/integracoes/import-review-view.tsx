@@ -721,6 +721,14 @@ export function ImportReviewView() {
     );
   }, [activePreview, cardAccountId, cardSettlementTransactions]);
 
+  const invoicePaymentRows = useMemo(
+    () =>
+      (activePreview?.rows ?? []).filter(
+        (row) => row.kind === "card_invoice_payment",
+      ),
+    [activePreview],
+  );
+
   const invoiceReconcileSuggestions = useMemo(() => {
     if (!activePreview || !cardAccountId || detectedSource !== "nubank_credit_card") {
       return {} as Record<number, InvoicePaymentReconcileSuggestion>;
@@ -1448,6 +1456,83 @@ export function ImportReviewView() {
     }
   }
 
+  function renderInvoicePaymentPanel(row: ImportPreviewRow) {
+    return (
+      <InvoicePaymentImportPanel
+        row={row}
+        cardName={
+          selectedCardAccount
+            ? formatAccountSelectLabel(selectedCardAccount)
+            : "Cartão selecionado"
+        }
+        resolution={resolveImportedInvoicePaymentForAccount({
+          paymentDate: row.date,
+          cardAccount: selectedCardAccount,
+        })}
+        cycleTargetOptions={
+          invoicePaymentCycleContext[row.sourceLine]?.options ?? []
+        }
+        cycleTargetSelection={
+          invoicePaymentCycleContext[row.sourceLine]?.selection ?? {
+            target: "previous",
+          }
+        }
+        futureCycleOptions={
+          invoicePaymentCycleContext[row.sourceLine]?.futureOptions ?? []
+        }
+        onCycleTargetChange={(target) =>
+          setInvoicePaymentCycleTargets((current) => ({
+            ...current,
+            [row.sourceLine]: {
+              ...getInvoicePaymentCycleTargetSelection(current, row.sourceLine),
+              target,
+            },
+          }))
+        }
+        onFutureCycleChange={(cycleId) =>
+          setInvoicePaymentCycleTargets((current) => ({
+            ...current,
+            [row.sourceLine]: {
+              target: "future",
+              futureCycleId: cycleId,
+            },
+          }))
+        }
+        billingConfig={cardBillingConfig}
+        cardAccountId={cardAccountId}
+        settlementTransactions={invoicePaymentSettlementTransactions}
+        mode={getInvoicePaymentImportMode(invoicePaymentModes, row.sourceLine)}
+        sourceAccountId={invoiceSourceAccounts[row.sourceLine] ?? ""}
+        checkingAccounts={checkingAccounts}
+        onModeChange={(mode) =>
+          setInvoicePaymentModes((current) => ({
+            ...current,
+            [row.sourceLine]: mode,
+          }))
+        }
+        onSourceAccountChange={(accountId) =>
+          setInvoiceSourceAccounts((current) => ({
+            ...current,
+            [row.sourceLine]: accountId,
+          }))
+        }
+        reconcileSuggestion={
+          invoiceReconcileSuggestions[row.sourceLine] ?? null
+        }
+        reconcileDecision={getInvoicePaymentReconcileDecision(
+          invoiceReconcileDecisions,
+          row.sourceLine,
+        )}
+        onReconcileDecisionChange={(decision) =>
+          setInvoiceReconcileDecisions((current) => ({
+            ...current,
+            [row.sourceLine]: decision,
+          }))
+        }
+      />
+    );
+  }
+
   return (
     <div className="space-y-6 md:space-y-8">
       <div className="space-y-3">
@@ -1855,6 +1940,48 @@ export function ImportReviewView() {
             />
           </div>
 
+          {invoicePaymentRows.length > 0 ? (
+            <Card
+              className="border-violet-500/25 shadow-sm"
+              data-testid="import-invoice-payment-review-section"
+            >
+              <CardHeader>
+                <CardTitle className="text-base">
+                  Pagamentos de fatura detectados
+                </CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  Confirme a conta de origem e a fatura alvo (anterior, atual ou
+                  futura) antes de revisar categorias dos demais lançamentos.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {invoicePaymentRows.map((row) => (
+                  <div
+                    key={`invoice-payment-review-${row.sourceLine}`}
+                    className="rounded-xl border border-violet-500/20 bg-violet-500/5 px-4 py-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium">
+                          Linha {row.sourceLine} — {row.description}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatDate(row.date)} · {formatCurrency(row.amount)} ·{" "}
+                          {importKindLabels[row.kind]}
+                        </p>
+                      </div>
+                      <ImportRowBadges
+                        row={row}
+                        isDuplicate={duplicateSourceLines.has(row.sourceLine)}
+                      />
+                    </div>
+                    {renderInvoicePaymentPanel(row)}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
+
           {activePreview.categorySummary && user ? (
             <ImportCategoryReviewPanel
               rows={activePreview.rows}
@@ -1995,88 +2122,13 @@ export function ImportReviewView() {
                     </div>
 
                     {row.kind === "card_invoice_payment" ? (
-                      <InvoicePaymentImportPanel
-                        row={row}
-                        cardName={
-                          selectedCardAccount
-                            ? formatAccountSelectLabel(selectedCardAccount)
-                            : "Cartão selecionado"
-                        }
-                        resolution={resolveImportedInvoicePaymentForAccount({
-                          paymentDate: row.date,
-                          cardAccount: selectedCardAccount,
-                        })}
-                        cycleTargetOptions={
-                          invoicePaymentCycleContext[row.sourceLine]?.options ??
-                          []
-                        }
-                        cycleTargetSelection={
-                          invoicePaymentCycleContext[row.sourceLine]?.selection ?? {
-                            target: "previous",
-                          }
-                        }
-                        futureCycleOptions={
-                          invoicePaymentCycleContext[row.sourceLine]
-                            ?.futureOptions ?? []
-                        }
-                        onCycleTargetChange={(target) =>
-                          setInvoicePaymentCycleTargets((current) => ({
-                            ...current,
-                            [row.sourceLine]: {
-                              ...getInvoicePaymentCycleTargetSelection(
-                                current,
-                                row.sourceLine,
-                              ),
-                              target,
-                            },
-                          }))
-                        }
-                        onFutureCycleChange={(cycleId) =>
-                          setInvoicePaymentCycleTargets((current) => ({
-                            ...current,
-                            [row.sourceLine]: {
-                              target: "future",
-                              futureCycleId: cycleId,
-                            },
-                          }))
-                        }
-                        billingConfig={cardBillingConfig}
-                        cardAccountId={cardAccountId}
-                        settlementTransactions={invoicePaymentSettlementTransactions}
-                        mode={getInvoicePaymentImportMode(
-                          invoicePaymentModes,
-                          row.sourceLine,
-                        )}
-                        sourceAccountId={
-                          invoiceSourceAccounts[row.sourceLine] ?? ""
-                        }
-                        checkingAccounts={checkingAccounts}
-                        onModeChange={(mode) =>
-                          setInvoicePaymentModes((current) => ({
-                            ...current,
-                            [row.sourceLine]: mode,
-                          }))
-                        }
-                        onSourceAccountChange={(accountId) =>
-                          setInvoiceSourceAccounts((current) => ({
-                            ...current,
-                            [row.sourceLine]: accountId,
-                          }))
-                        }
-                        reconcileSuggestion={
-                          invoiceReconcileSuggestions[row.sourceLine] ?? null
-                        }
-                        reconcileDecision={getInvoicePaymentReconcileDecision(
-                          invoiceReconcileDecisions,
-                          row.sourceLine,
-                        )}
-                        onReconcileDecisionChange={(decision) =>
-                          setInvoiceReconcileDecisions((current) => ({
-                            ...current,
-                            [row.sourceLine]: decision,
-                          }))
-                        }
-                      />
+                      <p className="mt-3 text-xs text-muted-foreground">
+                        Configure conta de origem e fatura alvo na seção{" "}
+                        <span className="font-medium text-foreground">
+                          Pagamentos de fatura detectados
+                        </span>{" "}
+                        acima.
+                      </p>
                     ) : null}
                   </div>
                   );
@@ -2192,94 +2244,18 @@ export function ImportReviewView() {
                         </div>
 
                         {isInvoicePayment ? (
-                          <InvoicePaymentImportPanel
-                            row={row}
-                            cardName={
-                              selectedCardAccount
-                                ? formatAccountSelectLabel(selectedCardAccount)
-                                : "Cartão selecionado"
-                            }
-                            resolution={resolveImportedInvoicePaymentForAccount({
-                              paymentDate: row.date,
-                              cardAccount: selectedCardAccount,
-                            })}
-                            cycleTargetOptions={
-                              invoicePaymentCycleContext[row.sourceLine]?.options ??
-                              []
-                            }
-                            cycleTargetSelection={
-                              invoicePaymentCycleContext[row.sourceLine]?.selection ?? {
-                                target: "previous",
-                              }
-                            }
-                            futureCycleOptions={
-                              invoicePaymentCycleContext[row.sourceLine]
-                                ?.futureOptions ?? []
-                            }
-                            onCycleTargetChange={(target) =>
-                              setInvoicePaymentCycleTargets((current) => ({
-                                ...current,
-                                [row.sourceLine]: {
-                                  ...getInvoicePaymentCycleTargetSelection(
-                                    current,
-                                    row.sourceLine,
-                                  ),
-                                  target,
-                                },
-                              }))
-                            }
-                            onFutureCycleChange={(cycleId) =>
-                              setInvoicePaymentCycleTargets((current) => ({
-                                ...current,
-                                [row.sourceLine]: {
-                                  target: "future",
-                                  futureCycleId: cycleId,
-                                },
-                              }))
-                            }
-                            billingConfig={cardBillingConfig}
-                            cardAccountId={cardAccountId}
-                            settlementTransactions={
-                              invoicePaymentSettlementTransactions
-                            }
-                            mode={getInvoicePaymentImportMode(
-                              invoicePaymentModes,
-                              row.sourceLine,
-                            )}
-                            sourceAccountId={
-                              invoiceSourceAccounts[row.sourceLine] ?? ""
-                            }
-                            checkingAccounts={checkingAccounts}
-                            onModeChange={(mode) =>
-                              setInvoicePaymentModes((current) => ({
-                                ...current,
-                                [row.sourceLine]: mode,
-                              }))
-                            }
-                            onSourceAccountChange={(accountId) =>
-                              setInvoiceSourceAccounts((current) => ({
-                                ...current,
-                                [row.sourceLine]: accountId,
-                              }))
-                            }
-                            reconcileSuggestion={
-                              invoiceReconcileSuggestions[row.sourceLine] ?? null
-                            }
-                            reconcileDecision={getInvoicePaymentReconcileDecision(
-                              invoiceReconcileDecisions,
-                              row.sourceLine,
-                            )}
-                            onReconcileDecisionChange={(decision) =>
-                              setInvoiceReconcileDecisions((current) => ({
-                                ...current,
-                                [row.sourceLine]: decision,
-                              }))
-                            }
-                          />
+                          <p className="mt-3 text-xs text-muted-foreground">
+                            Configure conta de origem e fatura alvo na seção{" "}
+                            <span className="font-medium text-foreground">
+                              Pagamentos de fatura detectados
+                            </span>{" "}
+                            acima.
+                          </p>
                         ) : null}
 
                         {showFullCategoryList &&
                         row.historicalStatus === "new" &&
+                        !isInvoicePayment &&
                         row.reviewStatus !== "invalid" &&
                         row.reviewStatus !== "already_imported" &&
                         user ? (

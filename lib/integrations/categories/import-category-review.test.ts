@@ -150,6 +150,23 @@ describe("import category review modes", () => {
     ).toHaveLength(1);
   });
 
+  it("excludes card invoice payments from category review", () => {
+    const invoiceRow = buildRow({
+      sourceLine: 9,
+      description: "Pagamento recebido",
+      kind: "card_invoice_payment",
+      direction: "in",
+      reviewStatus: "needs_account",
+    });
+
+    expect(isImportRowCategorizable(invoiceRow)).toBe(false);
+    expect(
+      getImportCategoryReviewQueue([invoiceRow, ...rows], "assisted").map(
+        (row) => row.sourceLine,
+      ),
+    ).not.toContain(9);
+  });
+
   it("skip wraps assisted index within the pending queue", () => {
     expect(getNextAssistedReviewIndex(1, 3, "skip")).toBe(2);
     expect(getNextAssistedReviewIndex(2, 3, "skip")).toBe(0);
