@@ -1674,7 +1674,6 @@ export function ImportReviewView() {
             [row.sourceLine]: decision,
           }))
         }
-        fileName={fileName}
       />
     );
   }
