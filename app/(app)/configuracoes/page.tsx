@@ -7,6 +7,8 @@ import Link from "next/link";
 import { useConfirm } from "@/components/feedback/confirm-dialog-provider";
 import { FormInput } from "@/components/forms/form-controls";
 import { PageIntro } from "@/components/layout/page-intro";
+import { ChangePasswordCard } from "@/components/settings/change-password-card";
+import { ProfileSettingsCard } from "@/components/settings/profile-settings-card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -173,6 +175,10 @@ export default function ConfiguracoesPage() {
           </p>
         </CardContent>
       </Card>
+
+      <ProfileSettingsCard />
+
+      <ChangePasswordCard />
 
       <Card className="animate-enter-delayed border-destructive/20 shadow-sm">
         <CardHeader>
