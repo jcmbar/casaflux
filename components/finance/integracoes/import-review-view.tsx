@@ -44,6 +44,7 @@ import {
 } from "@/lib/integrations/core/identify-import-file";
 import { buildImportFileConfirmation } from "@/lib/integrations/core/import-file-confirmation";
 import { formatImportMobileCommitSummary } from "@/lib/integrations/core/import-mobile-commit-summary";
+import { resolveImportDestinationCardAccountId } from "@/lib/integrations/core/resolve-import-destination-card";
 import {
   formatPlannedImportBanksSummary,
   getImportFileSelectHint,
@@ -1261,6 +1262,33 @@ export function ImportReviewView() {
     guidedReimport.accountId,
   ]);
 
+  useEffect(() => {
+    if (accountsLoading || !requiresCardAccount) {
+      return;
+    }
+
+    // Espere a reimportação guiada aplicar a conta pré-selecionada primeiro.
+    if (guidedReimport.accountId && !guidedAccountApplied) {
+      return;
+    }
+
+    const nextCardAccountId = resolveImportDestinationCardAccountId({
+      creditCardAccountIds: creditCardAccounts.map((account) => account.id),
+      currentCardAccountId: cardAccountId,
+    });
+
+    if (nextCardAccountId !== cardAccountId) {
+      setCardAccountId(nextCardAccountId);
+    }
+  }, [
+    accountsLoading,
+    cardAccountId,
+    creditCardAccounts,
+    guidedAccountApplied,
+    guidedReimport.accountId,
+    requiresCardAccount,
+  ]);
+
   const guidedAccountName = useMemo(() => {
     if (!guidedReimport.accountId) return null;
     return (
@@ -1958,49 +1986,96 @@ export function ImportReviewView() {
                   fatura certa — não o dia fixo do cartão.
                 </p>
               </div>
-              <FormSelect
-                id="card-account"
-                label="Cartão de destino"
-                value={cardAccountId}
-                onChange={(event) => setCardAccountId(event.target.value)}
-                disabled={accountsLoading}
-                className="max-md:h-9"
-              >
-                <option value="">Qual cartão é deste extrato?</option>
-                {creditCardAccounts.map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {formatAccountSelectLabel(account)}
-                  </option>
-                ))}
-              </FormSelect>
 
-              <div
-                className="grid gap-3 sm:grid-cols-2 max-md:gap-2"
-                data-testid="import-statement-file-cycle"
-              >
-                <FormInput
-                  id="statement-closing-date"
-                  label="Fechamento neste extrato"
-                  type="date"
-                  value={statementClosingDate}
-                  onChange={(event) =>
-                    setStatementClosingDate(event.target.value)
-                  }
-                  required
-                  data-testid="import-statement-closing-date"
-                  className="max-md:h-9"
-                />
-                <FormInput
-                  id="statement-due-date"
-                  label="Vencimento neste extrato"
-                  type="date"
-                  value={statementDueDate}
-                  onChange={(event) => setStatementDueDate(event.target.value)}
-                  required
-                  data-testid="import-statement-due-date"
-                  className="max-md:h-9"
-                />
-              </div>
+              {accountsLoading ? (
+                <p className="text-xs text-muted-foreground">
+                  Carregando cartões…
+                </p>
+              ) : creditCardAccounts.length === 0 ? (
+                <Alert
+                  data-testid="import-no-credit-card-account"
+                  className="border-amber-500/25 bg-amber-500/5"
+                >
+                  <AlertTriangle className="size-4" />
+                  <AlertTitle>Cadastre um cartão de crédito</AlertTitle>
+                  <AlertDescription>
+                    É preciso ter pelo menos uma conta de cartão cadastrada
+                    antes de importar este extrato.{" "}
+                    <Link
+                      href="/contas"
+                      className="font-medium text-foreground underline underline-offset-2"
+                    >
+                      Ir para Contas
+                    </Link>
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <FormSelect
+                      id="card-account"
+                      label="Cartão de destino"
+                      value={cardAccountId}
+                      onChange={(event) =>
+                        setCardAccountId(event.target.value)
+                      }
+                      disabled={
+                        accountsLoading || creditCardAccounts.length === 1
+                      }
+                      className="max-md:h-9"
+                      data-testid="import-destination-card-select"
+                    >
+                      {creditCardAccounts.length > 1 ? (
+                        <option value="">Qual cartão é deste extrato?</option>
+                      ) : null}
+                      {creditCardAccounts.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {formatAccountSelectLabel(account)}
+                        </option>
+                      ))}
+                    </FormSelect>
+                    {creditCardAccounts.length === 1 ? (
+                      <p
+                        className="text-[11px] text-muted-foreground"
+                        data-testid="import-destination-card-auto-selected"
+                      >
+                        Selecionado automaticamente porque é o único cartão
+                        cadastrado.
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div
+                    className="grid gap-3 sm:grid-cols-2 max-md:gap-2"
+                    data-testid="import-statement-file-cycle"
+                  >
+                    <FormInput
+                      id="statement-closing-date"
+                      label="Fechamento neste extrato"
+                      type="date"
+                      value={statementClosingDate}
+                      onChange={(event) =>
+                        setStatementClosingDate(event.target.value)
+                      }
+                      required
+                      data-testid="import-statement-closing-date"
+                      className="max-md:h-9"
+                    />
+                    <FormInput
+                      id="statement-due-date"
+                      label="Vencimento neste extrato"
+                      type="date"
+                      value={statementDueDate}
+                      onChange={(event) =>
+                        setStatementDueDate(event.target.value)
+                      }
+                      required
+                      data-testid="import-statement-due-date"
+                      className="max-md:h-9"
+                    />
+                  </div>
+                </>
+              )}
             </div>
           ) : null}
 
@@ -2036,6 +2111,7 @@ export function ImportReviewView() {
           ) : null}
           {fileConfirmed &&
           requiresCardAccount &&
+          creditCardAccounts.length > 1 &&
           !cardAccountId &&
           csvContent ? (
             <Alert>
