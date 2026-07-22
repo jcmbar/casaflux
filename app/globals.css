@@ -185,6 +185,173 @@
     mix-blend-mode: overlay;
   }
 
+  /**
+   * Auth shell atmosphere — soft teal mesh, slow drift, multi-depth parallax.
+   * Scoped to AuthAtmosphere only; form card stays opaque above (.z-[1]).
+   */
+  .auth-atmosphere-layer {
+    overflow: hidden;
+  }
+
+  .auth-atmosphere-parallax {
+    transform: translate3d(
+      calc(var(--auth-px, 0) * var(--auth-depth, 1) * 1px),
+      calc(var(--auth-py, 0) * var(--auth-depth, 1) * 1px),
+      0
+    );
+    will-change: transform;
+    contain: layout style;
+  }
+
+  .auth-atmosphere-blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(52px);
+    will-change: transform;
+    transform: translate3d(0, 0, 0);
+  }
+
+  .auth-atmosphere-blob-a {
+    top: -18%;
+    right: -8%;
+    width: min(56vw, 36rem);
+    height: min(56vw, 36rem);
+    background: color-mix(in oklch, var(--primary) 34%, transparent);
+    animation: auth-mesh-drift-a 42s ease-in-out infinite alternate;
+  }
+
+  .auth-atmosphere-blob-b {
+    bottom: -22%;
+    left: -12%;
+    width: min(62vw, 40rem);
+    height: min(62vw, 40rem);
+    background: color-mix(in oklch, var(--primary) 24%, transparent);
+    animation: auth-mesh-drift-b 54s ease-in-out infinite alternate;
+  }
+
+  .auth-atmosphere-blob-c {
+    top: 34%;
+    left: 38%;
+    width: min(42vw, 26rem);
+    height: min(42vw, 26rem);
+    background: color-mix(in oklch, var(--primary) 20%, transparent);
+    animation: auth-mesh-drift-c 48s ease-in-out infinite alternate;
+  }
+
+  .dark .auth-atmosphere-blob-a {
+    background: color-mix(in oklch, var(--primary) 42%, transparent);
+  }
+
+  .dark .auth-atmosphere-blob-b {
+    background: color-mix(in oklch, var(--primary) 30%, transparent);
+  }
+
+  .dark .auth-atmosphere-blob-c {
+    background: color-mix(in oklch, var(--primary) 24%, transparent);
+  }
+
+  .auth-atmosphere-wash {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(
+        ellipse 72% 58% at 88% 6%,
+        color-mix(in oklch, var(--primary) 16%, transparent),
+        transparent 68%
+      ),
+      radial-gradient(
+        ellipse 68% 54% at 8% 94%,
+        color-mix(in oklch, var(--primary) 11%, transparent),
+        transparent 70%
+      );
+  }
+
+  .dark .auth-atmosphere-wash {
+    background:
+      radial-gradient(
+        ellipse 72% 58% at 88% 6%,
+        color-mix(in oklch, var(--primary) 22%, transparent),
+        transparent 68%
+      ),
+      radial-gradient(
+        ellipse 68% 54% at 8% 94%,
+        color-mix(in oklch, var(--primary) 15%, transparent),
+        transparent 70%
+      );
+  }
+
+  .auth-atmosphere-grain {
+    position: absolute;
+    inset: 0;
+    opacity: 0.05;
+    mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-size: 180px 180px;
+  }
+
+  .dark .auth-atmosphere-grain {
+    opacity: 0.09;
+    mix-blend-mode: overlay;
+  }
+
+  /* Soft ambient glints — discs, not stars; short life, low opacity */
+  .auth-atmosphere-glints {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+
+  .auth-atmosphere-glint {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: var(--glint-size, 6px);
+    height: var(--glint-size, 6px);
+    margin: calc(var(--glint-size, 6px) / -2) 0 0 calc(var(--glint-size, 6px) / -2);
+    border-radius: 50%;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    background: radial-gradient(
+      circle at center,
+      color-mix(in oklch, var(--primary) 42%, white 18%) 0%,
+      color-mix(in oklch, var(--primary) 18%, transparent) 42%,
+      transparent 72%
+    );
+    filter: blur(0.6px);
+    will-change: transform, opacity;
+  }
+
+  .dark .auth-atmosphere-glint {
+    background: radial-gradient(
+      circle at center,
+      color-mix(in oklch, var(--primary) 55%, white 10%) 0%,
+      color-mix(in oklch, var(--primary) 22%, transparent) 45%,
+      transparent 74%
+    );
+  }
+
+  .auth-atmosphere-glint.is-alive {
+    animation: auth-glint-life 0.9s ease-out forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .auth-atmosphere-blob {
+      animation: none !important;
+      will-change: auto;
+    }
+
+    .auth-atmosphere-parallax {
+      transform: none !important;
+      will-change: auto;
+    }
+
+    .auth-atmosphere-glints {
+      display: none !important;
+    }
+  }
+
   .animate-enter {
     animation: enter-fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
@@ -311,5 +478,47 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes auth-mesh-drift-a {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(-6%, 8%, 0) scale(1.06);
+  }
+}
+
+@keyframes auth-mesh-drift-b {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1.04);
+  }
+  100% {
+    transform: translate3d(8%, -5%, 0) scale(1);
+  }
+}
+
+@keyframes auth-mesh-drift-c {
+  0% {
+    transform: translate3d(0, 0, 0) scale(0.96);
+  }
+  100% {
+    transform: translate3d(-5%, -7%, 0) scale(1.08);
+  }
+}
+
+@keyframes auth-glint-life {
+  0% {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  18% {
+    opacity: 0.34;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.4);
   }
 }
