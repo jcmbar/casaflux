@@ -36,6 +36,24 @@ import type {
 import type { Account } from "@/types/account";
 import type { ImportPreviewRow } from "@/lib/integrations/types";
 import { InvoicePaymentCycleTargetRadioGroup } from "@/components/finance/integracoes/invoice-payment-cycle-target-radio-group";
+import { cn } from "@/lib/utils";
+
+function StepLabel({
+  step,
+  title,
+}: {
+  step: number;
+  title: string;
+}) {
+  return (
+    <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+      <span className="inline-flex size-4 items-center justify-center rounded-full bg-muted text-[10px] tabular-nums">
+        {step}
+      </span>
+      {title}
+    </p>
+  );
+}
 
 export function InvoicePaymentImportPanel({
   row,
@@ -160,11 +178,11 @@ export function InvoicePaymentImportPanel({
       };
     }
 
-    const fromBucket =
+    return (
       cycleTargetOptions.find((option) => option.recommended) ??
       cycleTargetOptions.find((option) => option.target === "previous") ??
-      null;
-    return fromBucket;
+      null
+    );
   }, [cycleTargetOptions, dueDateOptions]);
 
   const cycleTargetImpact = getInvoicePaymentCycleTargetImpactMessage({
@@ -259,49 +277,206 @@ export function InvoicePaymentImportPanel({
     selectedOption,
   ]);
 
+  const suggestionLine = recommendedOption
+    ? `${recommendedOption.label.toLowerCase()}${
+        recommendedOption.dueDateLabel
+          ? ` · ${recommendedOption.dueDateLabel}`
+          : ""
+      }`
+    : resolution
+      ? `anterior · ${resolution.dueDateLabel}`
+      : null;
+
   return (
     <div
-      className="mt-3 space-y-3 rounded-xl border border-border/60 bg-muted/15 px-3 py-3"
+      className="space-y-2.5"
       data-testid={`invoice-payment-panel-${row.sourceLine}`}
     >
-      <div className="space-y-1">
-        <p className="text-sm font-medium text-foreground">
-          Possível pagamento de fatura
-        </p>
-        <p className="text-xs text-muted-foreground">
+      <div className="space-y-0.5">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+          <p className="text-sm font-semibold tabular-nums">
+            {formatCurrency(row.amount)}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            {formatDate(row.date)} · L{row.sourceLine}
+          </p>
+        </div>
+        <p className="truncate text-xs text-muted-foreground">
           {cardName}
-          {recommendedOption ? (
+          {" · "}
+          {row.description}
+          {suggestionLine ? (
             <>
               {" · "}
               <span data-testid={`invoice-suggestion-summary-${row.sourceLine}`}>
-                sugestão: {recommendedOption.label.toLowerCase()}
-                {recommendedOption.dueDateLabel
-                  ? ` · vence ${recommendedOption.dueDateLabel}`
-                  : ""}
+                {suggestionLine}
               </span>
             </>
-          ) : resolution ? (
-            <> · sugestão: fatura anterior · vence {resolution.dueDateLabel}</>
+          ) : null}
+          {suggestionConfidence ? (
+            <>
+              {" · "}
+              <span
+                data-testid={`invoice-suggestion-confidence-${row.sourceLine}`}
+                data-confidence={suggestionConfidence.confidence}
+              >
+                {suggestionConfidence.message}
+              </span>
+            </>
           ) : null}
         </p>
-        {suggestionConfidence ? (
-          <p
-            className="text-xs text-muted-foreground"
-            data-testid={`invoice-suggestion-confidence-${row.sourceLine}`}
-            data-confidence={suggestionConfidence.confidence}
-          >
-            {suggestionConfidence.message}
-          </p>
-        ) : null}
-        {!recommendedOption && !resolution ? (
-          <p className="text-xs text-muted-foreground">
-            Informe fechamento/vencimento do arquivo e o cartão para sugerir a
-            fatura.
-          </p>
-        ) : null}
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      {mode === "payment" ? (
+        <>
+          <div>
+            <StepLabel step={1} title="Origem do pagamento" />
+            <FormSelect
+              id={`invoice-source-${row.sourceLine}`}
+              label="Conta corrente"
+              value={sourceAccountId}
+              onChange={(event) => onSourceAccountChange(event.target.value)}
+              data-testid={`invoice-source-select-${row.sourceLine}`}
+            >
+              <option value="">Selecione</option>
+              {checkingAccounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {formatAccountSelectLabel(account)}
+                </option>
+              ))}
+            </FormSelect>
+          </div>
+
+          {cycleTargetOptions.length > 0 ? (
+            <div>
+              <StepLabel step={2} title="Fatura que recebe o crédito" />
+              <InvoicePaymentCycleTargetRadioGroup
+                sourceLine={row.sourceLine}
+                options={cycleTargetOptions}
+                selection={cycleTargetSelection}
+                onSelectionChange={onCycleTargetSelectionChange}
+                billingConfig={billingConfig}
+                paymentDate={row.date}
+                cycleContext={cycleContext}
+              />
+
+              <div className="mt-2 space-y-1.5">
+                {cycleTargetImpact ? (
+                  <p
+                    className="text-[11px] text-muted-foreground"
+                    data-testid={`invoice-cycle-impact-${row.sourceLine}`}
+                    data-target={cycleTargetSelection.target}
+                  >
+                    {cycleTargetImpact.highlight ? (
+                      <>
+                        {
+                          cycleTargetImpact.text.split(
+                            cycleTargetImpact.highlight,
+                          )[0]
+                        }
+                        <span className="font-medium text-foreground">
+                          {cycleTargetImpact.highlight}
+                        </span>
+                        {
+                          cycleTargetImpact.text.split(
+                            cycleTargetImpact.highlight,
+                          )[1]
+                        }
+                      </>
+                    ) : (
+                      cycleTargetImpact.text
+                    )}
+                  </p>
+                ) : null}
+
+                {estimatedEffect &&
+                selectedOption?.amountKnown &&
+                selectedOption.amountDue != null ? (
+                  <p
+                    className="text-[11px] text-muted-foreground"
+                    data-testid={`invoice-cycle-estimate-${row.sourceLine}`}
+                    data-target={estimatedEffect.target}
+                    data-remaining={estimatedEffect.remainingAfterCredit}
+                  >
+                    {estimatedEffect.text}
+                  </p>
+                ) : null}
+
+                {amountFeedback ? (
+                  <p
+                    className={cn(
+                      "rounded-md px-2.5 py-1.5 text-[11px] leading-snug",
+                      amountFeedback.kind === "mismatch"
+                        ? "border border-amber-500/30 bg-amber-500/10 text-amber-950 dark:text-amber-100"
+                        : "border border-border/50 bg-muted/20 text-muted-foreground",
+                    )}
+                    data-testid={`invoice-amount-divergence-${row.sourceLine}`}
+                    data-feedback-kind={amountFeedback.kind}
+                    data-difference={amountFeedback.difference ?? undefined}
+                    data-target={cycleTargetSelection.target}
+                  >
+                    {amountFeedback.message}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {reconcileSuggestion && onReconcileDecisionChange ? (
+            <div
+              className="space-y-1.5 rounded-md border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-2"
+              data-testid={`invoice-reconcile-suggestion-${row.sourceLine}`}
+              data-confidence={reconcileSuggestion.confidence}
+            >
+              <p className="text-xs font-medium text-emerald-900 dark:text-emerald-100">
+                Pagamento manual compatível
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                {reconcileSuggestion.summary} ·{" "}
+                <span className="font-medium tabular-nums text-foreground">
+                  {formatCurrency(reconcileSuggestion.amount)}
+                </span>{" "}
+                em {formatDate(reconcileSuggestion.paymentDate)}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={reconcileDecision === "link" ? "default" : "outline"}
+                  onClick={() => onReconcileDecisionChange("link")}
+                  data-testid={`invoice-reconcile-link-${row.sourceLine}`}
+                >
+                  Conciliar
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={reconcileDecision === "skip" ? "default" : "outline"}
+                  onClick={() => onReconcileDecisionChange("skip")}
+                  data-testid={`invoice-reconcile-skip-${row.sourceLine}`}
+                >
+                  Não conciliar
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {sourceAccountId && !reconcileSuggestion ? (
+            <p
+              className="text-[11px] text-muted-foreground"
+              data-testid={`invoice-reconcile-none-${row.sourceLine}`}
+            >
+              Sem pagamento manual compatível.
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <p className="text-[11px] text-muted-foreground">
+          Crédito no cartão, sem saída na conta corrente nem baixa de fatura.
+        </p>
+      )}
+
+      <div className="flex flex-wrap gap-1.5 border-t border-border/30 pt-2">
         <Button
           type="button"
           size="sm"
@@ -309,7 +484,7 @@ export function InvoicePaymentImportPanel({
           onClick={() => onModeChange("payment")}
           data-testid={`invoice-payment-confirm-${row.sourceLine}`}
         >
-          Confirmar como pagamento
+          Como pagamento
         </Button>
         <Button
           type="button"
@@ -318,143 +493,9 @@ export function InvoicePaymentImportPanel({
           onClick={() => onModeChange("common")}
           data-testid={`invoice-payment-as-common-${row.sourceLine}`}
         >
-          Manter como lançamento comum
+          Lançamento comum
         </Button>
       </div>
-
-      {mode === "payment" ? (
-        <FormSelect
-          id={`invoice-source-${row.sourceLine}`}
-          label="De onde saiu o pagamento?"
-          value={sourceAccountId}
-          onChange={(event) => onSourceAccountChange(event.target.value)}
-          data-testid={`invoice-source-select-${row.sourceLine}`}
-        >
-          <option value="">Conta corrente de origem</option>
-          {checkingAccounts.map((account) => (
-            <option key={account.id} value={account.id}>
-              {formatAccountSelectLabel(account)}
-            </option>
-          ))}
-        </FormSelect>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          Será importado como crédito no cartão, sem saída na conta corrente e
-          sem vínculo de baixa de fatura.
-        </p>
-      )}
-
-      {mode === "payment" && cycleTargetOptions.length > 0 ? (
-        <InvoicePaymentCycleTargetRadioGroup
-          sourceLine={row.sourceLine}
-          options={cycleTargetOptions}
-          selection={cycleTargetSelection}
-          onSelectionChange={onCycleTargetSelectionChange}
-          billingConfig={billingConfig}
-          paymentDate={row.date}
-          cycleContext={cycleContext}
-        />
-      ) : null}
-
-      {mode === "payment" && cycleTargetImpact ? (
-        <p
-          className="text-xs text-muted-foreground"
-          data-testid={`invoice-cycle-impact-${row.sourceLine}`}
-          data-target={cycleTargetSelection.target}
-        >
-          {cycleTargetImpact.highlight ? (
-            <>
-              {cycleTargetImpact.text.split(cycleTargetImpact.highlight)[0]}
-              <span className="font-medium text-foreground">
-                {cycleTargetImpact.highlight}
-              </span>
-              {cycleTargetImpact.text.split(cycleTargetImpact.highlight)[1]}
-            </>
-          ) : (
-            cycleTargetImpact.text
-          )}
-        </p>
-      ) : null}
-
-      {mode === "payment" &&
-      estimatedEffect &&
-      selectedOption?.amountKnown &&
-      selectedOption.amountDue != null ? (
-        <p
-          className="text-xs text-muted-foreground"
-          data-testid={`invoice-cycle-estimate-${row.sourceLine}`}
-          data-target={estimatedEffect.target}
-          data-remaining={estimatedEffect.remainingAfterCredit}
-        >
-          {estimatedEffect.text}
-        </p>
-      ) : null}
-
-      {mode === "payment" && amountFeedback ? (
-        <p
-          className={
-            amountFeedback.kind === "mismatch"
-              ? "rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-950 dark:text-amber-100"
-              : "rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
-          }
-          data-testid={`invoice-amount-divergence-${row.sourceLine}`}
-          data-feedback-kind={amountFeedback.kind}
-          data-difference={amountFeedback.difference ?? undefined}
-          data-target={cycleTargetSelection.target}
-        >
-          {amountFeedback.message}
-        </p>
-      ) : null}
-
-      {mode === "payment" && reconcileSuggestion && onReconcileDecisionChange ? (
-        <div
-          className="space-y-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2.5"
-          data-testid={`invoice-reconcile-suggestion-${row.sourceLine}`}
-          data-confidence={reconcileSuggestion.confidence}
-        >
-          <p className="text-sm font-medium text-emerald-900 dark:text-emerald-100">
-            Pagamento manual compatível encontrado
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {reconcileSuggestion.summary} ·{" "}
-            <span className="font-medium text-foreground tabular-nums">
-              {formatCurrency(reconcileSuggestion.amount)}
-            </span>{" "}
-            em {formatDate(reconcileSuggestion.paymentDate)}
-          </p>
-          <div className="flex flex-wrap gap-2 pt-1">
-            <Button
-              type="button"
-              size="sm"
-              variant={reconcileDecision === "link" ? "default" : "outline"}
-              onClick={() => onReconcileDecisionChange("link")}
-              data-testid={`invoice-reconcile-link-${row.sourceLine}`}
-            >
-              Conciliar
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant={reconcileDecision === "skip" ? "default" : "outline"}
-              onClick={() => onReconcileDecisionChange("skip")}
-              data-testid={`invoice-reconcile-skip-${row.sourceLine}`}
-            >
-              Não conciliar
-            </Button>
-          </div>
-        </div>
-      ) : null}
-
-      {mode === "payment" &&
-      sourceAccountId &&
-      !reconcileSuggestion ? (
-        <p
-          className="text-xs text-muted-foreground"
-          data-testid={`invoice-reconcile-none-${row.sourceLine}`}
-        >
-          Nenhum pagamento manual compatível para conciliar.
-        </p>
-      ) : null}
     </div>
   );
 }

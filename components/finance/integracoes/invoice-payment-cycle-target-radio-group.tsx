@@ -77,7 +77,7 @@ export function InvoicePaymentCycleTargetRadioGroup({
       className="space-y-3"
       data-testid={`invoice-cycle-target-${id}`}
     >
-      <legend className="text-xs font-medium text-foreground">
+      <legend className="sr-only">
         Qual fatura recebe o crédito?
       </legend>
 

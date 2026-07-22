@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
 
 import { useAppContext } from "@/contexts/app-context";
 import {
@@ -18,10 +19,13 @@ type QuickAddRootProps = {
 };
 
 function QuickAddFabGate() {
+  const pathname = usePathname();
   const supabase = useMemo(() => createClient()!, []);
   const { user, activeFamily } = useAppContext();
   const [hasPostableAccount, setHasPostableAccount] = useState(false);
   const [checked, setChecked] = useState(false);
+
+  const hideOnImportReview = pathname.startsWith("/importacoes/nova");
 
   const scope = useMemo(
     () =>
@@ -73,7 +77,7 @@ function QuickAddFabGate() {
     };
   }, [scope, supabase, user]);
 
-  if (!user || !checked) return null;
+  if (!user || !checked || hideOnImportReview) return null;
 
   return <QuickAddFab disabled={!hasPostableAccount} />;
 }

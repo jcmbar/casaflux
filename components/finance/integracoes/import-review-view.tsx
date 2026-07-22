@@ -26,6 +26,12 @@ import { PageIntro } from "@/components/layout/page-intro";
 import { useConfirm } from "@/components/feedback/confirm-dialog-provider";
 import { AccountIdentityMark } from "@/components/finance/account-identity";
 import { InvoicePaymentImportPanel } from "@/components/finance/integracoes/invoice-payment-import-panel";
+import { ImportReviewNarrativeHeader } from "@/components/finance/integracoes/import-review-narrative-header";
+import { ImportReviewMobileCommitBar } from "@/components/finance/integracoes/import-review-mobile-commit-bar";
+import {
+  ImportReviewMobileSection,
+  type ImportReviewMobileSectionId,
+} from "@/components/finance/integracoes/import-review-mobile-section";
 import { useAppContext } from "@/contexts/app-context";
 import {
   fetchCardStatementCyclesForAccount,
@@ -37,6 +43,7 @@ import {
   identifyImportFile,
 } from "@/lib/integrations/core/identify-import-file";
 import { buildImportFileConfirmation } from "@/lib/integrations/core/import-file-confirmation";
+import { formatImportMobileCommitSummary } from "@/lib/integrations/core/import-mobile-commit-summary";
 import {
   formatPlannedImportBanksSummary,
   getImportFileSelectHint,
@@ -490,6 +497,9 @@ export function ImportReviewView() {
   const [rowFilter, setRowFilter] = useState<RowFilter>("all");
   const [readingFile, setReadingFile] = useState(false);
   const [fileConfirmed, setFileConfirmed] = useState(false);
+  const [showOtherRows, setShowOtherRows] = useState(true);
+  const [mobileOpenSection, setMobileOpenSection] =
+    useState<ImportReviewMobileSectionId | null>(null);
 
   const identifiedFile = useMemo(
     () => (csvContent ? identifyImportFile(csvContent) : null),
@@ -792,6 +802,43 @@ export function ImportReviewView() {
         : null,
     [activePreview, invoicePaymentModes],
   );
+
+  useEffect(() => {
+    if (invoicePaymentRows.length > 0) {
+      setShowOtherRows(false);
+    }
+  }, [invoicePaymentRows.length, activePreview?.source]);
+
+  useEffect(() => {
+    if (!activePreview) {
+      setMobileOpenSection(null);
+      return;
+    }
+
+    setMobileOpenSection(
+      invoicePaymentRows.length > 0 ? "payment" : "context",
+    );
+  }, [
+    activePreview?.source,
+    activePreview?.summary.totalRows,
+    invoicePaymentRows.length,
+  ]);
+
+  function setExclusiveMobileSection(
+    section: ImportReviewMobileSectionId,
+    open: boolean,
+  ) {
+    setMobileOpenSection((current) => {
+      if (open) {
+        return section;
+      }
+      return current === section ? null : current;
+    });
+
+    if (open && section === "other") {
+      setShowOtherRows(true);
+    }
+  }
 
   const invoiceReconcileSuggestions = useMemo(() => {
     if (!activePreview || !cardAccountId || detectedSource !== "nubank_credit_card") {
@@ -1679,7 +1726,7 @@ export function ImportReviewView() {
   }
 
   return (
-    <div className="space-y-6 md:space-y-8">
+    <div className="space-y-3 md:space-y-4">
       <div className="space-y-3">
         <Link
           href={
@@ -1707,49 +1754,51 @@ export function ImportReviewView() {
         />
       </div>
 
-      <div
-        className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3"
-        data-testid="supported-import-banks"
-      >
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="space-y-1">
-            <p className="text-sm font-medium">Importe de um destes bancos</p>
-            <p className="text-xs text-muted-foreground">
-              CSV do extrato — revise antes de gravar.
-            </p>
+      {!fileConfirmed ? (
+        <div
+          className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3"
+          data-testid="supported-import-banks"
+        >
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1">
+              <p className="text-sm font-medium">Importe de um destes bancos</p>
+              <p className="text-xs text-muted-foreground">
+                CSV do extrato — revise antes de gravar.
+              </p>
+            </div>
+            {formatPlannedImportBanksSummary() ? (
+              <p className="text-xs text-muted-foreground sm:text-right">
+                Em breve: {formatPlannedImportBanksSummary()}
+              </p>
+            ) : null}
           </div>
-          {formatPlannedImportBanksSummary() ? (
-            <p className="text-xs text-muted-foreground sm:text-right">
-              Em breve: {formatPlannedImportBanksSummary()}
-            </p>
-          ) : null}
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {getSupportedImportBankSummaries().map((bank) => (
+              <li
+                key={bank.id}
+                className="inline-flex items-center gap-2 rounded-lg border border-border/50 bg-background/80 px-2.5 py-1.5"
+                data-testid={`supported-import-bank-${bank.id}`}
+              >
+                <AccountIdentityMark account={{ name: bank.name }} size="xs" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium leading-none">
+                    {bank.name}
+                  </span>
+                  <span className="mt-1 block text-[11px] leading-tight text-muted-foreground">
+                    {bank.layouts
+                      .map((layout) =>
+                        layout
+                          .replace(/^Extrato de /i, "")
+                          .replace(/^extrato de /i, ""),
+                      )
+                      .join(" · ")}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
-        <ul className="mt-3 flex flex-wrap gap-2">
-          {getSupportedImportBankSummaries().map((bank) => (
-            <li
-              key={bank.id}
-              className="inline-flex items-center gap-2 rounded-lg border border-border/50 bg-background/80 px-2.5 py-1.5"
-              data-testid={`supported-import-bank-${bank.id}`}
-            >
-              <AccountIdentityMark account={{ name: bank.name }} size="xs" />
-              <span className="min-w-0">
-                <span className="block text-sm font-medium leading-none">
-                  {bank.name}
-                </span>
-                <span className="mt-1 block text-[11px] leading-tight text-muted-foreground">
-                  {bank.layouts
-                    .map((layout) =>
-                      layout
-                        .replace(/^Extrato de /i, "")
-                        .replace(/^extrato de /i, ""),
-                    )
-                    .join(" · ")}
-                </span>
-              </span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      ) : null}
 
       {isGuidedReimport ? (
         <Alert
@@ -1767,20 +1816,20 @@ export function ImportReviewView() {
       ) : null}
 
       <Card className="border-border/50 shadow-sm">
-        <CardHeader>
-          <CardTitle className="text-base">Arquivo</CardTitle>
+        <CardHeader className="max-md:px-4 max-md:py-2.5">
+          <CardTitle className="text-base max-md:text-sm">Arquivo</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
-                <FileSpreadsheet className="size-5" />
+        <CardContent className="space-y-4 max-md:space-y-2.5 max-md:pt-0">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between max-md:gap-2">
+            <div className="flex items-center gap-3 max-md:gap-2">
+              <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15 max-md:size-8 max-md:rounded-lg">
+                <FileSpreadsheet className="size-5 max-md:size-4" />
               </div>
-              <div>
-                <p className="text-sm font-medium">
+              <div className="min-w-0">
+                <p className="text-sm font-medium max-md:truncate">
                   {fileName ?? "Nenhum arquivo selecionado"}
                 </p>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground max-md:hidden">
                   {getImportFileSelectHint()}
                 </p>
               </div>
@@ -1870,7 +1919,7 @@ export function ImportReviewView() {
 
           {fileConfirmation && fileConfirmed ? (
             <div
-              className="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/20 px-3 py-3"
+              className="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/20 px-3 py-3 max-md:gap-2 max-md:rounded-lg max-md:px-2.5 max-md:py-2"
               data-testid="identified-import-bank"
               data-institution={
                 identifiedFile?.status === "supported"
@@ -1881,13 +1930,13 @@ export function ImportReviewView() {
             >
               <AccountIdentityMark
                 account={{ name: fileConfirmation.institutionName }}
-                size="md"
+                size="sm"
               />
               <div className="min-w-0">
-                <p className="text-sm font-medium">
+                <p className="text-sm font-medium max-md:text-xs max-md:leading-snug">
                   {fileConfirmation.headline}
                 </p>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground max-md:mt-0.5 max-md:truncate max-md:text-[11px]">
                   Arquivo confirmado ·{" "}
                   {fileConfirmation.signals
                     .map((signal) => signal.value)
@@ -1899,10 +1948,12 @@ export function ImportReviewView() {
           ) : null}
 
           {fileConfirmed && requiresCardAccount ? (
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <p className="text-sm font-medium">Contexto deste extrato</p>
-                <p className="text-xs text-muted-foreground">
+            <div className="space-y-3 max-md:space-y-2">
+              <div className="space-y-1 max-md:space-y-0">
+                <p className="text-sm font-medium max-md:text-xs">
+                  Contexto deste extrato
+                </p>
+                <p className="text-xs text-muted-foreground max-md:hidden">
                   Usamos as datas do arquivo para encaixar este extrato na
                   fatura certa — não o dia fixo do cartão.
                 </p>
@@ -1913,6 +1964,7 @@ export function ImportReviewView() {
                 value={cardAccountId}
                 onChange={(event) => setCardAccountId(event.target.value)}
                 disabled={accountsLoading}
+                className="max-md:h-9"
               >
                 <option value="">Qual cartão é deste extrato?</option>
                 {creditCardAccounts.map((account) => (
@@ -1923,7 +1975,7 @@ export function ImportReviewView() {
               </FormSelect>
 
               <div
-                className="grid gap-3 sm:grid-cols-2"
+                className="grid gap-3 sm:grid-cols-2 max-md:gap-2"
                 data-testid="import-statement-file-cycle"
               >
                 <FormInput
@@ -1936,6 +1988,7 @@ export function ImportReviewView() {
                   }
                   required
                   data-testid="import-statement-closing-date"
+                  className="max-md:h-9"
                 />
                 <FormInput
                   id="statement-due-date"
@@ -1945,6 +1998,7 @@ export function ImportReviewView() {
                   onChange={(event) => setStatementDueDate(event.target.value)}
                   required
                   data-testid="import-statement-due-date"
+                  className="max-md:h-9"
                 />
               </div>
             </div>
@@ -2055,13 +2109,60 @@ export function ImportReviewView() {
 
       {activePreview ? (
         <>
-          {reviewContext ? (
-            <ImportReviewContextLine context={reviewContext} />
-          ) : null}
+          <div className="space-y-3 pb-16 md:space-y-4 md:pb-0">
+          <ImportReviewMobileSection
+            id="context"
+            title="Contexto do arquivo"
+            summary={`${activePreview.summary.totalRows} lançamento${
+              activePreview.summary.totalRows === 1 ? "" : "s"
+            }${
+              invoicePaymentRows.length > 0
+                ? ` · ${invoicePaymentRows.length} pagamento${
+                    invoicePaymentRows.length === 1 ? "" : "s"
+                  }`
+                : ""
+            }`}
+            open={mobileOpenSection === "context"}
+            onOpenChange={(open) =>
+              setExclusiveMobileSection("context", open)
+            }
+            className="md:border-0 md:bg-transparent md:shadow-none"
+            contentClassName="space-y-2 px-3 pb-3 md:space-y-3 md:p-0"
+          >
+          <ImportReviewNarrativeHeader
+            cardName={
+              selectedCardAccount
+                ? formatAccountSelectLabel(selectedCardAccount)
+                : null
+            }
+            financialSummary={importFinancialSummary}
+            preview={activePreview}
+            sourceLabel={
+              activePreview.source
+                ? importSourceLabels[activePreview.source]
+                : "Não reconhecida"
+            }
+            contextHeadline={reviewContext?.headline ?? null}
+          />
 
-          {reviewDiagnosis ? (
-            <ImportReviewDiagnosisCard diagnosis={reviewDiagnosis} />
+          {reviewDiagnosis && reviewDiagnosis.attentionItems.length > 0 ? (
+            <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2">
+              <p className="text-xs font-medium text-foreground">
+                {reviewDiagnosis.headline}
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {reviewDiagnosis.attentionItems.map((item) => (
+                  <li
+                    key={item.id}
+                    className="text-xs text-amber-900 dark:text-amber-100/90"
+                  >
+                    {item.label}
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
+          </ImportReviewMobileSection>
 
           {(activePreview.parseErrors.length > 0 || activePreview.warnings.length > 0) && (
             <Card className="border-border/50 shadow-sm">
@@ -2115,426 +2216,60 @@ export function ImportReviewView() {
             </Card>
           )}
 
-          <div className="space-y-3">
-            {importFinancialSummary ? (
-              <div
-                className="grid gap-3 sm:grid-cols-2"
-                data-testid="import-financial-summary"
-              >
-                <SummaryCard
-                  label="Total da fatura"
-                  value={formatCurrency(importFinancialSummary.invoiceTotal)}
-                  hint="Compras menos estornos neste arquivo"
-                />
-                <SummaryCard
-                  label="Total de pagamentos"
-                  value={formatCurrency(importFinancialSummary.paymentsTotal)}
-                  hint={
-                    importFinancialSummary.paymentCount === 0
-                      ? "Nenhum crédito de pagamento detectado"
-                      : `${importFinancialSummary.paymentCount} crédito${
-                          importFinancialSummary.paymentCount === 1 ? "" : "s"
-                        } de pagamento`
-                  }
-                />
-              </div>
-            ) : null}
-
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-              <SummaryCard
-                label="Fonte detectada"
-                value={
-                  activePreview.source
-                    ? importSourceLabels[activePreview.source]
-                    : "Não reconhecida"
-                }
-              />
-              <SummaryCard label="Total de linhas" value={activePreview.summary.totalRows} />
-              <SummaryCard
-                label="Novas / já importadas"
-                value={`${activePreview.summary.historicalNewRowCount} / ${activePreview.summary.historicalAlreadyImportedRowCount}`}
-                hint={
-                  activePreview.historicalSummary?.partialOverlap
-                    ? "Sobreposição parcial com histórico"
-                    : undefined
-                }
-              />
-              <SummaryCard
-                label="Válidas / inválidas"
-                value={`${activePreview.summary.validRows} / ${activePreview.summary.invalidRows}`}
-              />
-              <SummaryCard
-                label="Precisam revisão"
-                value={activePreview.needsReview.length}
-                hint={`${activePreview.summary.duplicateGroupCount} grupo(s) intra-arquivo`}
-              />
-            </div>
-          </div>
-
           {invoicePaymentRows.length > 0 ? (
-            <Card
-              className="border-border/50 shadow-sm"
+            <ImportReviewMobileSection
+              id="payment"
+              title="Pagamento de fatura"
+              summary={`${invoicePaymentRows.length} pagamento${
+                invoicePaymentRows.length === 1 ? "" : "s"
+              } · origem e fatura`}
+              open={mobileOpenSection === "payment"}
+              onOpenChange={(open) =>
+                setExclusiveMobileSection("payment", open)
+              }
               data-testid="import-invoice-payment-review-section"
+              className="border-border/50"
+              desktopHeader={
+                <div className="gap-0.5 px-6 py-2.5">
+                  <p className="text-sm font-semibold">Pagamentos detectados</p>
+                  <p className="text-xs text-muted-foreground">
+                    Origem e fatura.
+                  </p>
+                </div>
+              }
+              contentClassName="space-y-2.5 px-3 pb-3 md:px-6 md:pb-6"
             >
-              <CardHeader>
-                <CardTitle className="text-base">Pagamentos detectados</CardTitle>
-                <p className="text-sm text-muted-foreground">
-                  Confirme de onde saiu o dinheiro e qual fatura recebe o crédito.
-                </p>
-              </CardHeader>
-              <CardContent className="space-y-3">
                 {invoicePaymentRows.map((row) => (
                   <div
                     key={`invoice-payment-review-${row.sourceLine}`}
-                    className="rounded-xl border border-border/50 px-4 py-3"
+                    className="rounded-lg border border-border/40 bg-muted/5 px-3 py-2.5"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-medium">
-                          Pagamento · {formatCurrency(row.amount)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          L{row.sourceLine} · {formatDate(row.date)} ·{" "}
-                          {row.description}
-                        </p>
-                      </div>
-                      <ImportRowBadges
-                        row={row}
-                        isDuplicate={duplicateSourceLines.has(row.sourceLine)}
-                      />
-                    </div>
                     {renderInvoicePaymentPanel(row)}
                   </div>
                 ))}
-              </CardContent>
-            </Card>
+            </ImportReviewMobileSection>
           ) : null}
 
-          {activePreview.categorySummary && user ? (
-            <ImportCategoryReviewPanel
-              rows={activePreview.rows}
-              categories={categories}
-              categoryCatalog={categoryCatalog}
-              categoryFeedbackByLine={categoryFeedbackByLine}
-              userId={user.id}
-              loading={categoriesLoading}
-              mode={categoryReviewMode}
-              onModeChange={setCategoryReviewMode}
-              onRowsChange={handleCategoryRowsChange}
-              onCategoryChange={handleRowCategoryChange}
-              onCategorySaved={handleImportCategorySaved}
-              onConfirmSuggestion={handleConfirmSuggestion}
-              showFullList={showFullCategoryList}
-              onShowFullListChange={setShowFullCategoryList}
-              propagationOffer={propagationOffer}
-              onAcceptPropagation={handleAcceptCategoryPropagation}
-              onDismissPropagation={() => setPropagationOffer(null)}
-            />
-          ) : null}
-
-          <div className="grid gap-4 lg:grid-cols-3">
-            <Card className="border-border/50 shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Contagem por tipo</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(activePreview.summary.countsByKind).map(([kind, count]) => (
-                    <Badge key={kind} variant="outline">
-                      {importKindLabels[kind as keyof typeof importKindLabels]}: {count}
-                    </Badge>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/50 shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Contagem por status de revisão</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(activePreview.summary.countsByReviewStatus).map(
-                    ([status, count]) => (
-                      <Badge
-                        key={status}
-                        variant="outline"
-                        className={
-                          reviewStatusBadgeClass[status as ImportReviewStatus]
-                        }
-                      >
-                        {
-                          importReviewStatusLabels[
-                            status as ImportReviewStatus
-                          ]
-                        }
-                        : {count}
-                      </Badge>
-                    ),
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/50 shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Contagem por status histórico</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(activePreview.summary.countsByHistoricalStatus).map(
-                    ([status, count]) => (
-                      <Badge
-                        key={status}
-                        variant="outline"
-                        className={
-                          historicalStatusBadgeClass[
-                            status as ImportRowHistoricalStatus
-                          ]
-                        }
-                      >
-                        {
-                          importHistoricalStatusLabels[
-                            status as ImportRowHistoricalStatus
-                          ]
-                        }
-                        : {count}
-                      </Badge>
-                    ),
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {duplicateAttention ? (
-            <ImportDuplicateAttentionCard attention={duplicateAttention} />
-          ) : null}
-
-          {activePreview.needsReview.length > 0 ? (
-            <Card className="border-amber-500/20 shadow-sm">
-              <CardHeader>
-                <CardTitle className="text-base">Linhas que precisam revisão</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {activePreview.needsReview.map((row) => {
-                  const duplicateReason = getImportRowDuplicateReason(
-                    row,
-                    activePreview.possibleDuplicates,
-                  );
-
-                  return (
-                  <div
-                    key={`needs-review-${row.sourceLine}`}
-                    className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-medium">
-                          Linha {row.sourceLine} — {row.description}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {formatDate(row.date)} · {formatCurrency(row.amount)} ·{" "}
-                          {importKindLabels[row.kind]}
-                        </p>
-                        {duplicateReason ? (
-                          <p className="mt-1 text-xs text-amber-900/80 dark:text-amber-100/80">
-                            Motivo: {duplicateReason}
-                          </p>
-                        ) : null}
-                      </div>
-                      <ImportRowBadges
-                        row={row}
-                        isDuplicate={duplicateSourceLines.has(row.sourceLine)}
-                      />
-                    </div>
-
-                    {row.kind === "card_invoice_payment" ? (
-                      <p className="mt-3 text-xs text-muted-foreground">
-                        Configure origem e fatura na seção{" "}
-                        <span className="font-medium text-foreground">
-                          Pagamentos detectados
-                        </span>{" "}
-                        acima.
-                      </p>
-                    ) : null}
-                  </div>
-                  );
-                })}
-              </CardContent>
-            </Card>
-          ) : null}
-
-          <Card className="border-border/50 shadow-sm">
-            <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <CardTitle className="text-base">Linhas normalizadas</CardTitle>
-              <div className="flex flex-wrap gap-2">
-                {filterOptions.map((option) => (
-                  <Button
-                    key={option.value}
-                    type="button"
-                    size="sm"
-                    variant={rowFilter === option.value ? "default" : "outline"}
-                    onClick={() => setRowFilter(option.value)}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
-              </div>
-            </CardHeader>
-            <CardContent>
-              {filteredRows.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border/60 bg-muted/20 px-6 py-8 text-center text-sm text-muted-foreground">
-                  Nenhuma linha neste filtro.
-                </div>
-              ) : (
-                <div className="divide-y divide-border/60 rounded-xl border border-border/50">
-                  {filteredRows.map((row) => {
-                    const isDuplicate = duplicateSourceLines.has(row.sourceLine);
-                    const isInvoicePayment = row.kind === "card_invoice_payment";
-                    const rowCategoryFeedback =
-                      categoryFeedbackByLine[row.sourceLine] ?? null;
-                    const selectedCategoryId = getImportRowSelectedCategoryId(row);
-                    const highlightCategoryLabel = isImportCategoryFeedbackActive(
-                      rowCategoryFeedback,
-                      selectedCategoryId,
-                    );
-
-                    return (
-                      <div
-                        key={`row-${row.sourceLine}-${row.externalFingerprint}`}
-                        className={cn(
-                          "px-4 py-4",
-                          isInvoicePayment && "bg-violet-500/5",
-                          isDuplicate && "bg-orange-500/5",
-                          row.metadata.reversalPair && "bg-sky-500/5",
-                          row.historicalStatus === "already_imported" && "bg-rose-500/5",
-                          row.historicalStatus === "possible_historical_conflict" &&
-                            "bg-fuchsia-500/5",
-                        )}
-                      >
-                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                          <div className="min-w-0 flex-1 space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="text-xs font-medium text-muted-foreground">
-                                L{row.sourceLine}
-                              </span>
-                              <span className="text-sm font-medium">
-                                {row.description}
-                              </span>
-                            </div>
-                            <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
-                              <span>{formatDate(row.date)}</span>
-                              <span>{importDirectionLabels[row.direction]}</span>
-                              <span>{importKindLabels[row.kind]}</span>
-                              {row.metadata.installment ? (
-                                <span>Parcela {row.metadata.installment}</span>
-                              ) : null}
-                            </div>
-                            <ImportRowBadges row={row} isDuplicate={isDuplicate} />
-                            {row.normalizedMerchant ? (
-                              <p className="text-xs text-muted-foreground">
-                                Merchant normalizado:{" "}
-                                <span className="font-mono">{row.normalizedMerchant}</span>
-                              </p>
-                            ) : null}
-                            {row.categorySuggestion ? (
-                              <div
-                                className={cn(
-                                  "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
-                                  highlightCategoryLabel &&
-                                    "rounded-md bg-emerald-500/10 px-2 py-1 text-foreground",
-                                )}
-                                data-testid={`import-row-category-suggestion-${row.sourceLine}`}
-                                data-category-feedback={
-                                  highlightCategoryLabel
-                                    ? rowCategoryFeedback?.kind ?? "none"
-                                    : "none"
-                                }
-                              >
-                                <span>
-                                  Sugestão:{" "}
-                                  <span className="font-medium text-foreground">
-                                    {row.categorySuggestion.categoryName}
-                                  </span>
-                                </span>
-                                <CategorySuggestionOriginChip
-                                  suggestion={row.categorySuggestion}
-                                  showConfidence
-                                />
-                              </div>
-                            ) : (
-                              <div className="flex flex-wrap items-center gap-2">
-                                <CategorySuggestionOriginChip suggestion={null} />
-                              </div>
-                            )}
-                          </div>
-
-                          <div className="text-right">
-                            <p className="text-base font-semibold tabular-nums">
-                              {row.direction === "out" ? "-" : "+"}
-                              {formatCurrency(row.amount)}
-                            </p>
-                          </div>
-                        </div>
-
-                        {isInvoicePayment ? (
-                          <p className="mt-3 text-xs text-muted-foreground">
-                            Configure origem e fatura na seção{" "}
-                            <span className="font-medium text-foreground">
-                              Pagamentos detectados
-                            </span>{" "}
-                            acima.
-                          </p>
-                        ) : null}
-
-                        {showFullCategoryList &&
-                        row.historicalStatus === "new" &&
-                        !isInvoicePayment &&
-                        row.reviewStatus !== "invalid" &&
-                        row.reviewStatus !== "already_imported" &&
-                        user ? (
-                          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
-                            <ImportRowCategoryField
-                              sourceLine={row.sourceLine}
-                              transactionType={resolveImportRowTransactionType(row)}
-                              categories={categories}
-                              selectedCategoryId={selectedCategoryId}
-                              categoryFeedback={rowCategoryFeedback}
-                              onCategoryChange={(categoryId) =>
-                                handleRowCategoryChange(row.sourceLine, categoryId)
-                              }
-                              onCategorySaved={handleImportCategorySaved}
-                              userId={user.id}
-                            />
-                            {row.categoryStatus === "suggested" &&
-                            row.categorySuggestion ? (
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleConfirmSuggestion(row.sourceLine)}
-                              >
-                                Confirmar sugestão
-                              </Button>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="border-border/50 shadow-sm">
-            <CardContent className="flex flex-col gap-3 py-6 sm:flex-row sm:items-center sm:justify-between">
+          <Card
+            className="hidden border-primary/20 bg-primary/[0.03] shadow-sm md:block"
+            data-testid="import-commit-summary"
+          >
+            <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0 space-y-1">
-                <p className="text-sm font-medium">Importação controlada</p>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm font-semibold text-foreground">
+                  Resumo da importação
+                </p>
+                <p className="text-xs text-muted-foreground">
                   {committableRows.length > 0
-                    ? `${committableRows.length} linha(s) nova(s) pronta(s) para gravar.`
+                    ? `Ao aplicar, serão criados ${committableRows.length} lançamento${
+                        committableRows.length === 1 ? "" : "s"
+                      } novo${committableRows.length === 1 ? "" : "s"}${
+                        invoicePaymentRows.length > 0
+                          ? ` · ${invoicePaymentRows.length} pagamento${
+                              invoicePaymentRows.length === 1 ? "" : "s"
+                            } de fatura`
+                          : ""
+                      }.`
                     : "Nenhuma linha nova e pronta para importar."}
                 </p>
                 {historyLoading ? (
@@ -2557,6 +2292,8 @@ export function ImportReviewView() {
               </div>
               <Button
                 type="button"
+                size="lg"
+                className="shrink-0"
                 disabled={
                   committing ||
                   historyLoading ||
@@ -2579,11 +2316,302 @@ export function ImportReviewView() {
                     Importando...
                   </>
                 ) : (
-                  `Importar ${committableRows.length} linha(s)`
+                  `Aplicar importação · ${committableRows.length}`
                 )}
               </Button>
             </CardContent>
           </Card>
+          {activePreview.categorySummary && user ? (
+            <ImportReviewMobileSection
+              id="categories"
+              title="Revisão de categorias"
+              summary={`${activePreview.categorySummary.confirmedCount} confirmadas · ${activePreview.categorySummary.suggestedCount} sugeridas · ${activePreview.categorySummary.withoutCategoryCount} sem cat.`}
+              open={mobileOpenSection === "categories"}
+              onOpenChange={(open) =>
+                setExclusiveMobileSection("categories", open)
+              }
+              className="border-border/40 md:border-0 md:bg-transparent md:shadow-none"
+              contentClassName=""
+            >
+            <ImportCategoryReviewPanel
+              rows={activePreview.rows}
+              categories={categories}
+              categoryCatalog={categoryCatalog}
+              categoryFeedbackByLine={categoryFeedbackByLine}
+              userId={user.id}
+              loading={categoriesLoading}
+              mode={categoryReviewMode}
+              onModeChange={setCategoryReviewMode}
+              onRowsChange={handleCategoryRowsChange}
+              onCategoryChange={handleRowCategoryChange}
+              onCategorySaved={handleImportCategorySaved}
+              onConfirmSuggestion={handleConfirmSuggestion}
+              showFullList={showFullCategoryList}
+              onShowFullListChange={setShowFullCategoryList}
+              propagationOffer={propagationOffer}
+              onAcceptPropagation={handleAcceptCategoryPropagation}
+              onDismissPropagation={() => setPropagationOffer(null)}
+              embedded
+            />
+            </ImportReviewMobileSection>
+          ) : null}
+
+          <ImportReviewMobileSection
+            id="other"
+            title="Outros lançamentos"
+            summary="Compras e demais linhas do arquivo"
+            open={mobileOpenSection === "other"}
+            onOpenChange={(open) => setExclusiveMobileSection("other", open)}
+            data-testid="import-other-rows-section"
+            className="border-border/50"
+            desktopHeader={
+              <div className="flex flex-col gap-2 px-6 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold">Outros lançamentos</p>
+                  <p className="text-xs text-muted-foreground">
+                    Compras e demais linhas do arquivo.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="hidden md:inline-flex"
+                  onClick={() => setShowOtherRows((current) => !current)}
+                  data-testid="toggle-other-import-rows"
+                >
+                  {showOtherRows ? "Ocultar lista" : "Mostrar lista"}
+                </Button>
+              </div>
+            }
+            contentClassName="px-3 pb-3 md:px-6 md:pb-6"
+          >
+            {showOtherRows ? (
+              <div className="space-y-4">
+                {duplicateAttention ? (
+                  <ImportDuplicateAttentionCard attention={duplicateAttention} />
+                ) : null}
+
+                {activePreview.needsReview.filter(
+                  (row) => row.kind !== "card_invoice_payment",
+                ).length > 0 ? (
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium">Precisam revisão</p>
+                    {activePreview.needsReview
+                      .filter((row) => row.kind !== "card_invoice_payment")
+                      .map((row) => {
+                        const duplicateReason = getImportRowDuplicateReason(
+                          row,
+                          activePreview.possibleDuplicates,
+                        );
+
+                        return (
+                          <div
+                            key={`needs-review-${row.sourceLine}`}
+                            className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-medium">
+                                  Linha {row.sourceLine} — {row.description}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {formatDate(row.date)} ·{" "}
+                                  {formatCurrency(row.amount)} ·{" "}
+                                  {importKindLabels[row.kind]}
+                                </p>
+                                {duplicateReason ? (
+                                  <p className="mt-1 text-xs text-amber-900/80 dark:text-amber-100/80">
+                                    Motivo: {duplicateReason}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <ImportRowBadges
+                                row={row}
+                                isDuplicate={duplicateSourceLines.has(
+                                  row.sourceLine,
+                                )}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-wrap gap-2">
+                  {filterOptions.map((option) => (
+                    <Button
+                      key={option.value}
+                      type="button"
+                      size="sm"
+                      variant={rowFilter === option.value ? "default" : "outline"}
+                      onClick={() => setRowFilter(option.value)}
+                    >
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
+
+                {filteredRows.filter(
+                  (row) => row.kind !== "card_invoice_payment",
+                ).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Nenhum outro lançamento neste filtro.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {filteredRows
+                      .filter((row) => row.kind !== "card_invoice_payment")
+                      .map((row) => {
+                        const isDuplicate = duplicateSourceLines.has(
+                          row.sourceLine,
+                        );
+                        const isInvoicePayment =
+                          row.kind === "card_invoice_payment";
+                        const selectedCategoryId = getImportRowSelectedCategoryId(
+                          row,
+                        );
+                        const rowCategoryFeedback =
+                          categoryFeedbackByLine[row.sourceLine] ?? null;
+                        const highlightCategoryLabel =
+                          isImportCategoryFeedbackActive(
+                            rowCategoryFeedback,
+                            selectedCategoryId,
+                          );
+
+                        return (
+                          <div
+                            key={`row-${row.sourceLine}-${row.externalFingerprint}`}
+                            className="rounded-xl border border-border/50 px-4 py-3"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="min-w-0 space-y-1">
+                                <p className="text-sm font-medium">
+                                  L{row.sourceLine} — {row.description}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {formatDate(row.date)} ·{" "}
+                                  {importKindLabels[row.kind]}
+                                </p>
+                                <ImportRowBadges
+                                  row={row}
+                                  isDuplicate={isDuplicate}
+                                />
+                                {row.categorySuggestion ? (
+                                  <div
+                                    className={cn(
+                                      "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
+                                      highlightCategoryLabel &&
+                                        "rounded-md bg-emerald-500/10 px-2 py-1 text-foreground",
+                                    )}
+                                    data-testid={`import-row-category-suggestion-${row.sourceLine}`}
+                                    data-category-feedback={
+                                      highlightCategoryLabel
+                                        ? rowCategoryFeedback?.kind ?? "none"
+                                        : "none"
+                                    }
+                                  >
+                                    <span>
+                                      Sugestão:{" "}
+                                      <span className="font-medium text-foreground">
+                                        {row.categorySuggestion.categoryName}
+                                      </span>
+                                    </span>
+                                    <CategorySuggestionOriginChip
+                                      suggestion={row.categorySuggestion}
+                                      showConfidence
+                                    />
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <CategorySuggestionOriginChip
+                                      suggestion={null}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="text-right">
+                                <p className="text-base font-semibold tabular-nums">
+                                  {row.direction === "out" ? "-" : "+"}
+                                  {formatCurrency(row.amount)}
+                                </p>
+                              </div>
+                            </div>
+
+                            {showFullCategoryList &&
+                            row.historicalStatus === "new" &&
+                            !isInvoicePayment &&
+                            row.reviewStatus !== "invalid" &&
+                            row.reviewStatus !== "already_imported" &&
+                            user ? (
+                              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+                                <ImportRowCategoryField
+                                  sourceLine={row.sourceLine}
+                                  transactionType={resolveImportRowTransactionType(
+                                    row,
+                                  )}
+                                  categories={categories}
+                                  selectedCategoryId={selectedCategoryId}
+                                  categoryFeedback={rowCategoryFeedback}
+                                  onCategoryChange={(categoryId) =>
+                                    handleRowCategoryChange(
+                                      row.sourceLine,
+                                      categoryId,
+                                    )
+                                  }
+                                  onCategorySaved={handleImportCategorySaved}
+                                  userId={user.id}
+                                />
+                                {row.categoryStatus === "suggested" &&
+                                row.categorySuggestion ? (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() =>
+                                      handleConfirmSuggestion(row.sourceLine)
+                                    }
+                                  >
+                                    Confirmar sugestão
+                                  </Button>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="hidden text-sm text-muted-foreground md:block">
+                Lista oculta para focar nos pagamentos. Mostre quando quiser
+                revisar compras e categorias linha a linha.
+              </p>
+            )}
+          </ImportReviewMobileSection>
+
+          <ImportReviewMobileCommitBar
+            summary={formatImportMobileCommitSummary({
+              totalRows: activePreview.summary.totalRows,
+              paymentCount: invoicePaymentRows.length,
+            })}
+            commitLabel={`Aplicar importação · ${committableRows.length}`}
+            disabled={
+              committing ||
+              historyLoading ||
+              committableRows.length === 0 ||
+              Boolean(commitValidationError)
+            }
+            committing={committing}
+            historyLoading={historyLoading}
+            validationError={commitValidationError}
+            onCommit={() => void handleCommit()}
+          />
+          </div>
+
         </>
       ) : csvContent && identifiedFile?.status === "unsupported" ? (
         <Alert

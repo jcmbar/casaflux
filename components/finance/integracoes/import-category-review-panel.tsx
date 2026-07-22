@@ -7,8 +7,6 @@ import {
   List,
   Search,
   SkipForward,
-  Sparkles,
-  Wand2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -29,7 +27,6 @@ import {
 import {
   Progress,
   ProgressLabel,
-  ProgressValue,
 } from "@/components/ui/progress";
 import {
   applyCategoryToImportRowsBatch,
@@ -77,23 +74,6 @@ import { FormSelect, formSelectClassName } from "@/components/forms/form-control
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-function CategoryReviewProgressBar({
-  rows,
-}: {
-  rows: ImportPreviewRow[];
-}) {
-  const progress = getImportCategoryReviewProgress(rows);
-
-  return (
-    <Progress value={progress.percent} className="w-full">
-      <ProgressLabel>Categorização</ProgressLabel>
-      <ProgressValue>
-        {() => `${progress.resolved}/${progress.total}`}
-      </ProgressValue>
-    </Progress>
-  );
-}
-
 function CategoryReviewModeSwitch({
   mode,
   onModeChange,
@@ -104,7 +84,7 @@ function CategoryReviewModeSwitch({
   const modes: ImportCategoryReviewMode[] = ["assisted", "automatic", "manual"];
 
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-1.5">
       {modes.map((option) => (
         <Button
           key={option}
@@ -894,6 +874,8 @@ export function ImportCategoryReviewPanel({
   propagationOffer = null,
   onAcceptPropagation,
   onDismissPropagation,
+  className,
+  embedded = false,
 }: {
   rows: ImportPreviewRow[];
   categories: Category[];
@@ -916,6 +898,9 @@ export function ImportCategoryReviewPanel({
   propagationOffer?: ImportCategoryPropagationOffer | null;
   onAcceptPropagation?: () => void;
   onDismissPropagation?: () => void;
+  className?: string;
+  /** Sem borda própria — útil dentro do accordion mobile. */
+  embedded?: boolean;
 }) {
   const [internalMode, setInternalMode] = useState<ImportCategoryReviewMode>(
     DEFAULT_IMPORT_CATEGORY_REVIEW_MODE,
@@ -1027,114 +1012,191 @@ export function ImportCategoryReviewPanel({
 
   const confirmedCount =
     partition.autoResolved.length + partition.confirmed.length;
+  const progress = getImportCategoryReviewProgress(rows);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   return (
-    <Card className="border-border/50 shadow-sm" data-testid="import-category-review-panel">
-      <CardHeader className="gap-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-1">
-            <CardTitle className="text-base">Revisão de categorias</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Escolha como revisar as categorias antes do commit. Categorias novas
-              só são criadas quando você solicitar.
-            </p>
-          </div>
-          <CategoryReviewModeSwitch mode={mode} onModeChange={setMode} />
-        </div>
-
-        <CategoryReviewProgressBar rows={rows} />
-      </CardHeader>
-
-      <CardContent className="space-y-4">
-        {propagationOffer && mode === "assisted" && onAcceptPropagation && onDismissPropagation ? (
-          <PropagationOfferBanner
-            offer={propagationOffer}
-            onAccept={onAcceptPropagation}
-            onDismiss={onDismissPropagation}
-          />
-        ) : null}
-
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Confirmadas
-            </p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">
-              {confirmedCount}
-            </p>
-            {partition.autoResolved.length > 0 ? (
-              <p className="mt-1 text-xs text-muted-foreground">
-                {partition.autoResolved.length} automática
-                {partition.autoResolved.length === 1 ? "" : "s"}
+    <Card
+      className={cn(
+        "border-border/40 shadow-sm",
+        embedded &&
+          "max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none",
+        className,
+      )}
+      data-testid="import-category-review-panel"
+    >
+      <CardHeader className={cn("gap-2 py-3", embedded && "max-md:px-3 md:px-6")}>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <CardTitle
+                className={cn(
+                  "text-sm font-semibold",
+                  embedded && "max-md:sr-only",
+                )}
+              >
+                Categorias
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                {loading
+                  ? "Carregando…"
+                  : `${progress.resolved}/${progress.total} revisadas`}
               </p>
-            ) : null}
+            </div>
+            <div className="flex flex-wrap gap-1.5 text-[11px]">
+              <span className="rounded-md border border-border/40 bg-muted/10 px-2 py-0.5 tabular-nums">
+                <span className="text-muted-foreground">Confirmadas </span>
+                <span className="font-semibold text-foreground">
+                  {confirmedCount}
+                </span>
+              </span>
+              <span className="rounded-md border border-border/40 bg-muted/10 px-2 py-0.5 tabular-nums">
+                <span className="text-muted-foreground">Sugeridas </span>
+                <span className="font-semibold text-foreground">
+                  {partition.needsReview.length}
+                </span>
+              </span>
+              <span className="rounded-md border border-border/40 bg-muted/10 px-2 py-0.5 tabular-nums">
+                <span className="text-muted-foreground">Sem cat. </span>
+                <span className="font-semibold text-foreground">
+                  {partition.withoutCategory.length}
+                </span>
+              </span>
+            </div>
           </div>
-          <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Sugeridas para revisão
-            </p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">
-              {partition.needsReview.length}
-            </p>
+          <div className="flex flex-wrap items-center gap-1.5">
             {suggestedConfidenceSummary.total > 0 ? (
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                className="mt-3 w-full"
                 onClick={() => setBulkConfirmOpen(true)}
                 data-testid="bulk-confirm-suggested-button"
               >
-                Confirmar todas as sugeridas
+                Confirmar sugeridas
               </Button>
             ) : null}
-          </div>
-          <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Sem categoria
-            </p>
-            <p className="mt-1 text-2xl font-semibold tabular-nums">
-              {partition.withoutCategory.length}
-            </p>
+            <Button
+              type="button"
+              size="sm"
+              variant={detailOpen ? "ghost" : "secondary"}
+              onClick={() => setDetailOpen((current) => !current)}
+              data-testid="import-category-toggle-detail"
+            >
+              {detailOpen ? "Recolher" : "Revisar"}
+            </Button>
           </div>
         </div>
+        <Progress value={progress.percent} className="w-full gap-0">
+          <ProgressLabel className="sr-only">Categorização</ProgressLabel>
+        </Progress>
+      </CardHeader>
 
-        <BulkConfirmSuggestedDialog
-          open={bulkConfirmOpen}
-          summary={suggestedConfidenceSummary}
-          onOpenChange={setBulkConfirmOpen}
-          onConfirm={handleBulkConfirmSuggested}
-        />
+      <BulkConfirmSuggestedDialog
+        open={bulkConfirmOpen}
+        summary={suggestedConfidenceSummary}
+        onOpenChange={setBulkConfirmOpen}
+        onConfirm={handleBulkConfirmSuggested}
+      />
 
-        <BatchCategoryFilterPanel
-          rows={rows}
-          categories={categories}
-          categoryCatalog={categoryCatalog}
-          onRowsChange={onRowsChange}
-        />
+      {detailOpen ? (
+        <CardContent className="space-y-3 border-t border-border/40 pt-3">
+          <CategoryReviewModeSwitch mode={mode} onModeChange={setMode} />
 
-        {mode === "automatic" ? (
-          <div className="space-y-4">
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-4">
-              <div className="flex items-start gap-3">
-                <Wand2 className="mt-0.5 size-4 text-emerald-700 dark:text-emerald-300" />
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">Resumo automático</p>
-                  <p className="text-sm text-muted-foreground">
-                    {partition.autoResolved.length > 0
-                      ? `${partition.autoResolved.length} linha(s) de alta confiança foram confirmadas automaticamente.`
-                      : "Nenhuma linha de alta confiança para aplicar automaticamente."}
-                    {partition.pending.length > 0
-                      ? ` ${partition.pending.length} exceção(ões) ainda precisam de revisão antes do commit.`
-                      : " Todas as linhas categorizáveis estão resolvidas."}
-                  </p>
-                </div>
+          {propagationOffer &&
+          mode === "assisted" &&
+          onAcceptPropagation &&
+          onDismissPropagation ? (
+            <PropagationOfferBanner
+              offer={propagationOffer}
+              onAccept={onAcceptPropagation}
+              onDismiss={onDismissPropagation}
+            />
+          ) : null}
+
+          <BatchCategoryFilterPanel
+            rows={rows}
+            categories={categories}
+            categoryCatalog={categoryCatalog}
+            onRowsChange={onRowsChange}
+          />
+
+          {mode === "automatic" ? (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-3">
+                <p className="text-sm text-muted-foreground">
+                  {partition.autoResolved.length > 0
+                    ? `${partition.autoResolved.length} alta confiança confirmada(s) automaticamente.`
+                    : "Nenhuma alta confiança automática."}
+                  {partition.pending.length > 0
+                    ? ` ${partition.pending.length} ainda pendente(s).`
+                    : " Tudo resolvido."}
+                </p>
               </div>
-            </div>
 
-            {partition.pending.length > 0 ? (
+              {partition.pending.length > 0 ? (
+                <ManualCategoryReviewList
+                  rows={partition.pending}
+                  allRows={rows}
+                  mode={mode}
+                  categories={categories}
+                  categoryFeedbackByLine={categoryFeedbackByLine}
+                  userId={userId}
+                  onCategoryChange={onCategoryChange}
+                  onCategorySaved={onCategorySaved}
+                  onConfirmSuggestion={onConfirmSuggestion}
+                  showResolved={false}
+                />
+              ) : null}
+            </div>
+          ) : null}
+
+          {mode === "assisted" ? (
+            assistedRow ? (
+              <AssistedCategoryReview
+                row={assistedRow}
+                queueLength={assistedQueue.length}
+                index={assistedIndex}
+                categories={categories}
+                categoryFeedback={
+                  categoryFeedbackByLine[assistedRow.sourceLine] ?? null
+                }
+                userId={userId}
+                onConfirm={handleAssistedConfirm}
+                onSkip={handleAssistedSkip}
+                onPrevious={handleAssistedPrevious}
+                onNext={handleAssistedNext}
+                onCategoryChange={(categoryId) =>
+                  onCategoryChange(assistedRow.sourceLine, categoryId)
+                }
+                onCategorySaved={onCategorySaved}
+                similarLinesHint={
+                  <SimilarLinesHint
+                    rows={rows}
+                    sourceLine={assistedRow.sourceLine}
+                    mode={mode}
+                  />
+                }
+              />
+            ) : (
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-4 text-center">
+                <p className="text-sm font-medium">Categorização concluída</p>
+              </div>
+            )
+          ) : null}
+
+          {mode === "manual" ? (
+            fullListVisible ? (
+              <p className="text-sm text-muted-foreground">
+                Lista completa aberta abaixo.
+              </p>
+            ) : (
               <ManualCategoryReviewList
-                rows={partition.pending}
+                rows={[
+                  ...partition.pending,
+                  ...partition.confirmed,
+                  ...partition.autoResolved,
+                ]}
                 allRows={rows}
                 mode={mode}
                 categories={categories}
@@ -1145,87 +1207,23 @@ export function ImportCategoryReviewPanel({
                 onConfirmSuggestion={onConfirmSuggestion}
                 showResolved={false}
               />
-            ) : null}
+            )
+          ) : null}
+
+          <div className="flex justify-end border-t border-border/40 pt-3">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setFullListVisible(!fullListVisible)}
+              data-testid="import-category-toggle-full-list"
+            >
+              <List className="size-3.5" />
+              {fullListVisible ? "Ocultar lista completa" : "Lista completa"}
+            </Button>
           </div>
-        ) : null}
-
-        {mode === "assisted" ? (
-          assistedRow ? (
-            <AssistedCategoryReview
-              row={assistedRow}
-              queueLength={assistedQueue.length}
-              index={assistedIndex}
-              categories={categories}
-              categoryFeedback={categoryFeedbackByLine[assistedRow.sourceLine] ?? null}
-              userId={userId}
-              onConfirm={handleAssistedConfirm}
-              onSkip={handleAssistedSkip}
-              onPrevious={handleAssistedPrevious}
-              onNext={handleAssistedNext}
-              onCategoryChange={(categoryId) =>
-                onCategoryChange(assistedRow.sourceLine, categoryId)
-              }
-              onCategorySaved={onCategorySaved}
-              similarLinesHint={
-                <SimilarLinesHint rows={rows} sourceLine={assistedRow.sourceLine} mode={mode} />
-              }
-            />
-          ) : (
-            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-6 text-center">
-              <Sparkles className="mx-auto size-5 text-emerald-700 dark:text-emerald-300" />
-              <p className="mt-2 text-sm font-medium">
-                Categorização concluída neste modo
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Todas as linhas categorizáveis foram revisadas.
-              </p>
-            </div>
-          )
-        ) : null}
-
-        {mode === "manual" ? (
-          fullListVisible ? (
-            <div className="rounded-xl border border-border/50 bg-muted/15 px-4 py-4 text-sm text-muted-foreground">
-              A lista completa está aberta abaixo com todos os campos de categoria.
-            </div>
-          ) : (
-            <ManualCategoryReviewList
-              rows={[
-                ...partition.pending,
-                ...partition.confirmed,
-                ...partition.autoResolved,
-              ]}
-              allRows={rows}
-              mode={mode}
-              categories={categories}
-              categoryFeedbackByLine={categoryFeedbackByLine}
-              userId={userId}
-              onCategoryChange={onCategoryChange}
-              onCategorySaved={onCategorySaved}
-              onConfirmSuggestion={onConfirmSuggestion}
-              showResolved={false}
-            />
-          )
-        ) : null}
-
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-4">
-          <p className="text-xs text-muted-foreground">
-            {loading
-              ? "Carregando sugestões de categoria..."
-              : `${getImportCategoryReviewProgress(rows).resolved} de ${getImportCategoryReviewProgress(rows).total} linhas categorizáveis revisadas`}
-          </p>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => setFullListVisible(!fullListVisible)}
-            data-testid="import-category-toggle-full-list"
-          >
-            <List className="size-3.5" />
-            {fullListVisible ? "Ocultar lista completa" : "Abrir lista completa"}
-          </Button>
-        </div>
-      </CardContent>
+        </CardContent>
+      ) : null}
     </Card>
   );
 }
