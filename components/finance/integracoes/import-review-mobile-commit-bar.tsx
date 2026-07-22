@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -80,6 +80,7 @@ export function ImportReviewMobileCommitBar({
   committing,
   historyLoading,
   validationError,
+  categoryAttentionMessage,
   onCommit,
 }: {
   summary: string;
@@ -88,6 +89,8 @@ export function ImportReviewMobileCommitBar({
   committing: boolean;
   historyLoading: boolean;
   validationError?: string | null;
+  /** Non-blocking attention near apply (e.g. uncategorized rows). */
+  categoryAttentionMessage?: string | null;
   onCommit: () => void;
 }) {
   const hiddenWhileEditing = useHideWhileEditing();
@@ -104,53 +107,65 @@ export function ImportReviewMobileCommitBar({
       data-testid="import-mobile-commit-bar"
       data-hidden-while-editing={hiddenWhileEditing ? "true" : "false"}
     >
-      <div className="mx-auto flex max-w-lg items-center gap-2">
-        <div className="min-w-0 flex-1 space-y-0.5">
-          <p className="truncate text-[11px] leading-tight text-muted-foreground">
-            {summary}
+      <div className="mx-auto flex max-w-lg flex-col gap-1.5">
+        {categoryAttentionMessage ? (
+          <p
+            className="flex items-start gap-1 text-[10px] leading-snug text-amber-800 dark:text-amber-200"
+            data-testid="import-mobile-category-attention"
+            role="status"
+          >
+            <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden />
+            <span className="min-w-0">{categoryAttentionMessage}</span>
           </p>
-          {historyLoading ? (
-            <p
-              className="truncate text-[10px] leading-tight text-muted-foreground"
-              data-testid="import-mobile-commit-history-loading"
-            >
-              Verificando histórico…
+        ) : null}
+        <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <p className="truncate text-[11px] leading-tight text-muted-foreground">
+              {summary}
             </p>
-          ) : null}
-          {validationError ? (
-            <p
-              className="line-clamp-1 text-[10px] leading-tight text-amber-800 dark:text-amber-200"
-              data-testid="import-mobile-commit-validation-error"
-              role="status"
-            >
-              {validationError}
-            </p>
-          ) : null}
+            {historyLoading ? (
+              <p
+                className="truncate text-[10px] leading-tight text-muted-foreground"
+                data-testid="import-mobile-commit-history-loading"
+              >
+                Verificando histórico…
+              </p>
+            ) : null}
+            {validationError ? (
+              <p
+                className="line-clamp-1 text-[10px] leading-tight text-amber-800 dark:text-amber-200"
+                data-testid="import-mobile-commit-validation-error"
+                role="status"
+              >
+                {validationError}
+              </p>
+            ) : null}
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 shrink-0 px-3"
+            disabled={disabled}
+            onClick={onCommit}
+            data-testid="import-mobile-commit-button"
+            title={
+              validationError
+                ? validationError
+                : historyLoading
+                  ? "Aguardando verificação do histórico"
+                  : undefined
+            }
+          >
+            {committing ? (
+              <>
+                <Loader2 className="size-3.5 animate-spin" />
+                Importando...
+              </>
+            ) : (
+              commitLabel
+            )}
+          </Button>
         </div>
-        <Button
-          type="button"
-          size="sm"
-          className="h-8 shrink-0 px-3"
-          disabled={disabled}
-          onClick={onCommit}
-          data-testid="import-mobile-commit-button"
-          title={
-            validationError
-              ? validationError
-              : historyLoading
-                ? "Aguardando verificação do histórico"
-                : undefined
-          }
-        >
-          {committing ? (
-            <>
-              <Loader2 className="size-3.5 animate-spin" />
-              Importando...
-            </>
-          ) : (
-            commitLabel
-          )}
-        </Button>
       </div>
     </div>
   );

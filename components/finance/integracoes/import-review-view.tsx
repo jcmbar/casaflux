@@ -2565,6 +2565,28 @@ export function ImportReviewView() {
                       }.`
                     : "Nenhuma linha nova e pronta para importar."}
                 </p>
+                {(activePreview.categorySummary?.withoutCategoryCount ?? 0) >
+                0 ? (
+                  <p
+                    className="flex items-start gap-1.5 text-xs text-amber-800 dark:text-amber-200"
+                    data-testid="import-commit-category-attention"
+                    role="status"
+                  >
+                    <AlertTriangle
+                      className="mt-0.5 size-3.5 shrink-0"
+                      aria-hidden
+                    />
+                    <span>
+                      Você pode continuar agora, mas ainda há{" "}
+                      {activePreview.categorySummary!.withoutCategoryCount}{" "}
+                      lançamento
+                      {activePreview.categorySummary!.withoutCategoryCount === 1
+                        ? ""
+                        : "s"}{" "}
+                      sem categoria.
+                    </span>
+                  </p>
+                ) : null}
                 {historyLoading ? (
                   <p
                     className="text-xs text-muted-foreground"
@@ -2618,7 +2640,18 @@ export function ImportReviewView() {
             <ImportReviewMobileSection
               id="categories"
               title="Revisão de categorias"
-              summary={`${activePreview.categorySummary.confirmedCount} confirmadas · ${activePreview.categorySummary.suggestedCount} sugeridas · ${activePreview.categorySummary.withoutCategoryCount} sem cat.`}
+              summary={
+                activePreview.categorySummary.withoutCategoryCount > 0
+                  ? `${activePreview.categorySummary.withoutCategoryCount} lançamento${
+                      activePreview.categorySummary.withoutCategoryCount === 1
+                        ? ""
+                        : "s"
+                    } ainda sem categoria`
+                  : `${activePreview.categorySummary.confirmedCount} confirmadas · ${activePreview.categorySummary.suggestedCount} sugeridas`
+              }
+              attention={
+                activePreview.categorySummary.withoutCategoryCount > 0
+              }
               open={mobileOpenSection === "categories"}
               onOpenChange={(open) =>
                 setExclusiveMobileSection("categories", open)
@@ -2901,6 +2934,11 @@ export function ImportReviewView() {
             committing={committing}
             historyLoading={historyLoading}
             validationError={commitValidationError}
+            categoryAttentionMessage={
+              (activePreview.categorySummary?.withoutCategoryCount ?? 0) > 0
+                ? "Você pode continuar agora, mas ainda há lançamentos sem categoria"
+                : null
+            }
             onCommit={() => void handleCommit()}
           />
           </div>

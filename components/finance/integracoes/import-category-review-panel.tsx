@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangle,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -1014,16 +1015,20 @@ export function ImportCategoryReviewPanel({
     partition.autoResolved.length + partition.confirmed.length;
   const progress = getImportCategoryReviewProgress(rows);
   const [detailOpen, setDetailOpen] = useState(false);
+  const withoutCategoryCount = partition.withoutCategory.length;
+  const hasUncategorizedAttention = !loading && withoutCategoryCount > 0;
 
   return (
     <Card
       className={cn(
         "border-border/40 shadow-sm",
+        hasUncategorizedAttention && "border-amber-500/30",
         embedded &&
           "max-md:rounded-none max-md:border-0 max-md:bg-transparent max-md:shadow-none",
         className,
       )}
       data-testid="import-category-review-panel"
+      data-uncategorized-attention={hasUncategorizedAttention ? "true" : "false"}
     >
       <CardHeader className={cn("gap-2 py-3", embedded && "max-md:px-3 md:px-6")}>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1043,6 +1048,20 @@ export function ImportCategoryReviewPanel({
                   : `${progress.resolved}/${progress.total} revisadas`}
               </p>
             </div>
+
+            {hasUncategorizedAttention ? (
+              <p
+                className="flex items-start gap-1.5 text-xs text-amber-900 dark:text-amber-100"
+                data-testid="import-category-uncategorized-attention"
+              >
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                <span>
+                  {withoutCategoryCount} lançamento
+                  {withoutCategoryCount === 1 ? "" : "s"} ainda sem categoria
+                </span>
+              </p>
+            ) : null}
+
             <div className="flex flex-wrap gap-1.5 text-[11px]">
               <span className="rounded-md border border-border/40 bg-muted/10 px-2 py-0.5 tabular-nums">
                 <span className="text-muted-foreground">Confirmadas </span>
@@ -1056,10 +1075,32 @@ export function ImportCategoryReviewPanel({
                   {partition.needsReview.length}
                 </span>
               </span>
-              <span className="rounded-md border border-border/40 bg-muted/10 px-2 py-0.5 tabular-nums">
-                <span className="text-muted-foreground">Sem cat. </span>
-                <span className="font-semibold text-foreground">
-                  {partition.withoutCategory.length}
+              <span
+                className={cn(
+                  "rounded-md border px-2 py-0.5 tabular-nums",
+                  hasUncategorizedAttention
+                    ? "border-amber-500/35 bg-amber-500/10"
+                    : "border-border/40 bg-muted/10",
+                )}
+              >
+                <span
+                  className={cn(
+                    hasUncategorizedAttention
+                      ? "text-amber-900/80 dark:text-amber-100/80"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  Sem cat.{" "}
+                </span>
+                <span
+                  className={cn(
+                    "font-semibold",
+                    hasUncategorizedAttention
+                      ? "text-amber-950 dark:text-amber-50"
+                      : "text-foreground",
+                  )}
+                >
+                  {withoutCategoryCount}
                 </span>
               </span>
             </div>
