@@ -78,10 +78,24 @@ export function parseBrazilianDateToIso(date: string): string {
   return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
 
+/**
+ * Normalizes CSV date cells to `YYYY-MM-DD`.
+ * Accepts ISO dates, ISO datetimes (uses the calendar date prefix), and
+ * Brazilian `DD/MM/YYYY` (optionally with a time suffix).
+ * Does not apply timezone conversion or ±1 day adjustments.
+ */
 export function normalizeIsoDate(date: string): string {
   const trimmed = date.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    return trimmed;
+
+  const isoPrefix = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoPrefix) {
+    return isoPrefix[1]!;
+  }
+
+  const br = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (br) {
+    const [, day, month, year] = br;
+    return `${year}-${month!.padStart(2, "0")}-${day!.padStart(2, "0")}`;
   }
 
   return parseBrazilianDateToIso(trimmed);

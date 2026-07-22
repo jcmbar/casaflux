@@ -117,6 +117,80 @@ describe("suggestCategoryForDescription", () => {
 
     expect(suggestion?.confidence).toBe("low");
   });
+
+  it("uses category keywords when history is not strong", () => {
+    const suggestion = suggestCategoryForDescription({
+      description: "DROGASIL LOJA 123",
+      transactionType: "expense",
+      index,
+      categories: [
+        ...CATEGORIES,
+        {
+          id: "cat-pharmacy",
+          name: "Farmácia",
+          type: "expense",
+          keywords: ["drogasil", "drogaria"],
+        },
+      ],
+    });
+
+    expect(suggestion).toMatchObject({
+      categoryId: "cat-pharmacy",
+      source: "category_keyword",
+      matchedKeyword: "drogasil",
+      confidence: "high",
+    });
+  });
+
+  it("keeps strong history above keywords", () => {
+    const suggestion = suggestCategoryForDescription({
+      description: "Netflix.Com",
+      transactionType: "expense",
+      index,
+      categories: [
+        ...CATEGORIES.map((category) =>
+          category.id === "cat-streaming"
+            ? { ...category, keywords: ["netflix"] }
+            : category,
+        ),
+        {
+          id: "cat-other",
+          name: "Outros",
+          type: "expense" as const,
+          keywords: ["netflix"],
+        },
+      ],
+    });
+
+    expect(suggestion).toMatchObject({
+      categoryId: "cat-streaming",
+      source: "exact_match",
+      confidence: "high",
+    });
+  });
+
+  it("prefers keywords over weak conflicting history", () => {
+    const suggestion = suggestCategoryForDescription({
+      description: "Ifd*Silene Lopes de Al",
+      transactionType: "expense",
+      index,
+      categories: [
+        ...CATEGORIES,
+        {
+          id: "cat-food",
+          name: "Alimentação",
+          type: "expense" as const,
+          keywords: ["ifd", "silene"],
+        },
+      ],
+    });
+
+    expect(suggestion).toMatchObject({
+      categoryId: "cat-food",
+      source: "category_keyword",
+      matchedKeyword: "silene",
+    });
+  });
 });
 
 describe("enrichPreviewWithCategorySuggestions", () => {

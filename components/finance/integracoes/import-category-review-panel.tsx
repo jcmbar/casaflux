@@ -13,10 +13,19 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { useConfirm } from "@/components/feedback/confirm-dialog-provider";
+import { CategorySuggestionSummaryLine } from "@/components/finance/category-suggestion-origin-chip";
 import { ImportRowCategoryField } from "@/components/finance/import-row-category-field";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Progress,
   ProgressLabel,
@@ -30,6 +39,13 @@ import {
   resolveBatchApplyTargetLines,
   type ImportCategoryBatchTypeFilter,
 } from "@/lib/integrations/categories/import-category-batch-filter";
+import {
+  applyBulkConfirmSuggestedCategories,
+  formatBulkConfirmSuggestedResultMessage,
+  formatBulkConfirmSuggestedSummary,
+  summarizeSuggestedReviewConfidence,
+  type BulkConfirmSuggestionsScope,
+} from "@/lib/integrations/categories/import-category-bulk-confirm";
 import {
   applyHighConfidenceWithPropagation,
   buildImportCategoryGroup,
@@ -60,15 +76,6 @@ import { toast } from "@/lib/toast";
 import { FormSelect, formSelectClassName } from "@/components/forms/form-controls";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-
-const categorySourceLabels: Record<
-  NonNullable<ImportPreviewRow["categorySuggestion"]>["source"],
-  string
-> = {
-  exact_match: "Match exato",
-  normalized_merchant: "Merchant normalizado",
-  historical_frequency: "Frequência histórica",
-};
 
 function CategoryReviewProgressBar({
   rows,
@@ -128,20 +135,10 @@ function CategoryReviewRowSummary({ row }: { row: ImportPreviewRow }) {
           {formatCurrency(row.amount)}
         </span>
       </div>
-      {row.categorySuggestion ? (
-        <p className="text-xs text-muted-foreground">
-          Sugestão:{" "}
-          <span className="font-medium text-foreground">
-            {row.categorySuggestion.categoryName}
-          </span>{" "}
-          · {categorySourceLabels[row.categorySuggestion.source]} · confiança{" "}
-          {row.categorySuggestion.confidence}
-        </p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          Sem sugestão automática. Escolha uma categoria ou crie uma nova.
-        </p>
-      )}
+      <CategorySuggestionSummaryLine
+        suggestion={row.categorySuggestion}
+        categoryName={row.categorySuggestion?.categoryName}
+      />
     </div>
   );
 }
@@ -811,6 +808,74 @@ function ManualCategoryReviewList({
   );
 }
 
+function BulkConfirmSuggestedDialog({
+  open,
+  summary,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean;
+  summary: ReturnType<typeof summarizeSuggestedReviewConfidence>;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: (scope: BulkConfirmSuggestionsScope) => void;
+}) {
+  const safeCount = summary.high + summary.medium;
+  const hasLow = summary.low > 0;
+  const hasSafe = safeCount > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md" showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>Confirmar todas as sugeridas</DialogTitle>
+          <DialogDescription className="space-y-3 text-left">
+            <span className="block">
+              {formatBulkConfirmSuggestedSummary(summary)}
+            </span>
+            {hasSafe ? (
+              <span className="block">
+                Por padrão, confirmamos Alta e Média ({safeCount} linha
+                {safeCount === 1 ? "" : "s"})
+                {hasLow
+                  ? ` e deixamos ${summary.low} de baixa confiança para revisão manual.`
+                  : "."}
+              </span>
+            ) : (
+              <span className="block">
+                Só restam sugestões de baixa confiança. Confirme todas se quiser
+                aprovar inclusive essas linhas.
+              </span>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="flex-col gap-2 border-t-0 bg-transparent p-0 pt-2 sm:flex-col">
+          {hasSafe ? (
+            <Button type="button" onClick={() => onConfirm("safe")}>
+              Confirmar alta e média
+            </Button>
+          ) : null}
+          {hasLow ? (
+            <Button
+              type="button"
+              variant={hasSafe ? "outline" : "default"}
+              onClick={() => onConfirm("all")}
+            >
+              Confirmar todas (inclui baixa)
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+          >
+            Cancelar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function ImportCategoryReviewPanel({
   rows,
   categories,
@@ -858,6 +923,7 @@ export function ImportCategoryReviewPanel({
   const [assistedIndex, setAssistedIndex] = useState(0);
   const [internalShowFullList, setInternalShowFullList] = useState(false);
   const [automaticApplied, setAutomaticApplied] = useState(false);
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
 
   const mode = controlledMode ?? internalMode;
   const setMode = onModeChange ?? setInternalMode;
@@ -930,6 +996,38 @@ export function ImportCategoryReviewPanel({
     );
   }
 
+  const suggestedConfidenceSummary = useMemo(
+    () => summarizeSuggestedReviewConfidence(rows),
+    [rows],
+  );
+
+  function handleBulkConfirmSuggested(scope: BulkConfirmSuggestionsScope) {
+    const result = applyBulkConfirmSuggestedCategories({
+      rows,
+      catalog: categoryCatalog,
+      scope,
+    });
+
+    if (result.confirmedLines.length === 0) {
+      toast.error("Nenhuma sugestão elegível para confirmar.");
+      setBulkConfirmOpen(false);
+      return;
+    }
+
+    onRowsChange(result.rows);
+    setBulkConfirmOpen(false);
+    toast.success(
+      formatBulkConfirmSuggestedResultMessage({
+        confirmedCount: result.confirmedLines.length,
+        skippedLowCount: result.skippedLowCount,
+        scope,
+      }),
+    );
+  }
+
+  const confirmedCount =
+    partition.autoResolved.length + partition.confirmed.length;
+
   return (
     <Card className="border-border/50 shadow-sm" data-testid="import-category-review-panel">
       <CardHeader className="gap-4">
@@ -959,11 +1057,17 @@ export function ImportCategoryReviewPanel({
         <div className="grid gap-3 sm:grid-cols-3">
           <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Resolvidas automaticamente
+              Confirmadas
             </p>
             <p className="mt-1 text-2xl font-semibold tabular-nums">
-              {partition.autoResolved.length}
+              {confirmedCount}
             </p>
+            {partition.autoResolved.length > 0 ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {partition.autoResolved.length} automática
+                {partition.autoResolved.length === 1 ? "" : "s"}
+              </p>
+            ) : null}
           </div>
           <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -972,6 +1076,18 @@ export function ImportCategoryReviewPanel({
             <p className="mt-1 text-2xl font-semibold tabular-nums">
               {partition.needsReview.length}
             </p>
+            {suggestedConfidenceSummary.total > 0 ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="mt-3 w-full"
+                onClick={() => setBulkConfirmOpen(true)}
+                data-testid="bulk-confirm-suggested-button"
+              >
+                Confirmar todas as sugeridas
+              </Button>
+            ) : null}
           </div>
           <div className="rounded-xl border border-border/50 bg-muted/20 px-4 py-3">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -982,6 +1098,13 @@ export function ImportCategoryReviewPanel({
             </p>
           </div>
         </div>
+
+        <BulkConfirmSuggestedDialog
+          open={bulkConfirmOpen}
+          summary={suggestedConfidenceSummary}
+          onOpenChange={setBulkConfirmOpen}
+          onConfirm={handleBulkConfirmSuggested}
+        />
 
         <BatchCategoryFilterPanel
           rows={rows}

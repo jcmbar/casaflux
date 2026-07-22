@@ -6,9 +6,16 @@ import {
   type CreditCardBillingConfig,
 } from "@/lib/finance/credit-card-billing";
 import { applyInvoicePaymentReconciliationsForBatch } from "@/lib/finance/reconcile-invoice-payment";
+import { upsertCardStatementCycle } from "@/lib/finance/card-statement-cycles";
+import { snapshotCategoryClassificationMemory } from "@/lib/integrations/categories/category-classification-memory";
 import type { Account } from "@/types/account";
+import { buildImportedCardStatementCycleUpserts } from "../invoice-payment/capture-imported-statement-cycle";
 import { buildImportRowIdentityKey } from "../history/row-identity";
-import type { InvoicePaymentCycleTargetSelection } from "../invoice-payment/invoice-payment-cycle-target";
+import type {
+  InvoicePaymentCycleResolveContext,
+  InvoicePaymentCycleTargetSelection,
+} from "../invoice-payment/invoice-payment-cycle-target";
+import { hydrateInvoicePaymentCycleTargetSelection } from "../invoice-payment/invoice-payment-cycle-target";
 import type { InvoicePaymentImportMode } from "../invoice-payment/resolve-invoice-payment";
 import type {
   InvoicePaymentReconcileDecision,
@@ -64,6 +71,13 @@ export type CommitImportPreviewInput = {
     Account,
     "type" | "statement_closing_day" | "statement_due_day"
   > | null;
+  /** Real closing/due of the imported CC statement file. */
+  statementFileCycle?: {
+    closingDate: string;
+    dueDate: string;
+  } | null;
+  /** Persisted imported cycles for the card (due-date resolution). */
+  importedStatementCycles?: InvoicePaymentCycleResolveContext["importedCycles"];
 };
 
 export type CommitImportPreviewResult =
@@ -155,6 +169,7 @@ export function getCommitImportPreviewValidationError(
     contentHash: input.contentHash,
     source: input.preview.source,
     invoicePaymentModes: input.invoicePaymentModes,
+    statementFileCycle: input.statementFileCycle,
   });
 }
 
@@ -174,9 +189,40 @@ export function buildCommitImportRpcPayload(input: CommitImportPreviewInput) {
     modes,
   );
   const billingConfig = resolveImportBillingConfig(input.targetAccount);
+  const cycleContext: InvoicePaymentCycleResolveContext | null =
+    input.statementFileCycle || input.importedStatementCycles?.length
+      ? {
+          fileCycle: input.statementFileCycle ?? null,
+          importedCycles: input.importedStatementCycles,
+        }
+      : null;
 
-  return committableRows.map((row) =>
-    toRpcCommitRowPayload(
+  return committableRows.map((row) => {
+    const rawSelection = cycleTargets[row.sourceLine];
+    const hydratedTargets =
+      billingConfig && rawSelection
+        ? {
+            ...cycleTargets,
+            [row.sourceLine]: hydrateInvoicePaymentCycleTargetSelection(
+              rawSelection,
+              billingConfig,
+              row.date,
+              cycleContext,
+            ),
+          }
+        : billingConfig && !rawSelection
+          ? {
+              ...cycleTargets,
+              [row.sourceLine]: hydrateInvoicePaymentCycleTargetSelection(
+                { target: "previous" },
+                billingConfig,
+                row.date,
+                cycleContext,
+              ),
+            }
+          : cycleTargets;
+
+    return toRpcCommitRowPayload(
       buildCommitImportRowPayload(
         row,
         input.targetAccountId,
@@ -184,10 +230,11 @@ export function buildCommitImportRpcPayload(input: CommitImportPreviewInput) {
         input.invoiceSourceAccounts,
         billingConfig,
         modes,
-        cycleTargets,
+        hydratedTargets,
+        cycleContext,
       ),
-    ),
-  );
+    );
+  });
 }
 
 export async function commitImportPreview(
@@ -276,6 +323,43 @@ export async function commitImportPreview(
       if (reconcileResult.error) {
         console.error(reconcileResult.error);
       }
+    }
+
+    const billingConfig = resolveImportBillingConfig(input.targetAccount);
+    if (billingConfig) {
+      const cycleUpserts = buildImportedCardStatementCycleUpserts({
+        rows: input.preview.rows,
+        billingConfig,
+        accountId: input.targetAccountId,
+        ownerUserId: input.ownerUserId,
+        familyId: input.familyId,
+        fileName: input.fileName,
+        fileCycle: input.statementFileCycle,
+        importBatchId: batchId,
+        invoicePaymentModes: input.invoicePaymentModes,
+        invoicePaymentCycleTargets: input.invoicePaymentCycleTargets,
+      });
+
+      for (const cycleUpsert of cycleUpserts) {
+        const cycleResult = await upsertCardStatementCycle(supabase, cycleUpsert);
+        if (!cycleResult.ok) {
+          console.error(cycleResult.message);
+        }
+      }
+    }
+
+    // Persist category learning from newly committed txs so rolling back this
+    // (or any) batch later does not erase suggestions on reimport.
+    const learningAccountIds = [
+      input.targetAccountId,
+      ...Object.values(input.invoiceSourceAccounts ?? {}),
+    ];
+    const memoryResult = await snapshotCategoryClassificationMemory(
+      supabase,
+      learningAccountIds,
+    );
+    if (!memoryResult.ok) {
+      console.error(memoryResult.message);
     }
   }
 

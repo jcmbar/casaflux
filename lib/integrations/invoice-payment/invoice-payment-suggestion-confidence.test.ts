@@ -145,7 +145,7 @@ describe("suggestion confidence + existing card helpers (no regression)", () => 
     });
 
     expect(confidence?.confidence).toBe("high");
-    expect(impact?.text).toContain("26/05–25/06");
+    expect(impact?.text).toContain("03/07/2026");
     expect(estimate?.text).toContain("quitada");
   });
 });

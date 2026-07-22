@@ -13,6 +13,10 @@ export type StatementCycle = {
   periodEnd: string;
   closingDate: string;
   dueDate: string;
+  /** How this cycle was reconstructed. Defaults to derived from account days. */
+  source?: "derived" | "imported" | "manual";
+  /** Issuer bill total when known from import/manual capture. */
+  issuerAmountDue?: number | null;
 };
 
 export type StatementCycleRelation = "current" | "previous" | "next" | "other";
@@ -327,6 +331,8 @@ export type StatementSettlementTransaction = Pick<
   "amount" | "type" | "date" | "accountId"
 > & {
   statementCycleId?: string | null;
+  /** Preferred invoice linkage (due date ISO). */
+  statementDueDate?: string | null;
   description?: string | null;
   invoicePaymentOrigin?: "manual" | "imported" | null;
   reconciledWithTransactionId?: string | null;
@@ -381,6 +387,12 @@ export type StatementSettlement = {
   purchaseCount: number;
   paymentCount: number;
   rolledInPurchaseCount: number;
+  /**
+   * When imported/manual issuer total and purchase-window total both exist:
+   * issuerAmountDue − computed purchases (can be negative). Null otherwise.
+   * Informative only — does not change A pagar.
+   */
+  issuerPurchaseGap: number | null;
 };
 
 const MONEY_EPSILON = 0.005;
@@ -423,9 +435,55 @@ export function roundMoney(value: number): number {
 }
 
 /**
+ * Card incomes that are real invoice payments (vs estornos / credits).
+ * Unlinked generic credits must not settle a fatura via date inference.
+ */
+export function isCardInvoicePaymentIncome(
+  transaction: Pick<
+    StatementSettlementTransaction,
+    | "type"
+    | "description"
+    | "invoicePaymentOrigin"
+    | "statementDueDate"
+    | "statementCycleId"
+  >,
+): boolean {
+  if (transaction.type !== "income") {
+    return false;
+  }
+
+  if (
+    transaction.invoicePaymentOrigin === "imported" ||
+    transaction.invoicePaymentOrigin === "manual"
+  ) {
+    return true;
+  }
+
+  if (transaction.statementDueDate || transaction.statementCycleId) {
+    return true;
+  }
+
+  const description = (transaction.description ?? "").trim();
+  if (!description) {
+    return false;
+  }
+
+  if (description === "Pagamento recebido") {
+    return true;
+  }
+
+  if (description.startsWith("Pagamento fatura")) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Whether a card income should count toward settling `cycle`.
- * Linked payments use `statementCycleId`; legacy payments (null id) are
- * inferred from payment date via getStatementCyclePaidByPaymentDate.
+ * Prefer `statementDueDate` (due-first). Legacy rows use `statementCycleId`
+ * (closing). Unlinked payments are inferred from payment date only when the
+ * income looks like an invoice payment (not estorno/credit).
  */
 export function isPaymentAttributedToStatementCycle(input: {
   transaction: StatementSettlementTransaction;
@@ -436,6 +494,12 @@ export function isPaymentAttributedToStatementCycle(input: {
   const { transaction, accountId, cycle, config } = input;
   if (transaction.accountId !== accountId) return false;
   if (transaction.type !== "income") return false;
+  if (!isCardInvoicePaymentIncome(transaction)) return false;
+
+  const linkedDueDate = transaction.statementDueDate?.slice(0, 10) ?? null;
+  if (linkedDueDate) {
+    return linkedDueDate === cycle.dueDate.slice(0, 10);
+  }
 
   const linkedCycleId = transaction.statementCycleId?.slice(0, 10) ?? null;
   if (linkedCycleId) {
@@ -526,6 +590,14 @@ export function getStatementSettlement(input: {
   cycle: StatementCycle;
   transactions: StatementSettlementTransaction[];
   referenceDate: string;
+  /**
+   * When true (default), include issuer "virada" purchases just before periodStart
+   * in the purchase-window fallback for A pagar. Imported/manual bills with a
+   * stored issuerAmountDue still prefer that total. History passes true for the
+   * open derived bill and for imported/manual bills; closed derived bills pass
+   * false so the same expense is not counted on two adjacent derived cycles.
+   */
+  includeRolledInPurchases?: boolean;
 }): StatementSettlement {
   let cyclePurchasesTotal = 0;
   let rolledInPurchasesTotal = 0;
@@ -533,6 +605,7 @@ export function getStatementSettlement(input: {
   let purchaseCount = 0;
   let rolledInPurchaseCount = 0;
   let paymentCount = 0;
+  const includeRolledIn = input.includeRolledInPurchases !== false;
 
   const windowInput = {
     cycle: input.cycle,
@@ -552,7 +625,10 @@ export function getStatementSettlement(input: {
         continue;
       }
 
-      if (isRolledIntoOpenStatementPurchase(transaction.date, windowInput)) {
+      if (
+        includeRolledIn &&
+        isRolledIntoOpenStatementPurchase(transaction.date, windowInput)
+      ) {
         rolledInPurchasesTotal += amount;
         rolledInPurchaseCount += 1;
         continue;
@@ -577,16 +653,48 @@ export function getStatementSettlement(input: {
 
   cyclePurchasesTotal = roundMoney(cyclePurchasesTotal);
   rolledInPurchasesTotal = roundMoney(rolledInPurchasesTotal);
-  const amountDueTotal = roundMoney(
-    cyclePurchasesTotal + rolledInPurchasesTotal,
+  const computedAmountDue = roundMoney(
+    cyclePurchasesTotal + (includeRolledIn ? rolledInPurchasesTotal : 0),
   );
+  const issuerAmountDue =
+    input.cycle.issuerAmountDue == null
+      ? null
+      : roundMoney(Number(input.cycle.issuerAmountDue));
   paidTotal = roundMoney(paidTotal);
+
+  const isPersistedBill =
+    input.cycle.source === "imported" || input.cycle.source === "manual";
+
+  // Derived: purchase window only (never issuer amount_due).
+  // Imported/manual: issuer amount_due is the bill total when present.
+  // Fallback: purchase window (incl. virada when requested) or linked payment
+  // when the bill was settled without a stored issuer total.
+  let amountDueTotal: number;
+  if (isPersistedBill) {
+    if (issuerAmountDue != null && issuerAmountDue > MONEY_EPSILON) {
+      amountDueTotal = issuerAmountDue;
+    } else if (paidTotal > computedAmountDue + MONEY_EPSILON) {
+      amountDueTotal = paidTotal;
+    } else {
+      amountDueTotal = computedAmountDue;
+    }
+  } else {
+    amountDueTotal = computedAmountDue;
+  }
+
   const remainingTotal = Math.max(0, roundMoney(amountDueTotal - paidTotal));
+  const issuerPurchaseGap =
+    isPersistedBill &&
+    issuerAmountDue != null &&
+    issuerAmountDue > MONEY_EPSILON &&
+    computedAmountDue > MONEY_EPSILON
+      ? roundMoney(issuerAmountDue - computedAmountDue)
+      : null;
 
   return {
     cycle: input.cycle,
     cyclePurchasesTotal,
-    rolledInPurchasesTotal,
+    rolledInPurchasesTotal: includeRolledIn ? rolledInPurchasesTotal : 0,
     amountDueTotal,
     purchasesTotal: cyclePurchasesTotal,
     paidTotal,
@@ -599,7 +707,8 @@ export function getStatementSettlement(input: {
     }),
     purchaseCount,
     paymentCount,
-    rolledInPurchaseCount,
+    rolledInPurchaseCount: includeRolledIn ? rolledInPurchaseCount : 0,
+    issuerPurchaseGap,
   };
 }
 

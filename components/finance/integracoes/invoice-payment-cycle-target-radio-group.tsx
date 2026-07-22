@@ -1,120 +1,153 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { FormInput } from "@/components/forms/form-controls";
+import {
+  formatFullBrDate,
+  type CreditCardBillingConfig,
+} from "@/lib/finance/credit-card-billing";
 import type {
   InvoicePaymentCycleTarget,
   InvoicePaymentCycleTargetOption,
   InvoicePaymentCycleTargetSelection,
+  InvoicePaymentCycleResolveContext,
 } from "@/lib/integrations/invoice-payment/invoice-payment-cycle-target";
 import {
-  isInvoicePaymentCycleTargetChecked,
-  parseInvoicePaymentCycleTargetValue,
+  applyInvoicePaymentCycleTargetChange,
+  applyInvoicePaymentDueDateChange,
+  deriveInvoicePaymentSuggestionForDueDate,
 } from "@/lib/integrations/invoice-payment/invoice-payment-cycle-target";
 
 export function InvoicePaymentCycleTargetRadioGroup({
+  controlId,
   sourceLine,
   options,
   selection,
+  onSelectionChange,
   onTargetChange,
+  billingConfig = null,
+  paymentDate = "",
+  cycleContext = null,
 }: {
-  sourceLine: number;
+  /** Stable id for radio name / test ids. Prefer this over sourceLine. */
+  controlId?: string | number;
+  /** @deprecated Prefer controlId. Kept for import review compatibility. */
+  sourceLine?: number;
   options: InvoicePaymentCycleTargetOption[];
   selection: InvoicePaymentCycleTargetSelection;
-  onTargetChange: (target: InvoicePaymentCycleTarget) => void;
+  /** Preferred: full selection update (due date as source of truth). */
+  onSelectionChange?: (selection: InvoicePaymentCycleTargetSelection) => void;
+  /** @deprecated Prefer onSelectionChange. */
+  onTargetChange?: (target: InvoicePaymentCycleTarget) => void;
+  billingConfig?: CreditCardBillingConfig | null;
+  paymentDate?: string;
+  cycleContext?: InvoicePaymentCycleResolveContext | null;
 }) {
-  const groupName = `invoice-cycle-target-${sourceLine}`;
+  const id = String(controlId ?? sourceLine ?? "default");
+
+  const selectedDueDate = selection.targetDueDate?.slice(0, 10) ?? "";
+
+  const derivedSuggestion =
+    selectedDueDate && billingConfig && paymentDate
+      ? deriveInvoicePaymentSuggestionForDueDate(
+          selectedDueDate,
+          billingConfig,
+          paymentDate,
+          cycleContext,
+        )
+      : null;
+
+  const recommended = options.find((option) => option.recommended) ?? null;
+  const recommendedSelected =
+    Boolean(recommended?.dueDate) &&
+    selectedDueDate === recommended?.dueDate?.slice(0, 10);
+
+  function emitSelection(next: InvoicePaymentCycleTargetSelection) {
+    if (onSelectionChange) {
+      onSelectionChange(next);
+      return;
+    }
+    if (onTargetChange) {
+      onTargetChange(next.target);
+    }
+  }
 
   return (
     <fieldset
-      className="space-y-2"
-      data-testid={`invoice-cycle-target-${sourceLine}`}
+      className="space-y-3"
+      data-testid={`invoice-cycle-target-${id}`}
     >
       <legend className="text-xs font-medium text-foreground">
-        Aplicar crédito em
+        Qual fatura recebe o crédito?
       </legend>
-      <div
-        role="radiogroup"
-        aria-label="Aplicar crédito em"
-        className="space-y-1.5"
-      >
-        {options.map((option) => {
-          const checked = isInvoicePaymentCycleTargetChecked(
-            selection,
-            option.target,
-          );
-          const detail =
-            option.target === "future"
-              ? option.hint
-              : `${option.periodLabel} · vence ${option.dueDateLabel}`;
 
-          return (
-            <label
-              key={option.target}
-              className={cn(
-                "flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 text-xs transition-colors",
-                checked
-                  ? "border-violet-600/50 bg-violet-500/15 ring-1 ring-violet-500/25 dark:border-violet-400/50"
-                  : "border-transparent hover:border-violet-500/20 hover:bg-violet-500/5",
-              )}
-              data-selected={checked ? "true" : "false"}
-            >
-              <input
-                type="radio"
-                name={groupName}
-                value={option.target}
-                checked={checked}
-                onChange={(event) => {
-                  const target = parseInvoicePaymentCycleTargetValue(
-                    event.target.value,
-                  );
-                  if (target) {
-                    onTargetChange(target);
-                  }
-                }}
-                className="peer sr-only"
-                data-testid={`invoice-cycle-target-${option.target}-${sourceLine}`}
-                aria-checked={checked}
-              />
-              <span
-                aria-hidden
-                className={cn(
-                  "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
-                  checked
-                    ? "border-primary bg-primary"
-                    : "border-muted-foreground/45 bg-background",
-                )}
-                data-checked={checked ? "true" : "false"}
-              >
-                <span
-                  className={cn(
-                    "size-1.5 rounded-full bg-primary-foreground transition-opacity",
-                    checked ? "opacity-100" : "opacity-0",
-                  )}
-                />
-              </span>
-              <span>
-                <span
-                  className={cn(
-                    "font-medium",
-                    checked ? "text-foreground" : "text-foreground/90",
-                  )}
-                >
-                  {option.label}
-                  {option.recommended ? " (recomendado)" : null}
-                </span>
-                <span
-                  className={cn(
-                    "mt-0.5 block",
-                    checked ? "text-foreground/80" : "text-muted-foreground",
-                  )}
-                >
-                  {detail}
-                </span>
-              </span>
-            </label>
-          );
-        })}
-      </div>
+      <FormInput
+        id={`invoice-due-target-${id}`}
+        label="Vencimento da fatura"
+        type="date"
+        value={selectedDueDate}
+        onChange={(event) =>
+          emitSelection(
+            applyInvoicePaymentDueDateChange(
+              event.target.value,
+              billingConfig,
+              paymentDate,
+              cycleContext,
+            ),
+          )
+        }
+        data-testid={`invoice-due-target-input-${id}`}
+      />
+
+      {selectedDueDate ? (
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid={`invoice-due-target-derived-${id}`}
+        >
+          Fatura com vencimento em{" "}
+          <span className="font-medium text-foreground tabular-nums">
+            {formatFullBrDate(selectedDueDate)}
+          </span>
+          {derivedSuggestion === "previous"
+            ? " · anterior"
+            : derivedSuggestion === "current"
+              ? " · atual"
+              : derivedSuggestion === "future"
+                ? " · futura"
+                : null}
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Informe o vencimento da fatura que este crédito deve quitar.
+        </p>
+      )}
+
+      {recommended?.dueDate && !recommendedSelected ? (
+        <button
+          type="button"
+          onClick={() =>
+            emitSelection(
+              applyInvoicePaymentCycleTargetChange(
+                selection,
+                recommended.target,
+                recommended.dueDate,
+                recommended.cycleId,
+              ),
+            )
+          }
+          className={cn(
+            "text-left text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline",
+          )}
+          data-testid={`invoice-cycle-target-${recommended.target}-${id}`}
+          data-selected="false"
+          data-amount-known={recommended.amountKnown ? "true" : "false"}
+        >
+          Usar recomendada: {recommended.label.toLowerCase()}
+          {recommended.dueDateLabel
+            ? ` · vence ${recommended.dueDateLabel}`
+            : ""}
+        </button>
+      ) : null}
     </fieldset>
   );
 }

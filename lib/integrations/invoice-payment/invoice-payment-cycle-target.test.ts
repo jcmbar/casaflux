@@ -14,15 +14,20 @@ import { hashImportContent } from "../history/hash-content";
 import { resolveImportedInvoicePayment } from "./resolve-invoice-payment";
 import {
   buildInvoicePaymentCycleTargetOptions,
+  buildInvoicePaymentDueDateOptions,
   buildInvoicePaymentFutureCycleOptions,
   getAnticipatedStatementCycle,
   getDefaultInvoicePaymentCycleTargetSelection,
   getInvoicePaymentCycleTargetImpactMessage,
   applyInvoicePaymentCycleTargetChange,
+  applyInvoicePaymentDueDateChange,
+  deriveInvoicePaymentSuggestionForDueDate,
+  inferInvoicePaymentCycleTargetSelection,
   isInvoicePaymentCycleTargetChecked,
   parseInvoicePaymentCycleTargetValue,
   resolveImportedInvoicePaymentCycleId,
   resolveInvoicePaymentCycleTarget,
+  resolveStatementCycleForDueDate,
 } from "./invoice-payment-cycle-target";
 import { classifyImportedInvoicePaymentSuggestionConfidence } from "./invoice-payment-suggestion-confidence";
 import { getInvoicePaymentCycleTargetEstimatedEffect } from "./invoice-payment-cycle-estimate";
@@ -73,6 +78,230 @@ describe("invoice payment cycle target options", () => {
 
     expect(anticipated.cycleId).toBe("2026-07-25");
   });
+
+  it("anchors previous/current on the file cycle and shows honest amount gaps", () => {
+    const options = buildInvoicePaymentCycleTargetOptions(
+      billingConfig,
+      "2026-08-01",
+      {
+        fileCycle: {
+          closingDate: "2026-07-25",
+          dueDate: "2026-08-03",
+        },
+        importedCycles: [
+          {
+            id: "c1",
+            accountId: "card-1",
+            ownerUserId: "user-1",
+            familyId: null,
+            closingDate: "2026-07-25",
+            periodStart: "2026-06-26",
+            periodEnd: "2026-07-25",
+            dueDate: "2026-08-03",
+            amountDue: 3844.33,
+            source: "imported",
+            importBatchId: "b1",
+            notes: null,
+          },
+        ],
+      },
+    );
+
+    const previous = options.find((option) => option.target === "previous")!;
+    const current = options.find((option) => option.target === "current")!;
+
+    expect(previous).toMatchObject({
+      cycleId: "2026-07-25",
+      amountDue: 3844.33,
+      amountKnown: true,
+      recommended: true,
+    });
+    expect(previous.summaryLine).toMatch(/3\.844,33/);
+    expect(previous.summaryLine).toMatch(/03\/08\/2026|3 de ago/i);
+    expect(current.amountKnown).toBe(false);
+    expect(current.summaryLine).toMatch(/Valor ainda não importado/);
+  });
+
+  it("prefers real imported dues over card closing/due day fallback", () => {
+    // Card cadastro: fecha dia 25 / vence dia 3 — ciclos reais divergem.
+    const importedCycles = [
+      {
+        id: "prev",
+        accountId: "card-1",
+        ownerUserId: "user-1",
+        familyId: null,
+        closingDate: "2026-05-12",
+        periodStart: "2026-04-13",
+        periodEnd: "2026-05-12",
+        dueDate: "2026-05-19",
+        amountDue: 2100.5,
+        source: "imported" as const,
+        importBatchId: "b1",
+        notes: null,
+      },
+      {
+        id: "curr",
+        accountId: "card-1",
+        ownerUserId: "user-1",
+        familyId: null,
+        closingDate: "2026-06-10",
+        periodStart: "2026-05-13",
+        periodEnd: "2026-06-10",
+        dueDate: "2026-06-17",
+        amountDue: 3400,
+        source: "imported" as const,
+        importBatchId: "b2",
+        notes: null,
+      },
+      {
+        id: "fut",
+        accountId: "card-1",
+        ownerUserId: "user-1",
+        familyId: null,
+        closingDate: "2026-07-11",
+        periodStart: "2026-06-11",
+        periodEnd: "2026-07-11",
+        dueDate: "2026-07-18",
+        amountDue: null,
+        source: "imported" as const,
+        importBatchId: "b3",
+        notes: null,
+      },
+    ];
+
+    const paymentDate = "2026-05-20";
+    const context = { importedCycles };
+    const options = buildInvoicePaymentCycleTargetOptions(
+      billingConfig,
+      paymentDate,
+      context,
+    );
+    const future = buildInvoicePaymentFutureCycleOptions(
+      billingConfig,
+      paymentDate,
+      3,
+      context,
+    );
+
+    const previous = options.find((option) => option.target === "previous")!;
+    const current = options.find((option) => option.target === "current")!;
+
+    expect(previous).toMatchObject({
+      cycleId: "2026-05-12",
+      dueDate: "2026-05-19",
+      dueDateLabel: "19/05/2026",
+      amountDue: 2100.5,
+    });
+    expect(current).toMatchObject({
+      cycleId: "2026-06-10",
+      dueDate: "2026-06-17",
+      dueDateLabel: "17/06/2026",
+      amountDue: 3400,
+    });
+    expect(future[0]).toMatchObject({
+      cycleId: "2026-07-11",
+      dueDate: "2026-07-18",
+      dueDateLabel: "18/07/2026",
+    });
+
+    // Must not show card-derived dues (03/06, 03/07, …).
+    expect(previous.dueDateLabel).not.toMatch(/03\//);
+    expect(current.dueDateLabel).not.toMatch(/03\//);
+    expect(future[0]!.dueDateLabel).not.toMatch(/03\//);
+
+    const impact = getInvoicePaymentCycleTargetImpactMessage({
+      cycleTargetOptions: options,
+      cycleTargetSelection: { target: "previous" },
+      futureCycleOptions: future,
+    });
+    expect(impact).toEqual({
+      text: `Este crédito quita a fatura anterior com vencimento em ${previous.dueDateLabel}.`,
+      highlight: previous.dueDateLabel,
+    });
+
+    const currentImpact = getInvoicePaymentCycleTargetImpactMessage({
+      cycleTargetOptions: options,
+      cycleTargetSelection: { target: "current" },
+      futureCycleOptions: future,
+    });
+    expect(currentImpact?.highlight).toBe(current.dueDateLabel);
+  });
+
+  it("falls back to card-derived dues when no imported cycles exist", () => {
+    const options = buildInvoicePaymentCycleTargetOptions(
+      billingConfig,
+      "2026-06-26",
+      { importedCycles: [] },
+    );
+    const previous = options.find((option) => option.target === "previous")!;
+    const current = options.find((option) => option.target === "current")!;
+
+    expect(previous).toMatchObject({
+      cycleId: "2026-06-25",
+      dueDate: "2026-07-03",
+    });
+    expect(current).toMatchObject({
+      cycleId: "2026-07-25",
+      dueDate: "2026-08-03",
+    });
+  });
+
+  it("uses estimated future only after the last real imported cycle", () => {
+    const importedCycles = [
+      {
+        id: "a",
+        accountId: "card-1",
+        ownerUserId: "user-1",
+        familyId: null,
+        closingDate: "2026-05-12",
+        periodStart: "2026-04-13",
+        periodEnd: "2026-05-12",
+        dueDate: "2026-05-19",
+        amountDue: 100,
+        source: "imported" as const,
+        importBatchId: "b1",
+        notes: null,
+      },
+      {
+        id: "b",
+        accountId: "card-1",
+        ownerUserId: "user-1",
+        familyId: null,
+        closingDate: "2026-06-10",
+        periodStart: "2026-05-13",
+        periodEnd: "2026-06-10",
+        dueDate: "2026-06-17",
+        amountDue: 200,
+        source: "imported" as const,
+        importBatchId: "b2",
+        notes: null,
+      },
+    ];
+
+    const context = { importedCycles };
+    const options = buildInvoicePaymentCycleTargetOptions(
+      billingConfig,
+      "2026-05-20",
+      context,
+    );
+    const future = buildInvoicePaymentFutureCycleOptions(
+      billingConfig,
+      "2026-05-20",
+      2,
+      context,
+    );
+
+    expect(options.find((option) => option.target === "current")).toMatchObject({
+      cycleId: "2026-06-10",
+      dueDate: "2026-06-17",
+    });
+    // No third imported row → first future uses card closing/due day fallback.
+    expect(future[0]).toMatchObject({
+      cycleId: "2026-07-25",
+      dueDate: "2026-08-03",
+      dueDateLabel: "03/08/2026",
+    });
+  });
 });
 
 describe("getInvoicePaymentCycleTargetImpactMessage", () => {
@@ -87,6 +316,7 @@ describe("getInvoicePaymentCycleTargetImpactMessage", () => {
   );
 
   it("describes impact for previous statement", () => {
+    const previous = options.find((option) => option.target === "previous")!;
     expect(
       getInvoicePaymentCycleTargetImpactMessage({
         cycleTargetOptions: options,
@@ -94,12 +324,13 @@ describe("getInvoicePaymentCycleTargetImpactMessage", () => {
         futureCycleOptions: futureOptions,
       }),
     ).toEqual({
-      text: "Este crédito será aplicado à fatura 26/05–25/06.",
-      highlight: "26/05–25/06",
+      text: `Este crédito quita a fatura anterior com vencimento em ${previous.dueDateLabel}.`,
+      highlight: previous.dueDateLabel,
     });
   });
 
   it("describes impact for current statement as anticipation", () => {
+    const current = options.find((option) => option.target === "current")!;
     expect(
       getInvoicePaymentCycleTargetImpactMessage({
         cycleTargetOptions: options,
@@ -107,8 +338,8 @@ describe("getInvoicePaymentCycleTargetImpactMessage", () => {
         futureCycleOptions: futureOptions,
       }),
     ).toEqual({
-      text: "Este crédito será tratado como antecipação da fatura 26/06–25/07 (em aberto).",
-      highlight: "26/06–25/07",
+      text: `Este crédito antecipa/amortiza a fatura atual com vencimento em ${current.dueDateLabel}.`,
+      highlight: current.dueDateLabel,
     });
   });
 
@@ -125,8 +356,8 @@ describe("getInvoicePaymentCycleTargetImpactMessage", () => {
         futureCycleOptions: futureOptions,
       }),
     ).toEqual({
-      text: `Este crédito será aplicado à fatura futura ${selected.periodLabel}.`,
-      highlight: selected.periodLabel,
+      text: `Este crédito será aplicado à fatura futura com vencimento em ${selected.dueDateLabel}.`,
+      highlight: selected.dueDateLabel,
     });
   });
 
@@ -138,8 +369,8 @@ describe("getInvoicePaymentCycleTargetImpactMessage", () => {
         futureCycleOptions: futureOptions,
       }),
     ).toEqual({
-      text: `Este crédito será aplicado à fatura futura ${futureOptions[0]!.periodLabel}.`,
-      highlight: futureOptions[0]!.periodLabel,
+      text: `Este crédito será aplicado à fatura futura com vencimento em ${futureOptions[0]!.dueDateLabel}.`,
+      highlight: futureOptions[0]!.dueDateLabel,
     });
   });
 });
@@ -150,6 +381,62 @@ describe("invoice payment cycle target radio selection", () => {
     expect(parseInvoicePaymentCycleTargetValue("current")).toBe("current");
     expect(parseInvoicePaymentCycleTargetValue("future")).toBe("future");
     expect(parseInvoicePaymentCycleTargetValue("invalid")).toBeNull();
+  });
+
+  it("infers previous/current/future from a stored statement_cycle_id", () => {
+    const paymentDate = "2026-06-26";
+    const options = buildInvoicePaymentCycleTargetOptions(
+      billingConfig,
+      paymentDate,
+    );
+    const futureOptions = buildInvoicePaymentFutureCycleOptions(
+      billingConfig,
+      paymentDate,
+    );
+
+    expect(
+      inferInvoicePaymentCycleTargetSelection(
+        billingConfig,
+        paymentDate,
+        options.find((option) => option.target === "previous")!.cycleId,
+      ),
+    ).toMatchObject({
+      target: "previous",
+      targetDueDate: options.find((option) => option.target === "previous")!
+        .dueDate,
+    });
+
+    expect(
+      inferInvoicePaymentCycleTargetSelection(
+        billingConfig,
+        paymentDate,
+        options.find((option) => option.target === "current")!.cycleId,
+      ),
+    ).toMatchObject({
+      target: "current",
+      targetDueDate: options.find((option) => option.target === "current")!
+        .dueDate,
+    });
+
+    expect(
+      inferInvoicePaymentCycleTargetSelection(
+        billingConfig,
+        paymentDate,
+        futureOptions[0]!.cycleId,
+      ),
+    ).toMatchObject({
+      target: "future",
+      futureCycleId: futureOptions[0]!.cycleId,
+      targetDueDate: futureOptions[0]!.dueDate,
+    });
+
+    expect(
+      inferInvoicePaymentCycleTargetSelection(billingConfig, paymentDate, null),
+    ).toMatchObject({
+      target: "previous",
+      targetDueDate: options.find((option) => option.target === "previous")!
+        .dueDate,
+    });
   });
 
   it("marks only the active target as checked", () => {
@@ -247,8 +534,8 @@ describe("invoice payment cycle target radio selection", () => {
       transactions,
     });
 
-    expect(previousImpact?.text).toContain("26/05–25/06");
-    expect(currentImpact?.text).toContain("antecipação");
+    expect(previousImpact?.text).toContain("03/07/2026");
+    expect(currentImpact?.text).toMatch(/antecipa/);
     expect(previousEstimate?.target).toBe("previous");
     expect(currentEstimate?.target).toBe("current");
     expect(previousEstimate?.text).not.toBe(currentEstimate?.text);
@@ -322,6 +609,272 @@ describe("resolveInvoicePaymentCycleTarget", () => {
     });
 
     expect(cycle.cycleId).toBe("2026-09-25");
+  });
+
+  it("treats targetDueDate as the domain source of truth over suggestion buckets", () => {
+    const importedCycles = [
+      {
+        id: "may",
+        accountId: "card-1",
+        ownerUserId: "user-1",
+        familyId: null,
+        closingDate: "2026-04-25",
+        periodStart: "2026-03-26",
+        periodEnd: "2026-04-25",
+        dueDate: "2026-05-04",
+        amountDue: 3598.45,
+        source: "imported" as const,
+        importBatchId: "b1",
+        notes: null,
+      },
+      {
+        id: "jun",
+        accountId: "card-1",
+        ownerUserId: "user-1",
+        familyId: null,
+        closingDate: "2026-05-25",
+        periodStart: "2026-04-26",
+        periodEnd: "2026-05-25",
+        dueDate: "2026-06-01",
+        amountDue: 4100,
+        source: "imported" as const,
+        importBatchId: "b2",
+        notes: null,
+      },
+    ];
+    const context = {
+      fileCycle: {
+        closingDate: "2026-05-25",
+        dueDate: "2026-06-01",
+      },
+      importedCycles,
+    };
+
+    // File is the June bill (due 01/06), but payment settles May (due 04/05).
+    const cycle = resolveInvoicePaymentCycleTarget(
+      billingConfig,
+      "2026-05-10",
+      {
+        target: "current", // misleading suggestion bucket
+        targetDueDate: "2026-05-04",
+      },
+      context,
+    );
+
+    expect(cycle.cycleId).toBe("2026-04-25");
+    expect(cycle.dueDate).toBe("2026-05-04");
+
+    const settlement = getStatementSettlement({
+      accountId: CARD_ACCOUNT_ID,
+      config: billingConfig,
+      cycle,
+      referenceDate: "2026-05-10",
+      transactions: [
+        {
+          accountId: CARD_ACCOUNT_ID,
+          date: "2026-04-10",
+          type: "expense",
+          amount: 3598.45,
+        },
+        {
+          accountId: CARD_ACCOUNT_ID,
+          date: "2026-05-10",
+          type: "income",
+          amount: 3598.45,
+          statementCycleId: cycle.cycleId,
+          invoicePaymentOrigin: "imported",
+        },
+      ],
+    });
+
+    expect(settlement.status).toBe("paid");
+    expect(settlement.remainingTotal).toBe(0);
+  });
+});
+
+describe("due-date targeting (primary UX)", () => {
+  it("lists imported dues including older bills beyond previous/current", () => {
+    const importedCycles = [
+      {
+        id: "apr",
+        accountId: "card-1",
+        ownerUserId: "user-1",
+        familyId: null,
+        closingDate: "2026-03-25",
+        periodStart: "2026-02-26",
+        periodEnd: "2026-03-25",
+        dueDate: "2026-04-01",
+        amountDue: 100,
+        source: "imported" as const,
+        importBatchId: "b0",
+        notes: null,
+      },
+      {
+        id: "may",
+        accountId: "card-1",
+        ownerUserId: "user-1",
+        familyId: null,
+        closingDate: "2026-04-25",
+        periodStart: "2026-03-26",
+        periodEnd: "2026-04-25",
+        dueDate: "2026-05-04",
+        amountDue: 200,
+        source: "imported" as const,
+        importBatchId: "b1",
+        notes: null,
+      },
+      {
+        id: "jun",
+        accountId: "card-1",
+        ownerUserId: "user-1",
+        familyId: null,
+        closingDate: "2026-05-25",
+        periodStart: "2026-04-26",
+        periodEnd: "2026-05-25",
+        dueDate: "2026-06-01",
+        amountDue: 300,
+        source: "imported" as const,
+        importBatchId: "b2",
+        notes: null,
+      },
+    ];
+
+    const options = buildInvoicePaymentDueDateOptions(
+      billingConfig,
+      "2026-05-10",
+      {
+        fileCycle: { closingDate: "2026-05-25", dueDate: "2026-06-01" },
+        importedCycles,
+      },
+    );
+
+    expect(options.map((option) => option.dueDate)).toEqual(
+      expect.arrayContaining(["2026-04-01", "2026-05-04", "2026-06-01"]),
+    );
+
+    const picked = applyInvoicePaymentDueDateChange(
+      "2026-05-04",
+      billingConfig,
+      "2026-05-10",
+      {
+        fileCycle: { closingDate: "2026-05-25", dueDate: "2026-06-01" },
+        importedCycles,
+      },
+    );
+    expect(picked.targetDueDate).toBe("2026-05-04");
+    // Suggestion bucket depends on anchors (file cycle may make June "previous");
+    // due date remains the domain truth.
+    expect(
+      resolveInvoicePaymentCycleTarget(
+        billingConfig,
+        "2026-05-10",
+        picked,
+        {
+          fileCycle: { closingDate: "2026-05-25", dueDate: "2026-06-01" },
+          importedCycles,
+        },
+      ),
+    ).toMatchObject({
+      cycleId: "2026-04-25",
+      dueDate: "2026-05-04",
+    });
+  });
+
+  it("falls back to card-derived closing when due has no imported cycle", () => {
+    const cycle = resolveStatementCycleForDueDate(
+      billingConfig,
+      "2026-08-03",
+      { importedCycles: [] },
+    );
+    expect(cycle.dueDate).toBe("2026-08-03");
+    expect(cycle.cycleId).toBe("2026-07-25");
+  });
+
+  it("accepts a manual due date outside suggestion buckets without forcing atual/anterior", () => {
+    const context = {
+      importedCycles: [
+        {
+          id: "may",
+          accountId: "card-1",
+          ownerUserId: "user-1",
+          familyId: null,
+          closingDate: "2026-04-25",
+          periodStart: "2026-03-26",
+          periodEnd: "2026-04-25",
+          dueDate: "2026-05-04",
+          amountDue: 3598.45,
+          source: "imported" as const,
+          importBatchId: "b1",
+          notes: null,
+        },
+      ],
+    };
+
+    const selection = applyInvoicePaymentDueDateChange(
+      "2026-05-04",
+      billingConfig,
+      "2026-05-20",
+      context,
+    );
+    expect(selection.targetDueDate).toBe("2026-05-04");
+
+    const cycle = resolveInvoicePaymentCycleTarget(
+      billingConfig,
+      "2026-05-20",
+      selection,
+      context,
+    );
+    expect(cycle).toMatchObject({
+      cycleId: "2026-04-25",
+      dueDate: "2026-05-04",
+    });
+
+    // Custom date not matching synthetic bucket dues → no forced "atual".
+    const custom = applyInvoicePaymentDueDateChange(
+      "2026-05-03",
+      billingConfig,
+      "2026-05-20",
+      context,
+    );
+    expect(custom.targetDueDate).toBe("2026-05-03");
+    expect(
+      deriveInvoicePaymentSuggestionForDueDate(
+        "2026-05-03",
+        billingConfig,
+        "2026-05-20",
+        context,
+      ),
+    ).toBeNull();
+
+    const impact = getInvoicePaymentCycleTargetImpactMessage({
+      cycleTargetOptions: buildInvoicePaymentCycleTargetOptions(
+        billingConfig,
+        "2026-05-20",
+        context,
+      ),
+      cycleTargetSelection: custom,
+      futureCycleOptions: [],
+    });
+    expect(impact?.highlight).toBe("03/05/2026");
+    expect(impact?.text).toBe(
+      "Este crédito será aplicado à fatura com vencimento em 03/05/2026.",
+    );
+  });
+
+  it("suggestion chips only fill the due date field", () => {
+    const options = buildInvoicePaymentCycleTargetOptions(
+      billingConfig,
+      "2026-06-26",
+    );
+    const previous = options.find((option) => option.target === "previous")!;
+    const filled = applyInvoicePaymentCycleTargetChange(
+      { target: "current", targetDueDate: "2026-01-01" },
+      "previous",
+      previous.dueDate,
+      previous.cycleId,
+    );
+    expect(filled.targetDueDate).toBe(previous.dueDate);
+    expect(filled.target).toBe("previous");
   });
 });
 

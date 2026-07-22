@@ -15,8 +15,13 @@ export type Transaction = {
   date: string;
   notes?: string | null;
   createdAt: string;
-  /** Credit-card statement cycle id (closing date YYYY-MM-DD) for invoice payments. */
+  /** Credit-card statement cycle id (closing date YYYY-MM-DD) for invoice payments. Legacy linkage. */
   statementCycleId: string | null;
+  /**
+   * Preferred invoice linkage: due date YYYY-MM-DD chosen at import/retarget.
+   * When set, attribution matches `cycle.dueDate` before falling back to closing.
+   */
+  statementDueDate?: string | null;
   /** How an invoice payment was registered (`manual` UI vs CSV `imported`). */
   invoicePaymentOrigin?: "manual" | "imported" | null;
   /**
@@ -40,6 +45,7 @@ export type TransactionRow = {
   notes: string | null;
   created_at: string;
   statement_cycle_id?: string | null;
+  statement_due_date?: string | null;
   invoice_payment_origin?: "manual" | "imported" | null;
   reconciled_with_transaction_id?: string | null;
   categories?: {
@@ -70,6 +76,9 @@ export function mapTransaction(row: TransactionRow): Transaction {
     notes: row.notes,
     createdAt: row.created_at,
     statementCycleId: row.statement_cycle_id ?? null,
+    statementDueDate: row.statement_due_date
+      ? String(row.statement_due_date).slice(0, 10)
+      : null,
     invoicePaymentOrigin: row.invoice_payment_origin ?? null,
     reconciledWithTransactionId: row.reconciled_with_transaction_id ?? null,
   };

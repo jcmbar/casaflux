@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { AccountIdentityMark } from "@/components/finance/account-identity";
+import { InvoicePaymentCycleRetargetControl } from "@/components/finance/invoice-payment-cycle-retarget-control";
 import { FormSelect } from "@/components/forms/form-controls";
 import { PageIntro } from "@/components/layout/page-intro";
 import { Badge } from "@/components/ui/badge";
@@ -31,9 +32,13 @@ import {
   type StatementPaymentSourceLookup,
 } from "@/lib/finance/card-statement-history";
 import {
-  hasCreditCardBillingConfig,
+  getCreditCardBillingConfig,
   type StatementStatus,
 } from "@/lib/finance/credit-card-billing";
+import {
+  fetchCardStatementCyclesForAccount,
+  type CardStatementCycleRecord,
+} from "@/lib/finance/card-statement-cycles";
 import {
   filterAccountsByFinanceScope,
   getFinanceViewScope,
@@ -105,6 +110,9 @@ function FaturasViewContent() {
 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [importedCyclesByAccountId, setImportedCyclesByAccountId] = useState<
+    Record<string, CardStatementCycleRecord[]>
+  >({});
   const [sourcesByTransactionId, setSourcesByTransactionId] = useState<
     Map<string, StatementPaymentSourceLookup>
   >(() => new Map());
@@ -126,9 +134,7 @@ function FaturasViewContent() {
     () =>
       scope
         ? filterAccountsByFinanceScope(accounts, scope).filter(
-            (account) =>
-              account.type === "credit_card" &&
-              hasCreditCardBillingConfig(account),
+            (account) => account.type === "credit_card",
           )
         : [],
     [accounts, scope],
@@ -138,6 +144,10 @@ function FaturasViewContent() {
     creditCards.find((account) => account.id === accountIdFromUrl) ??
     creditCards[0] ??
     null;
+
+  const importedCycles = selectedCard
+    ? (importedCyclesByAccountId[selectedCard.id] ?? [])
+    : [];
 
   const loadData = useCallback(async () => {
     if (!scope) {
@@ -162,12 +172,12 @@ function FaturasViewContent() {
     setAccounts(nextAccounts);
 
     const scopedCards = filterAccountsByFinanceScope(nextAccounts, scope).filter(
-      (account) =>
-        account.type === "credit_card" && hasCreditCardBillingConfig(account),
+      (account) => account.type === "credit_card",
     );
 
     if (scopedCards.length === 0) {
       setTransactions([]);
+      setImportedCyclesByAccountId({});
       setSourcesByTransactionId(new Map());
       setLoading(false);
       return;
@@ -180,6 +190,7 @@ function FaturasViewContent() {
 
     if (!card) {
       setTransactions([]);
+      setImportedCyclesByAccountId({});
       setSourcesByTransactionId(new Map());
       setLoading(false);
       return;
@@ -206,6 +217,7 @@ function FaturasViewContent() {
     if (txResult.error) {
       console.error(txResult.error);
       setTransactions([]);
+      setImportedCyclesByAccountId({});
       setSourcesByTransactionId(new Map());
       setLoading(false);
       return;
@@ -213,6 +225,23 @@ function FaturasViewContent() {
 
     const mapped = txResult.data.map(mapTransaction);
     setTransactions(mapped);
+
+    const cyclesByAccount: Record<string, CardStatementCycleRecord[]> = {};
+    await Promise.all(
+      scopedCards.map(async (scopedCard) => {
+        const cyclesResult = await fetchCardStatementCyclesForAccount(
+          supabase,
+          scopedCard.id,
+        );
+        if (cyclesResult.errorMessage) {
+          console.error(cyclesResult.errorMessage);
+          cyclesByAccount[scopedCard.id] = [];
+          return;
+        }
+        cyclesByAccount[scopedCard.id] = cyclesResult.cycles;
+      }),
+    );
+    setImportedCyclesByAccountId(cyclesByAccount);
 
     const linkedIds = [
       ...new Set(
@@ -292,8 +321,9 @@ function FaturasViewContent() {
       cardAccount: selectedCard,
       transactions: selectedCardTransactions,
       referenceDate,
+      importedCycles,
     });
-  }, [referenceDate, selectedCard, selectedCardTransactions]);
+  }, [importedCycles, referenceDate, selectedCard, selectedCardTransactions]);
 
   const detail = useMemo(() => {
     if (!selectedCard || !cycleIdFromUrl) return null;
@@ -303,9 +333,11 @@ function FaturasViewContent() {
       transactions: selectedCardTransactions,
       referenceDate,
       sourcesByTransactionId,
+      importedCycles,
     });
   }, [
     cycleIdFromUrl,
+    importedCycles,
     referenceDate,
     selectedCard,
     selectedCardTransactions,
@@ -320,11 +352,12 @@ function FaturasViewContent() {
           transactions: transactions.filter(
             (transaction) => transaction.accountId === account.id,
           ),
+          importedCycles: importedCyclesByAccountId[account.id] ?? [],
         })),
         referenceDate,
         limit: 8,
       }),
-    [creditCards, referenceDate, transactions],
+    [creditCards, importedCyclesByAccountId, referenceDate, transactions],
   );
 
   const filteredHistory = useMemo(
@@ -387,7 +420,8 @@ function FaturasViewContent() {
           <div>
             <CardTitle className="text-base">Cartão</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">
-              Escolha o cartão com fechamento e vencimento configurados.
+              Escolha o cartão. Faturas importadas usam fechamento e vencimento
+              reais; dias fixos da conta são só fallback.
             </p>
           </div>
           {selectedCard ? (
@@ -411,8 +445,8 @@ function FaturasViewContent() {
               className="text-sm text-muted-foreground"
               data-testid="faturas-empty-cards"
             >
-              Nenhum cartão com ciclo configurado. Defina fechamento e vencimento
-              em Contas.
+              Nenhum cartão de crédito encontrado. Crie um em Contas e importe
+              uma fatura para começar.
             </p>
           ) : (
             <FormSelect
@@ -433,7 +467,16 @@ function FaturasViewContent() {
       </Card>
 
       {selectedCard && detail ? (
-        <StatementDetail detail={detail} onBack={closeDetail} />
+        <StatementDetail
+          detail={detail}
+          cardAccount={selectedCard}
+          cardTransactions={selectedCardTransactions}
+          importedCycles={importedCycles}
+          onBack={closeDetail}
+          onPaymentCycleUpdated={() => {
+            void loadData();
+          }}
+        />
       ) : null}
 
       {selectedCard && !detail ? (
@@ -556,6 +599,15 @@ function StatementList({
                           Atual
                         </Badge>
                       ) : null}
+                      {item.usesImportedCycle ? (
+                        <Badge
+                          variant="outline"
+                          className="border-sky-500/25 bg-sky-500/10 text-sky-900 dark:text-sky-100"
+                          data-testid={`fatura-imported-${item.cycle.cycleId}`}
+                        >
+                          Importada
+                        </Badge>
+                      ) : null}
                     </div>
                     <p className="text-xs text-muted-foreground">
                       Vence em {item.dueDateLabel}
@@ -600,11 +652,43 @@ function StatementList({
 
 function StatementDetail({
   detail,
+  cardAccount,
+  cardTransactions,
+  importedCycles = [],
   onBack,
+  onPaymentCycleUpdated,
 }: {
   detail: CardStatementHistoryDetail;
+  cardAccount: Account;
+  cardTransactions: Transaction[];
+  importedCycles?: CardStatementCycleRecord[];
   onBack: () => void;
+  onPaymentCycleUpdated: () => void;
 }) {
+  const [retargetPaymentId, setRetargetPaymentId] = useState<string | null>(
+    null,
+  );
+  const billingConfig = getCreditCardBillingConfig(cardAccount);
+
+  const settlementTransactions = useMemo(
+    () =>
+      cardTransactions
+        .filter((item) => item.type === "income" || item.type === "expense")
+        .map((item) => ({
+          id: item.id,
+          accountId: item.accountId,
+          date: item.date,
+          type: item.type as "income" | "expense",
+          amount: item.amount,
+          statementCycleId: item.statementCycleId,
+          statementDueDate: item.statementDueDate ?? null,
+          invoicePaymentOrigin: item.invoicePaymentOrigin ?? null,
+          reconciledWithTransactionId:
+            item.reconciledWithTransactionId ?? null,
+        })),
+    [cardTransactions],
+  );
+
   return (
     <div className="space-y-4" data-testid="fatura-detail">
       <div className="flex flex-wrap items-center gap-2">
@@ -631,13 +715,24 @@ function StatementDetail({
                 {detail.cardAccountName} · vence {detail.dueDateLabel}
               </p>
             </div>
-            <Badge
-              variant="outline"
-              className={STATUS_BADGE_CLASS[detail.status]}
-              data-testid="fatura-detail-status"
-            >
-              {detail.statusLabel}
-            </Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge
+                variant="outline"
+                className={STATUS_BADGE_CLASS[detail.status]}
+                data-testid="fatura-detail-status"
+              >
+                {detail.statusLabel}
+              </Badge>
+              {detail.usesImportedCycle ? (
+                <Badge
+                  variant="outline"
+                  className="border-sky-500/25 bg-sky-500/10 text-sky-900 dark:text-sky-100"
+                  data-testid="fatura-detail-imported"
+                >
+                  Ciclo importado
+                </Badge>
+              ) : null}
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -694,63 +789,113 @@ function StatementDetail({
               className="divide-y divide-border/60"
               data-testid="fatura-detail-payments"
             >
-              {detail.payments.map((payment) => (
-                <li
-                  key={payment.id}
-                  className="flex flex-col gap-2 py-3 sm:flex-row sm:items-start sm:justify-between"
-                  data-testid={`fatura-payment-${payment.id}`}
-                  data-display-status={payment.displayStatus}
-                >
-                  <div className="min-w-0 space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-medium tabular-nums">
-                        {formatCurrency(payment.amount)}
-                      </p>
-                      <Badge
-                        variant="outline"
-                        className={PAYMENT_STATUS_CLASS[payment.displayStatus]}
-                      >
-                        {
-                          STATEMENT_PAYMENT_DISPLAY_STATUS_LABELS[
-                            payment.displayStatus
-                          ]
-                        }
-                      </Badge>
-                      {payment.origin ? (
-                        <Badge
+              {detail.payments.map((payment) => {
+                const paymentTx = cardTransactions.find(
+                  (item) => item.id === payment.id,
+                );
+                const canRetarget = Boolean(billingConfig && paymentTx);
+
+                return (
+                  <li
+                    key={payment.id}
+                    className="flex flex-col gap-2 py-3"
+                    data-testid={`fatura-payment-${payment.id}`}
+                    data-display-status={payment.displayStatus}
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="min-w-0 space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-medium tabular-nums">
+                            {formatCurrency(payment.amount)}
+                          </p>
+                          <Badge
+                            variant="outline"
+                            className={
+                              PAYMENT_STATUS_CLASS[payment.displayStatus]
+                            }
+                          >
+                            {
+                              STATEMENT_PAYMENT_DISPLAY_STATUS_LABELS[
+                                payment.displayStatus
+                              ]
+                            }
+                          </Badge>
+                          {payment.origin ? (
+                            <Badge
+                              variant="outline"
+                              className="text-muted-foreground"
+                            >
+                              {payment.origin === "manual"
+                                ? "Origem manual"
+                                : "Origem importada"}
+                            </Badge>
+                          ) : null}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {formatDate(payment.date)}
+                          {payment.sourceAccountName
+                            ? ` · origem ${payment.sourceAccountName}`
+                            : ""}
+                        </p>
+                        {payment.displayStatus === "reconciled" &&
+                        payment.pairedOrigin ? (
+                          <p className="text-xs text-muted-foreground">
+                            Confirmado com o pagamento{" "}
+                            {payment.pairedOrigin === "manual"
+                              ? "manual"
+                              : "importado"}{" "}
+                            correspondente — ambos permanecem no histórico.
+                          </p>
+                        ) : null}
+                        {payment.notes ? (
+                          <p className="text-xs text-muted-foreground">
+                            Obs.: {payment.notes}
+                          </p>
+                        ) : null}
+                      </div>
+                      {canRetarget ? (
+                        <Button
+                          type="button"
+                          size="sm"
                           variant="outline"
-                          className="text-muted-foreground"
+                          onClick={() =>
+                            setRetargetPaymentId((current) =>
+                              current === payment.id ? null : payment.id,
+                            )
+                          }
+                          data-testid={`fatura-payment-retarget-toggle-${payment.id}`}
                         >
-                          {payment.origin === "manual"
-                            ? "Origem manual"
-                            : "Origem importada"}
-                        </Badge>
+                          {retargetPaymentId === payment.id
+                            ? "Fechar ajuste"
+                            : "Alterar fatura"}
+                        </Button>
                       ) : null}
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      {formatDate(payment.date)}
-                      {payment.sourceAccountName
-                        ? ` · origem ${payment.sourceAccountName}`
-                        : ""}
-                    </p>
-                    {payment.displayStatus === "reconciled" &&
-                    payment.pairedOrigin ? (
-                      <p className="text-xs text-muted-foreground">
-                        Confirmado com o pagamento{" "}
-                        {payment.pairedOrigin === "manual"
-                          ? "manual"
-                          : "importado"}{" "}
-                        correspondente — ambos permanecem no histórico.
-                      </p>
+
+                    {retargetPaymentId === payment.id &&
+                    billingConfig &&
+                    paymentTx ? (
+                      <InvoicePaymentCycleRetargetControl
+                        transactionId={paymentTx.id}
+                        paymentDate={paymentTx.date}
+                        currentStatementCycleId={paymentTx.statementCycleId}
+                        currentStatementDueDate={
+                          paymentTx.statementDueDate ?? null
+                        }
+                        creditAmount={Math.abs(paymentTx.amount)}
+                        billingConfig={billingConfig}
+                        cardAccountId={cardAccount.id}
+                        settlementTransactions={settlementTransactions}
+                        importedCycles={importedCycles}
+                        onUpdated={() => {
+                          setRetargetPaymentId(null);
+                          onPaymentCycleUpdated();
+                        }}
+                      />
                     ) : null}
-                    {payment.notes ? (
-                      <p className="text-xs text-muted-foreground">
-                        Obs.: {payment.notes}
-                      </p>
-                    ) : null}
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </CardContent>

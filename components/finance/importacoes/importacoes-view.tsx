@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useAppContext } from "@/contexts/app-context";
 import { ImportIntegrationSummaries } from "@/components/finance/importacoes/import-integration-summaries";
 import { ImportCsvOnboarding } from "@/components/finance/importacoes/import-csv-onboarding";
+import { ImportBatchRollbackButton } from "@/components/finance/importacoes/import-batch-rollback-button";
 import { getImportationsListIntro } from "@/lib/integrations/catalog/import-integrations";
 import {
   getImportationsEmptyMessage,
@@ -47,6 +48,27 @@ export function ImportacoesView() {
   const [items, setItems] = useState<ImportationListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  async function reload() {
+    if (!user) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    const result = await listImportations(supabase, {
+      ownerUserId: user.id,
+    });
+    if (result.error) {
+      setError(result.error);
+      setItems([]);
+    } else {
+      setItems(result.items);
+    }
+    setLoading(false);
+  }
 
   useEffect(() => {
     if (!user) {
@@ -144,18 +166,19 @@ export function ImportacoesView() {
               Histórico
             </h2>
             <p className="text-xs text-muted-foreground">
-              Arquivos já importados, do mais recente ao mais antigo.
+              Arquivos já importados, do mais recente ao mais antigo. Você pode
+              excluir um lote para corrigir e reimportar sem zerar a conta.
             </p>
           </div>
           <ul className="space-y-3">
             {items.map((item) => (
               <li key={item.id}>
-                <Link
-                  href={item.href}
-                  className="block rounded-xl border border-border/50 bg-card/40 p-4 transition-colors hover:border-border hover:bg-card/70"
+                <div
+                  className="rounded-xl border border-border/50 bg-card/40 p-4 transition-colors hover:border-border hover:bg-card/70"
+                  data-testid={`importacao-list-item-${item.id}`}
                 >
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="flex gap-3">
+                    <Link href={item.href} className="flex min-w-0 flex-1 gap-3">
                       <div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted/60 text-muted-foreground">
                         <FileSpreadsheet className="size-4" />
                       </div>
@@ -182,40 +205,53 @@ export function ImportacoesView() {
                           {formatImportedAt(item.importedAt)}
                         </p>
                       </div>
-                    </div>
+                    </Link>
 
-                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:text-right">
-                      <span className="text-muted-foreground">
-                        Linhas no arquivo
-                      </span>
-                      <span className="font-medium tabular-nums">
-                        {item.rowCount}
-                      </span>
-                      <span className="text-muted-foreground">
-                        Lançamentos criados
-                      </span>
-                      <span className="font-medium tabular-nums">
-                        {item.createdLaunchCount}
-                      </span>
-                      <span className="text-muted-foreground">
-                        Linhas ignoradas
-                      </span>
-                      <span className="font-medium tabular-nums">
-                        {item.ignoredItemCount}
-                      </span>
-                      {item.invoicePaymentCount > 0 ? (
-                        <>
-                          <span className="text-muted-foreground">
-                            Pagamentos de fatura
-                          </span>
-                          <span className="font-medium tabular-nums">
-                            {item.invoicePaymentCount}
-                          </span>
-                        </>
+                    <div className="flex flex-col items-stretch gap-3 sm:items-end">
+                      <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:text-right">
+                        <span className="text-muted-foreground">
+                          Linhas no arquivo
+                        </span>
+                        <span className="font-medium tabular-nums">
+                          {item.rowCount}
+                        </span>
+                        <span className="text-muted-foreground">
+                          Lançamentos criados
+                        </span>
+                        <span className="font-medium tabular-nums">
+                          {item.createdLaunchCount}
+                        </span>
+                        <span className="text-muted-foreground">
+                          Linhas ignoradas
+                        </span>
+                        <span className="font-medium tabular-nums">
+                          {item.ignoredItemCount}
+                        </span>
+                        {item.invoicePaymentCount > 0 ? (
+                          <>
+                            <span className="text-muted-foreground">
+                              Pagamentos de fatura
+                            </span>
+                            <span className="font-medium tabular-nums">
+                              {item.invoicePaymentCount}
+                            </span>
+                          </>
+                        ) : null}
+                      </div>
+                      {user ? (
+                        <ImportBatchRollbackButton
+                          batchId={item.id}
+                          ownerUserId={user.id}
+                          variant="outline"
+                          size="sm"
+                          onRolledBack={() => {
+                            void reload();
+                          }}
+                        />
                       ) : null}
                     </div>
                   </div>
-                </Link>
+                </div>
               </li>
             ))}
           </ul>

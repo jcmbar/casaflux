@@ -167,6 +167,11 @@ export function buildStatementComposition(input: {
     input.settlement?.amountDueTotal ??
     roundMoney(cyclePurchasesTotal + rolledInPurchasesTotal);
 
+  // When settlement intentionally omits virada (closed cycles in Faturas),
+  // keep the detail lines consistent with the totals shown.
+  const visibleRolledInLines =
+    rolledInPurchasesTotal > 0.005 ? rolledInLines : [];
+
   const hasRolledIn = rolledInPurchasesTotal > 0.005;
   const isCycleOnly = !hasRolledIn;
 
@@ -179,7 +184,7 @@ export function buildStatementComposition(input: {
     rolledInPurchasesTotal,
     amountDueTotal,
     cycleLines,
-    rolledInLines,
+    rolledInLines: visibleRolledInLines,
     hasRolledIn,
     isCycleOnly,
     equationSummary,
@@ -199,8 +204,21 @@ export function buildStatementCompositionForAccount(input: {
     "cyclePurchasesTotal" | "rolledInPurchasesTotal" | "amountDueTotal"
   >;
 }): StatementComposition | null {
-  const config = getCreditCardBillingConfig(input.cardAccount);
-  if (!config) {
+  const config =
+    getCreditCardBillingConfig(input.cardAccount) ??
+    ({
+      statementClosingDay: Number(input.cycle.closingDate.slice(8, 10)),
+      statementDueDay: Number(input.cycle.dueDate.slice(8, 10)),
+    } satisfies CreditCardBillingConfig);
+
+  if (
+    !Number.isInteger(config.statementClosingDay) ||
+    config.statementClosingDay < 1 ||
+    config.statementClosingDay > 31 ||
+    !Number.isInteger(config.statementDueDay) ||
+    config.statementDueDay < 1 ||
+    config.statementDueDay > 31
+  ) {
     return null;
   }
 

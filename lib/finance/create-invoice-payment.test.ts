@@ -347,6 +347,7 @@ describe("createCreditCardInvoicePayment RPC payload", () => {
     expect(result).toEqual({
       ok: true,
       statementCycleId: "2026-07-25",
+      statementDueDate: "2026-08-01",
       sourceTransactionId: "tx-source",
       cardTransactionId: "tx-card",
       origin: "manual",
@@ -358,6 +359,7 @@ describe("createCreditCardInvoicePayment RPC payload", () => {
       p_amount: 150.5,
       p_payment_date: "2026-08-01",
       p_statement_cycle_id: "2026-07-25",
+      p_statement_due_date: "2026-08-01",
       p_notes: "pago no app",
       p_origin: "manual",
     });

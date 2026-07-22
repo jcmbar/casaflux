@@ -15,7 +15,7 @@ export type CleanupFinanceBlock = (typeof CLEANUP_BLOCKS)[number];
 
 export const CLEANUP_ALL_CONFIRMATION_PHRASE = "APAGAR TUDO";
 
-/** Entities that transactional cleanup must never delete. */
+/** Entities that transactional cleanup / import rollback must never delete. */
 export const CLEANUP_PRESERVED_LEARNING_ENTITIES = [
   "categories",
   "user_hidden_categories",

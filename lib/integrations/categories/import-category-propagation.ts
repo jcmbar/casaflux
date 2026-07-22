@@ -269,7 +269,9 @@ export function applyCategoryPropagation(input: {
   const targetLines = new Set(similarRows.map((row) => row.sourceLine));
   nextRows = nextRows.map((row) =>
     targetLines.has(row.sourceLine)
-      ? applyConfirmedCategoryToRow(row, input.categoryId, input.catalog)
+      ? applyConfirmedCategoryToRow(row, input.categoryId, input.catalog, {
+          propagatedFromSourceLine: input.sourceLine,
+        })
       : row,
   );
 

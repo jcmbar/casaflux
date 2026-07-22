@@ -203,7 +203,7 @@ describe("impact + estimate integration (no regression)", () => {
       transactions: [],
     });
 
-    expect(impact?.text).toContain("antecipação");
+    expect(impact?.text).toMatch(/antecipa/);
     expect(estimate?.text).toBeTruthy();
     expect(impact?.text).not.toBe(estimate?.text);
   });

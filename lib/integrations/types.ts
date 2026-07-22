@@ -64,7 +64,9 @@ export type ImportCategorySuggestionConfidence = "high" | "medium" | "low";
 export type ImportCategorySuggestionSource =
   | "exact_match"
   | "normalized_merchant"
-  | "historical_frequency";
+  | "historical_frequency"
+  | "category_keyword"
+  | "propagated";
 
 export type ImportCategorySuggestion = {
   categoryId: string;
@@ -72,6 +74,10 @@ export type ImportCategorySuggestion = {
   confidence: ImportCategorySuggestionConfidence;
   source: ImportCategorySuggestionSource;
   basedOnCount: number;
+  /** Present when source is category_keyword. */
+  matchedKeyword?: string;
+  /** When set (or source is propagated), UI shows Propagado from this line. */
+  propagatedFromSourceLine?: number;
 };
 
 export type ImportCategoryStatus = "none" | "suggested" | "confirmed";

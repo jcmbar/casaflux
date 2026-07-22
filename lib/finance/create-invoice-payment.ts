@@ -34,6 +34,8 @@ export type CreateInvoicePaymentInput = {
    * Falls back to date-based resolution when omitted.
    */
   statementCycleId?: string | null;
+  /** Preferred invoice linkage: due date ISO of the fatura being paid. */
+  statementDueDate?: string | null;
   notes?: string | null;
   origin?: InvoicePaymentOrigin;
   /** Optional: validate eligibility against the selected account row. */
@@ -52,6 +54,7 @@ export type CreateInvoicePaymentResult =
   | {
       ok: true;
       statementCycleId: string | null;
+      statementDueDate: string | null;
       sourceTransactionId: string;
       cardTransactionId: string;
       origin: InvoicePaymentOrigin;
@@ -60,6 +63,7 @@ export type CreateInvoicePaymentResult =
 
 export type ResolvedInvoicePaymentTarget = {
   statementCycleId: string;
+  statementDueDate: string;
   cycle: StatementCycle;
 };
 
@@ -107,6 +111,7 @@ export function getInvoicePaymentValidationError(input: {
   cardAccountId: string;
   paymentDate: string;
   statementCycleId?: string | null;
+  statementDueDate?: string | null;
   hasBillingConfig: boolean;
   sourceAccount?: Pick<
     Account,
@@ -135,8 +140,8 @@ export function getInvoicePaymentValidationError(input: {
     return "Informe a data do pagamento.";
   }
 
-  if (!input.hasBillingConfig && !input.statementCycleId) {
-    return "Configure fechamento e vencimento do cartão para vincular a fatura.";
+  if (!input.hasBillingConfig && !input.statementCycleId && !input.statementDueDate) {
+    return "Importe uma fatura ou configure fechamento/vencimento do cartão para vincular o pagamento.";
   }
 
   if (input.sourceAccount && input.userId) {
@@ -153,7 +158,7 @@ export function getInvoicePaymentValidationError(input: {
 
 /**
  * Resolves which statement cycle a payment should settle.
- * Explicit `statementCycleId` (from the UI fatura) wins; otherwise derive from date.
+ * Explicit cycle/due from the UI fatura wins; otherwise derive from date.
  */
 export function resolveInvoicePaymentTarget(input: {
   cardAccount: Pick<
@@ -162,28 +167,54 @@ export function resolveInvoicePaymentTarget(input: {
   >;
   paymentDate: string;
   statementCycleId?: string | null;
+  statementDueDate?: string | null;
 }): ResolvedInvoicePaymentTarget | null {
   const config = getCreditCardBillingConfig(input.cardAccount);
-  if (!config) {
-    return null;
+  const explicitDue = input.statementDueDate?.slice(0, 10) ?? null;
+  const explicitClosing = input.statementCycleId?.slice(0, 10) ?? null;
+
+  if (explicitClosing) {
+    if (config) {
+      const cycle = buildStatementCycle({
+        closingDate: explicitClosing,
+        closingDay: config.statementClosingDay,
+        dueDay: config.statementDueDay,
+      });
+      return {
+        statementCycleId: cycle.cycleId,
+        statementDueDate: explicitDue ?? cycle.dueDate,
+        cycle: {
+          ...cycle,
+          dueDate: explicitDue ?? cycle.dueDate,
+        },
+      };
+    }
+
+    if (explicitDue) {
+      return {
+        statementCycleId: explicitClosing,
+        statementDueDate: explicitDue,
+        cycle: {
+          cycleId: explicitClosing,
+          closingDate: explicitClosing,
+          periodStart: explicitClosing,
+          periodEnd: explicitClosing,
+          dueDate: explicitDue,
+          source: "manual",
+        },
+      };
+    }
   }
 
-  if (input.statementCycleId) {
-    const cycle = buildStatementCycle({
-      closingDate: input.statementCycleId.slice(0, 10),
-      closingDay: config.statementClosingDay,
-      dueDay: config.statementDueDay,
-    });
-    return {
-      statementCycleId: cycle.cycleId,
-      cycle,
-    };
+  if (!config) {
+    return null;
   }
 
   const cycle = getStatementCyclePaidByPaymentDate(config, input.paymentDate);
   return {
     statementCycleId: cycle.cycleId,
-    cycle,
+    statementDueDate: explicitDue ?? cycle.dueDate,
+    cycle: explicitDue ? { ...cycle, dueDate: explicitDue } : cycle,
   };
 }
 
@@ -223,6 +254,7 @@ function mapInvoicePaymentRpcError(message: string | undefined): string {
   if (
     raw.includes("invoice_payment_origin") ||
     raw.includes("statement_cycle_id") ||
+    raw.includes("statement_due_date") ||
     raw.includes("schema cache")
   ) {
     return "O banco ainda não está pronto para pagamentos de fatura. Aplique as migrations mais recentes.";
@@ -246,6 +278,7 @@ export async function createCreditCardInvoicePayment(
     cardAccountId: input.cardAccount.id,
     paymentDate: input.paymentDate,
     statementCycleId: input.statementCycleId,
+    statementDueDate: input.statementDueDate,
     hasBillingConfig: Boolean(config),
     sourceAccount: input.sourceAccount,
     userId: input.userId,
@@ -260,8 +293,10 @@ export async function createCreditCardInvoicePayment(
     cardAccount: input.cardAccount,
     paymentDate: input.paymentDate,
     statementCycleId: input.statementCycleId,
+    statementDueDate: input.statementDueDate,
   });
   const statementCycleId = target?.statementCycleId ?? null;
+  const statementDueDate = target?.statementDueDate ?? null;
   const notes = input.notes?.trim() ? input.notes.trim() : null;
 
   const { data, error } = await supabase.rpc(
@@ -272,6 +307,7 @@ export async function createCreditCardInvoicePayment(
       p_amount: input.amount,
       p_payment_date: input.paymentDate,
       p_statement_cycle_id: statementCycleId,
+      p_statement_due_date: statementDueDate,
       p_notes: notes,
       p_origin: origin,
     },
@@ -301,6 +337,10 @@ export async function createCreditCardInvoicePayment(
       typeof row.statementCycleId === "string" && row.statementCycleId
         ? row.statementCycleId
         : statementCycleId,
+    statementDueDate:
+      typeof row.statementDueDate === "string" && row.statementDueDate
+        ? String(row.statementDueDate).slice(0, 10)
+        : statementDueDate,
     sourceTransactionId,
     cardTransactionId,
     origin,

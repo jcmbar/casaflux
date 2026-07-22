@@ -15,6 +15,8 @@ export type CategorySuggestionCatalogItem = {
   id: string;
   name: string;
   type: TransactionType;
+  /** User-authored recognition keywords (already normalized). */
+  keywords?: string[];
 };
 
 export type CategoryHistoryTransaction = {
@@ -48,16 +50,20 @@ export function buildCategoryHistoryIndex(
 
     categoryNamesById.set(transaction.categoryId, transaction.categoryName);
 
-    const normalizedDescription = normalizeImportDescription(transaction.description);
+    const normalizedDescription = normalizeImportDescription(
+      transaction.description,
+    );
     const normalizedMerchant = normalizeMerchant(transaction.description);
 
     const exactCounts =
-      exactByDescription.get(normalizedDescription) ?? new Map<string, number>();
+      exactByDescription.get(normalizedDescription) ??
+      new Map<string, number>();
     incrementCount(exactCounts, transaction.categoryId);
     exactByDescription.set(normalizedDescription, exactCounts);
 
     if (normalizedMerchant) {
-      const merchantCounts = byMerchant.get(normalizedMerchant) ?? new Map<string, number>();
+      const merchantCounts =
+        byMerchant.get(normalizedMerchant) ?? new Map<string, number>();
       incrementCount(merchantCounts, transaction.categoryId);
       byMerchant.set(normalizedMerchant, merchantCounts);
     }
@@ -77,6 +83,7 @@ function buildSuggestion(
   basedOnCount: number,
   totalCount: number,
   distinctCategories: number,
+  matchedKeyword?: string,
 ): ImportCategorySuggestion | null {
   const ratio = totalCount > 0 ? basedOnCount / totalCount : 0;
   const confidence = resolveSuggestionConfidence({
@@ -97,6 +104,7 @@ function buildSuggestion(
     confidence,
     source,
     basedOnCount,
+    matchedKeyword,
   };
 }
 
@@ -106,11 +114,12 @@ function isValidCategoryForType(
   categories: CategorySuggestionCatalogItem[],
 ): boolean {
   return categories.some(
-    (category) => category.id === categoryId && category.type === transactionType,
+    (category) =>
+      category.id === categoryId && category.type === transactionType,
   );
 }
 
-export function suggestCategoryForDescription(input: {
+function resolveHistorySuggestion(input: {
   description: string;
   transactionType: TransactionType;
   index: CategoryHistoryIndex;
@@ -118,16 +127,23 @@ export function suggestCategoryForDescription(input: {
 }): ImportCategorySuggestion | null {
   const normalized = normalizeImportText(input.description);
 
-  const exactCounts = input.index.exactByDescription.get(normalized.normalizedDescription);
+  const exactCounts = input.index.exactByDescription.get(
+    normalized.normalizedDescription,
+  );
   if (exactCounts && exactCounts.size > 0) {
     const dominant = getDominantCategory(exactCounts);
     if (
       dominant &&
-      isValidCategoryForType(dominant.categoryId, input.transactionType, input.categories)
+      isValidCategoryForType(
+        dominant.categoryId,
+        input.transactionType,
+        input.categories,
+      )
     ) {
       const categoryName =
         input.index.categoryNamesById.get(dominant.categoryId) ??
-        input.categories.find((category) => category.id === dominant.categoryId)?.name ??
+        input.categories.find((category) => category.id === dominant.categoryId)
+          ?.name ??
         "";
 
       return buildSuggestion(
@@ -145,7 +161,9 @@ export function suggestCategoryForDescription(input: {
     return null;
   }
 
-  const merchantCounts = input.index.byMerchant.get(normalized.normalizedMerchant);
+  const merchantCounts = input.index.byMerchant.get(
+    normalized.normalizedMerchant,
+  );
   if (!merchantCounts || merchantCounts.size === 0) {
     return null;
   }
@@ -153,14 +171,19 @@ export function suggestCategoryForDescription(input: {
   const dominant = getDominantCategory(merchantCounts);
   if (
     !dominant ||
-    !isValidCategoryForType(dominant.categoryId, input.transactionType, input.categories)
+    !isValidCategoryForType(
+      dominant.categoryId,
+      input.transactionType,
+      input.categories,
+    )
   ) {
     return null;
   }
 
   const categoryName =
     input.index.categoryNamesById.get(dominant.categoryId) ??
-    input.categories.find((category) => category.id === dominant.categoryId)?.name ??
+    input.categories.find((category) => category.id === dominant.categoryId)
+      ?.name ??
     "";
 
   const source: ImportCategorySuggestion["source"] =
@@ -176,7 +199,113 @@ export function suggestCategoryForDescription(input: {
   );
 }
 
-export function resolveImportRowTransactionType(row: ImportPreviewRow): TransactionType {
+type KeywordHit = {
+  categoryId: string;
+  categoryName: string;
+  keyword: string;
+  onMerchant: boolean;
+};
+
+/**
+ * Match user keywords against normalized description/merchant.
+ * Longer keywords win; merchant hits beat description-only.
+ */
+export function suggestCategoryFromKeywords(input: {
+  description: string;
+  transactionType: TransactionType;
+  categories: CategorySuggestionCatalogItem[];
+}): ImportCategorySuggestion | null {
+  const normalized = normalizeImportText(input.description);
+  const description = normalized.normalizedDescription;
+  const merchant = normalized.normalizedMerchant;
+  const hits: KeywordHit[] = [];
+
+  for (const category of input.categories) {
+    if (category.type !== input.transactionType) {
+      continue;
+    }
+    const keywords = category.keywords ?? [];
+    for (const keyword of keywords) {
+      if (!keyword) {
+        continue;
+      }
+      const onMerchant = Boolean(merchant && merchant.includes(keyword));
+      const onDescription = description.includes(keyword);
+      if (!onMerchant && !onDescription) {
+        continue;
+      }
+      hits.push({
+        categoryId: category.id,
+        categoryName: category.name,
+        keyword,
+        onMerchant,
+      });
+    }
+  }
+
+  if (hits.length === 0) {
+    return null;
+  }
+
+  hits.sort((left, right) => {
+    if (left.keyword.length !== right.keyword.length) {
+      return right.keyword.length - left.keyword.length;
+    }
+    if (left.onMerchant !== right.onMerchant) {
+      return left.onMerchant ? -1 : 1;
+    }
+    return left.keyword.localeCompare(right.keyword);
+  });
+
+  const best = hits[0]!;
+  const distinctCategories = new Set(hits.map((hit) => hit.categoryId)).size;
+
+  return buildSuggestion(
+    best.categoryId,
+    best.categoryName,
+    "category_keyword",
+    // dominantCount carries keyword length for confidence thresholds.
+    best.keyword.length,
+    best.keyword.length,
+    distinctCategories,
+    best.keyword,
+  );
+}
+
+function isStrongHistorySuggestion(
+  suggestion: ImportCategorySuggestion | null,
+): boolean {
+  return suggestion?.confidence === "high";
+}
+
+/**
+ * Priority:
+ * 1. Strong historical memory (exact / high-frequency)
+ * 2. User category keywords
+ * 3. Weaker historical fallback (normalized merchant / low confidence)
+ */
+export function suggestCategoryForDescription(input: {
+  description: string;
+  transactionType: TransactionType;
+  index: CategoryHistoryIndex;
+  categories: CategorySuggestionCatalogItem[];
+}): ImportCategorySuggestion | null {
+  const history = resolveHistorySuggestion(input);
+  if (isStrongHistorySuggestion(history)) {
+    return history;
+  }
+
+  const keyword = suggestCategoryFromKeywords(input);
+  if (keyword) {
+    return keyword;
+  }
+
+  return history;
+}
+
+export function resolveImportRowTransactionType(
+  row: ImportPreviewRow,
+): TransactionType {
   if (row.kind === "bank_income") {
     return "income";
   }

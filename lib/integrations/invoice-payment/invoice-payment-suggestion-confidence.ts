@@ -1,10 +1,13 @@
 import {
   compareIsoDates,
-  getStatementCyclePaidByPaymentDate,
   getStatementSettlement,
   type CreditCardBillingConfig,
   type StatementSettlementTransaction,
 } from "@/lib/finance/credit-card-billing";
+import {
+  resolveInvoicePaymentCycleAnchors,
+  type InvoicePaymentCycleResolveContext,
+} from "./invoice-payment-cycle-target";
 import {
   amountsMatchForInvoiceReconcile,
   getInvoicePaymentDateDiffDays,
@@ -44,14 +47,16 @@ export function classifyImportedInvoicePaymentSuggestionConfidence(input: {
   creditAmount: number;
   transactions: StatementSettlementTransaction[];
   referenceDate?: string;
+  context?: InvoicePaymentCycleResolveContext | null;
 }): InvoicePaymentSuggestionConfidenceResult | null {
   if (!(input.creditAmount > 0)) {
     return null;
   }
 
-  const cycle = getStatementCyclePaidByPaymentDate(
+  const { previous: cycle } = resolveInvoicePaymentCycleAnchors(
     input.billingConfig,
     input.paymentDate,
+    input.context,
   );
   const referenceDate = input.referenceDate ?? input.paymentDate;
 

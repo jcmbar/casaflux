@@ -9,6 +9,7 @@ import { formatCurrency } from "@/lib/format";
 import type { ImportPreviewRow } from "../types";
 import type {
   InvoicePaymentCycleTargetSelection,
+  InvoicePaymentCycleResolveContext,
 } from "./invoice-payment-cycle-target";
 import { resolveInvoicePaymentCycleTarget } from "./invoice-payment-cycle-target";
 
@@ -17,6 +18,8 @@ const MONEY_EPSILON = 0.005;
 export type InvoicePaymentCycleTargetEstimatedEffect = {
   text: string;
   remainingAfterCredit: number;
+  /** Remaining on the target bill before applying this credit. */
+  remainingBeforeCredit: number;
   amountDueTotal: number;
   target: InvoicePaymentCycleTargetSelection["target"];
 };
@@ -56,6 +59,7 @@ export function getInvoicePaymentCycleTargetEstimatedEffect(input: {
   cycleTargetSelection: InvoicePaymentCycleTargetSelection;
   transactions: StatementSettlementTransaction[];
   referenceDate?: string;
+  context?: InvoicePaymentCycleResolveContext | null;
 }): InvoicePaymentCycleTargetEstimatedEffect | null {
   if (!(input.creditAmount > 0)) {
     return null;
@@ -65,9 +69,18 @@ export function getInvoicePaymentCycleTargetEstimatedEffect(input: {
     input.billingConfig,
     input.paymentDate,
     input.cycleTargetSelection,
+    input.context,
   );
   const referenceDate = input.referenceDate ?? input.paymentDate;
   const target = input.cycleTargetSelection.target;
+
+  const beforeCredit = getStatementSettlement({
+    accountId: input.cardAccountId,
+    config: input.billingConfig,
+    cycle,
+    transactions: input.transactions,
+    referenceDate,
+  });
 
   const withCredit = getStatementSettlement({
     accountId: input.cardAccountId,
@@ -87,6 +100,7 @@ export function getInvoicePaymentCycleTargetEstimatedEffect(input: {
     referenceDate,
   });
 
+  const remainingBeforeCredit = beforeCredit.remainingTotal;
   const remainingAfterCredit = withCredit.remainingTotal;
   const amountDueTotal = withCredit.amountDueTotal;
   const isPaidOff = remainingAfterCredit <= MONEY_EPSILON;
@@ -96,6 +110,7 @@ export function getInvoicePaymentCycleTargetEstimatedEffect(input: {
       return {
         target,
         remainingAfterCredit: 0,
+        remainingBeforeCredit,
         amountDueTotal,
         text: "A fatura em aberto ficará quitada com este crédito.",
       };
@@ -105,6 +120,7 @@ export function getInvoicePaymentCycleTargetEstimatedEffect(input: {
       return {
         target,
         remainingAfterCredit: 0,
+        remainingBeforeCredit,
         amountDueTotal,
         text: "A fatura futura escolhida ficará quitada com este crédito.",
       };
@@ -113,6 +129,7 @@ export function getInvoicePaymentCycleTargetEstimatedEffect(input: {
     return {
       target,
       remainingAfterCredit: 0,
+      remainingBeforeCredit,
       amountDueTotal,
       text: "Esta fatura ficará quitada com este crédito.",
     };
@@ -124,6 +141,7 @@ export function getInvoicePaymentCycleTargetEstimatedEffect(input: {
     return {
       target,
       remainingAfterCredit,
+      remainingBeforeCredit,
       amountDueTotal,
       text: `Saldo restante da fatura em aberto após este crédito: ${formattedRemaining}.`,
     };
@@ -133,6 +151,7 @@ export function getInvoicePaymentCycleTargetEstimatedEffect(input: {
     return {
       target,
       remainingAfterCredit,
+      remainingBeforeCredit,
       amountDueTotal,
       text: `Saldo restante estimado na fatura futura após este crédito: ${formattedRemaining}.`,
     };
@@ -141,6 +160,7 @@ export function getInvoicePaymentCycleTargetEstimatedEffect(input: {
   return {
     target,
     remainingAfterCredit,
+    remainingBeforeCredit,
     amountDueTotal,
     text: `Saldo restante após este crédito: ${formattedRemaining}.`,
   };
@@ -150,6 +170,7 @@ export function getInvoicePaymentCycleTargetEstimatedEffect(input: {
 export function getInvoicePaymentEstimateTransactionWindow(input: {
   billingConfig: CreditCardBillingConfig;
   paymentDates: string[];
+  context?: InvoicePaymentCycleResolveContext | null;
 }): { dateFrom: string; dateTo: string } {
   if (input.paymentDates.length === 0) {
     const today = new Date().toISOString().slice(0, 10);
@@ -164,16 +185,19 @@ export function getInvoicePaymentEstimateTransactionWindow(input: {
       input.billingConfig,
       paymentDate,
       { target: "previous" },
+      input.context,
     );
     const current = resolveInvoicePaymentCycleTarget(
       input.billingConfig,
       paymentDate,
       { target: "current" },
+      input.context,
     );
     const future = resolveInvoicePaymentCycleTarget(
       input.billingConfig,
       paymentDate,
       { target: "future" },
+      input.context,
     );
 
     for (const cycle of [previous, current, future]) {

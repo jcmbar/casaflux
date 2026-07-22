@@ -15,6 +15,14 @@ import {
   type StatementSettlement,
   type StatementStatus,
 } from "@/lib/finance/credit-card-billing";
+import type { CardStatementCycleRecord } from "@/lib/finance/card-statement-cycles";
+import {
+  cardStatementCycleRecordToStatementCycle,
+  collapseDerivedCyclesWithImportedDue,
+  inferCreditCardBillingConfigFromInvoices,
+  mergeStatementCyclesWithImported,
+  pruneRedundantImportedStatementCycles,
+} from "@/lib/finance/card-statement-cycles";
 import { INVOICE_PAYMENT_CARD_DESCRIPTION } from "@/lib/finance/lancamentos-filters";
 import {
   buildStatementCompositionForAccount,
@@ -61,6 +69,8 @@ export type CardStatementHistoryItem = {
   status: StatementStatus;
   statusLabel: string;
   isCurrent: boolean;
+  /** True when dates/amount come from an imported or manual cycle record. */
+  usesImportedCycle: boolean;
 };
 
 export type CardStatementHistoryDetail = CardStatementHistoryItem & {
@@ -81,6 +91,7 @@ export type StatementHistoryTransaction = Pick<
   | "notes"
   | "linkedTransactionId"
   | "statementCycleId"
+  | "statementDueDate"
   | "invoicePaymentOrigin"
   | "reconciledWithTransactionId"
 >;
@@ -91,18 +102,113 @@ export type StatementPaymentSourceLookup = {
   notes?: string | null;
 };
 
+function collectPaymentLinkedSignals(
+  transactions: StatementHistoryTransaction[],
+  cardAccountId: string,
+): {
+  cycleIdsWithPayments: Set<string>;
+  dueDatesWithPayments: Set<string>;
+} {
+  const cycleIdsWithPayments = new Set<string>();
+  const dueDatesWithPayments = new Set<string>();
+  for (const transaction of transactions) {
+    if (
+      transaction.accountId !== cardAccountId ||
+      transaction.type !== "income"
+    ) {
+      continue;
+    }
+    if (transaction.statementCycleId) {
+      cycleIdsWithPayments.add(transaction.statementCycleId.slice(0, 10));
+    }
+    if (transaction.statementDueDate) {
+      dueDatesWithPayments.add(transaction.statementDueDate.slice(0, 10));
+    }
+  }
+  return { cycleIdsWithPayments, dueDatesWithPayments };
+}
+
+function isReferenceInsideCyclePeriod(
+  referenceDate: string,
+  cycle: StatementCycle,
+): boolean {
+  return (
+    compareIsoDates(referenceDate, cycle.periodStart) >= 0 &&
+    compareIsoDates(referenceDate, cycle.periodEnd) <= 0
+  );
+}
+
 /**
- * Discovers statement cycles for a card from activity + current open cycle.
- * Newest closing date first.
+ * Discovers invoices for a card.
+ *
+ * P0 product rule:
+ * - When persisted imported/manual invoices exist, list those (after due-date
+ *   prune) and at most one derived "open bill" fallback when the account has
+ *   fixed-day config and the current accumulating period is not already
+ *   covered by a persisted invoice.
+ * - When nothing is persisted, fall back to activity-derived cycles from the
+ *   card's optional closing/due day config.
  */
 export function discoverCardStatementCycles(input: {
-  config: CreditCardBillingConfig;
+  config: CreditCardBillingConfig | null;
+  /**
+   * When true (account has statement_*_day), may append one derived open bill.
+   * Inferred-only config must not invent synthetic invoices.
+   */
+  allowDerivedOpenFallback?: boolean;
   transactions: StatementHistoryTransaction[];
   cardAccountId: string;
   referenceDate: string;
+  /** Persisted imported/manual cycles override synthetic dates when present. */
+  importedCycles?: CardStatementCycleRecord[];
 }): StatementCycle[] {
-  const cycleIds = new Set<string>();
+  const importedCycles = input.importedCycles ?? [];
+  const { cycleIdsWithPayments, dueDatesWithPayments } =
+    collectPaymentLinkedSignals(input.transactions, input.cardAccountId);
 
+  if (importedCycles.length > 0) {
+    const persisted = pruneRedundantImportedStatementCycles({
+      cycles: importedCycles.map(cardStatementCycleRecordToStatementCycle),
+      cycleIdsWithPayments,
+      dueDatesWithPayments,
+    });
+
+    if (!input.config || !input.allowDerivedOpenFallback) {
+      return persisted.sort((left, right) =>
+        compareIsoDates(right.closingDate, left.closingDate),
+      );
+    }
+
+    const current = getCurrentStatementCycle(
+      input.config,
+      input.referenceDate,
+    );
+    const coversCurrent = persisted.some(
+      (cycle) =>
+        cycle.cycleId === current.cycleId ||
+        cycle.dueDate.slice(0, 10) === current.dueDate.slice(0, 10) ||
+        isReferenceInsideCyclePeriod(input.referenceDate, cycle),
+    );
+
+    if (coversCurrent) {
+      return persisted.sort((left, right) =>
+        compareIsoDates(right.closingDate, left.closingDate),
+      );
+    }
+
+    return collapseDerivedCyclesWithImportedDue([
+      { ...current, source: "derived" as const },
+      ...persisted,
+    ]).sort((left, right) =>
+      compareIsoDates(right.closingDate, left.closingDate),
+    );
+  }
+
+  if (!input.config) {
+    return [];
+  }
+
+  const cycleIds = new Set<string>();
   const current = getCurrentStatementCycle(input.config, input.referenceDate);
   cycleIds.add(current.cycleId);
 
@@ -125,15 +231,36 @@ export function discoverCardStatementCycles(input: {
     }
   }
 
-  return [...cycleIds]
+  const derived = [...cycleIds]
     .sort((left, right) => compareIsoDates(right, left))
     .map((cycleId) =>
       buildStatementCycle({
         closingDate: cycleId,
-        closingDay: input.config.statementClosingDay,
-        dueDay: input.config.statementDueDay,
+        closingDay: input.config!.statementClosingDay,
+        dueDay: input.config!.statementDueDay,
       }),
     );
+
+  return mergeStatementCyclesWithImported({
+    derivedCycles: derived,
+    importedCycles: [],
+  });
+}
+
+/**
+ * Resolves billing config from account days, or infers from persisted invoices.
+ */
+export function resolveCardStatementBillingConfig(input: {
+  cardAccount: Pick<
+    Account,
+    "type" | "statement_closing_day" | "statement_due_day"
+  >;
+  importedCycles?: CardStatementCycleRecord[];
+}): CreditCardBillingConfig | null {
+  return (
+    getCreditCardBillingConfig(input.cardAccount) ??
+    inferCreditCardBillingConfigFromInvoices(input.importedCycles ?? [])
+  );
 }
 
 export function extractInvoicePaymentNotes(
@@ -299,31 +426,56 @@ export function buildCardStatementHistory(input: {
   >;
   transactions: StatementHistoryTransaction[];
   referenceDate: string;
+  importedCycles?: CardStatementCycleRecord[];
 }): CardStatementHistoryItem[] | null {
-  const config = getCreditCardBillingConfig(input.cardAccount);
-  if (!config) {
+  const importedCycles = input.importedCycles ?? [];
+  const accountConfig = getCreditCardBillingConfig(input.cardAccount);
+  const config = resolveCardStatementBillingConfig({
+    cardAccount: input.cardAccount,
+    importedCycles,
+  });
+
+  if (!config && importedCycles.length === 0) {
     return null;
   }
 
   const cycles = discoverCardStatementCycles({
     config,
+    allowDerivedOpenFallback: accountConfig != null,
     transactions: input.transactions,
     cardAccountId: input.cardAccount.id,
     referenceDate: input.referenceDate,
+    importedCycles,
   });
 
-  const currentId = getCurrentStatementCycle(
-    config,
-    input.referenceDate,
-  ).cycleId;
+  if (cycles.length === 0) {
+    return [];
+  }
+
+  const currentId = accountConfig
+    ? getCurrentStatementCycle(accountConfig, input.referenceDate).cycleId
+    : null;
 
   return cycles.map((cycle) => {
+    const isCurrent =
+      currentId != null
+        ? cycle.cycleId === currentId
+        : isReferenceInsideCyclePeriod(input.referenceDate, cycle);
+
+    // Settlement helpers need a config; prefer account days, else inferred.
+    const settlementConfig = config!;
     const settlement = getStatementSettlement({
       accountId: input.cardAccount.id,
-      config,
+      config: settlementConfig,
       cycle,
       transactions: input.transactions,
       referenceDate: input.referenceDate,
+      // Virada: open derived bill, or any imported/manual bill (issuer window).
+      // When issuerAmountDue is set it still wins for A pagar.
+      includeRolledInPurchases:
+        isCurrent ||
+        cycle.source === "imported" ||
+        cycle.source === "manual",
     });
 
     return {
@@ -333,7 +485,9 @@ export function buildCardStatementHistory(input: {
       settlement,
       status: settlement.status,
       statusLabel: STATEMENT_STATUS_LABELS[settlement.status],
-      isCurrent: cycle.cycleId === currentId,
+      isCurrent,
+      usesImportedCycle:
+        cycle.source === "imported" || cycle.source === "manual",
     };
   });
 }
@@ -347,11 +501,13 @@ export function buildCardStatementHistoryDetail(input: {
   transactions: StatementHistoryTransaction[];
   referenceDate: string;
   sourcesByTransactionId?: Map<string, StatementPaymentSourceLookup>;
+  importedCycles?: CardStatementCycleRecord[];
 }): CardStatementHistoryDetail | null {
   const history = buildCardStatementHistory({
     cardAccount: input.cardAccount,
     transactions: input.transactions,
     referenceDate: input.referenceDate,
+    importedCycles: input.importedCycles,
   });
 
   if (!history) {
@@ -363,22 +519,47 @@ export function buildCardStatementHistoryDetail(input: {
     null;
 
   if (!item) {
-    const config = getCreditCardBillingConfig(input.cardAccount);
+    const config = resolveCardStatementBillingConfig({
+      cardAccount: input.cardAccount,
+      importedCycles: input.importedCycles,
+    });
     if (!config) {
       return null;
     }
 
-    const cycle = buildStatementCycle({
-      closingDate: input.cycleId.slice(0, 10),
-      closingDay: config.statementClosingDay,
-      dueDay: config.statementDueDay,
-    });
+    const imported = (input.importedCycles ?? []).find(
+      (cycle) => cycle.closingDate === input.cycleId.slice(0, 10),
+    );
+    const cycle = imported
+      ? {
+          cycleId: imported.closingDate,
+          periodStart: imported.periodStart,
+          periodEnd: imported.periodEnd,
+          closingDate: imported.closingDate,
+          dueDate: imported.dueDate,
+          source: imported.source,
+          issuerAmountDue: imported.amountDue,
+        }
+      : buildStatementCycle({
+          closingDate: input.cycleId.slice(0, 10),
+          closingDay: config.statementClosingDay,
+          dueDay: config.statementDueDay,
+        });
+    const accountConfig = getCreditCardBillingConfig(input.cardAccount);
+    const isCurrent = accountConfig
+      ? getCurrentStatementCycle(accountConfig, input.referenceDate).cycleId ===
+        cycle.cycleId
+      : isReferenceInsideCyclePeriod(input.referenceDate, cycle);
     const settlement = getStatementSettlement({
       accountId: input.cardAccount.id,
       config,
       cycle,
       transactions: input.transactions,
       referenceDate: input.referenceDate,
+      includeRolledInPurchases:
+        isCurrent ||
+        cycle.source === "imported" ||
+        cycle.source === "manual",
     });
 
     return {
@@ -388,9 +569,9 @@ export function buildCardStatementHistoryDetail(input: {
       settlement,
       status: settlement.status,
       statusLabel: STATEMENT_STATUS_LABELS[settlement.status],
-      isCurrent:
-        getCurrentStatementCycle(config, input.referenceDate).cycleId ===
-        cycle.cycleId,
+      isCurrent,
+      usesImportedCycle:
+        cycle.source === "imported" || cycle.source === "manual",
       cardAccountId: input.cardAccount.id,
       cardAccountName: input.cardAccount.name,
       payments: listStatementCyclePayments({
@@ -410,7 +591,10 @@ export function buildCardStatementHistoryDetail(input: {
     };
   }
 
-  const config = getCreditCardBillingConfig(input.cardAccount)!;
+  const config = resolveCardStatementBillingConfig({
+    cardAccount: input.cardAccount,
+    importedCycles: input.importedCycles,
+  })!;
 
   return {
     ...item,

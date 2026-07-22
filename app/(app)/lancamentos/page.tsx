@@ -26,6 +26,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { AccountIdentityMark } from "@/components/finance/account-identity";
 import { CreditCardStatementSummary } from "@/components/finance/credit-card-statement-summary";
+import { InvoicePaymentCycleRetargetControl } from "@/components/finance/invoice-payment-cycle-retarget-control";
 import { PayInvoiceSheet } from "@/components/finance/pay-invoice-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -144,10 +145,14 @@ import {
 import { sumByType } from "@/lib/finance/dashboard-stats";
 import { formatAccountSelectLabel } from "@/lib/finance/account-identity";
 import {
+  getCreditCardBillingConfig,
   getTransactionStatementRelation,
   hasCreditCardBillingConfig,
   STATEMENT_CYCLE_RELATION_LABELS,
 } from "@/lib/finance/credit-card-billing";
+import {
+  isInvoicePaymentCycleEditableRow,
+} from "@/lib/finance/update-invoice-payment-cycle";
 import {
   filterLancamentosTransactions,
   resolveCardStatementPeriodContext,
@@ -1225,6 +1230,79 @@ function LancamentosPageContent() {
   const isEditing = editingId !== null;
   const isEditingRecurrence = editingRecurrenceId !== null;
   const openedFromQuery = useRef(false);
+
+  const editingInvoicePaymentRetarget = useMemo(() => {
+    if (!editingId) {
+      return null;
+    }
+
+    const transaction = transactions.find((item) => item.id === editingId);
+    if (!transaction) {
+      return null;
+    }
+
+    const account = accounts.find((item) => item.id === transaction.accountId);
+    if (
+      !isInvoicePaymentCycleEditableRow(
+        {
+          description: transaction.description,
+          invoice_payment_origin: transaction.invoicePaymentOrigin ?? null,
+          type: transaction.type,
+        },
+        account?.type ?? null,
+      )
+    ) {
+      return null;
+    }
+
+    const twin = transaction.linkedTransactionId
+      ? transactions.find((item) => item.id === transaction.linkedTransactionId)
+      : null;
+
+    const cardAccount =
+      accounts.find(
+        (item) =>
+          item.type === "credit_card" &&
+          (item.id === transaction.accountId || item.id === twin?.accountId),
+      ) ??
+      (account?.type === "credit_card" ? account : null);
+
+    if (!cardAccount) {
+      return null;
+    }
+
+    const billingConfig = getCreditCardBillingConfig(cardAccount);
+    if (!billingConfig) {
+      return null;
+    }
+
+    return {
+      transactionId: transaction.id,
+      paymentDate: transaction.date,
+      currentStatementCycleId: transaction.statementCycleId,
+      currentStatementDueDate: transaction.statementDueDate ?? null,
+      creditAmount: Math.abs(transaction.amount),
+      billingConfig,
+      cardAccountId: cardAccount.id,
+      settlementTransactions: transactions
+        .filter((item) => item.accountId === cardAccount.id)
+        .map((item) => ({
+          id: item.id,
+          accountId: item.accountId,
+          date: item.date,
+          type: item.type as "income" | "expense",
+          amount: item.amount,
+          statementCycleId: item.statementCycleId,
+          statementDueDate: item.statementDueDate ?? null,
+          invoicePaymentOrigin: item.invoicePaymentOrigin ?? null,
+          reconciledWithTransactionId:
+            item.reconciledWithTransactionId ?? null,
+        }))
+        .filter(
+          (item) => item.type === "income" || item.type === "expense",
+        ),
+    };
+  }, [accounts, editingId, transactions]);
 
   const normalizedCategories = useMemo(
     () =>
@@ -2936,6 +3014,28 @@ function LancamentosPageContent() {
                   </FormSelect>
                 </div>
               )}
+
+              {isEditing && editingInvoicePaymentRetarget ? (
+                <InvoicePaymentCycleRetargetControl
+                  transactionId={editingInvoicePaymentRetarget.transactionId}
+                  paymentDate={editingInvoicePaymentRetarget.paymentDate}
+                  currentStatementCycleId={
+                    editingInvoicePaymentRetarget.currentStatementCycleId
+                  }
+                  currentStatementDueDate={
+                    editingInvoicePaymentRetarget.currentStatementDueDate
+                  }
+                  creditAmount={editingInvoicePaymentRetarget.creditAmount}
+                  billingConfig={editingInvoicePaymentRetarget.billingConfig}
+                  cardAccountId={editingInvoicePaymentRetarget.cardAccountId}
+                  settlementTransactions={
+                    editingInvoicePaymentRetarget.settlementTransactions
+                  }
+                  onUpdated={() => {
+                    void loadData();
+                  }}
+                />
+              ) : null}
 
               {form.type !== "transfer" && (!isEditing || isEditingRecurrence) ? (
                 <div className="space-y-4 rounded-xl border border-border/50 bg-muted/20 p-4">

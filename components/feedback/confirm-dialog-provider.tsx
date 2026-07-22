@@ -65,7 +65,9 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
           <DialogHeader>
             <DialogTitle>{request?.title}</DialogTitle>
             {request?.description ? (
-              <DialogDescription>{request.description}</DialogDescription>
+              <DialogDescription className="whitespace-pre-line">
+                {request.description}
+              </DialogDescription>
             ) : null}
           </DialogHeader>
 

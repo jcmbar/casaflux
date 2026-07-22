@@ -4,6 +4,7 @@ import {
   STATEMENT_STATUS_LABELS,
   type StatementStatus,
 } from "@/lib/finance/credit-card-billing";
+import type { CardStatementCycleRecord } from "@/lib/finance/card-statement-cycles";
 import {
   buildCardStatementHistory,
   buildFaturasHref,
@@ -38,6 +39,7 @@ export type UpcomingStatementDueCardInput = {
     "id" | "name" | "type" | "statement_closing_day" | "statement_due_day"
   >;
   transactions: StatementHistoryTransaction[];
+  importedCycles?: CardStatementCycleRecord[];
 };
 
 /**
@@ -96,7 +98,11 @@ export function buildUpcomingStatementDues(input: {
   const items: UpcomingStatementDueItem[] = [];
 
   for (const card of input.cards) {
-    if (!hasCreditCardBillingConfig(card.account)) {
+    const importedCycles = card.importedCycles ?? [];
+    if (
+      !hasCreditCardBillingConfig(card.account) &&
+      importedCycles.length === 0
+    ) {
       continue;
     }
 
@@ -104,6 +110,7 @@ export function buildUpcomingStatementDues(input: {
       cardAccount: card.account,
       transactions: card.transactions,
       referenceDate: input.referenceDate,
+      importedCycles,
     });
 
     if (!history) {

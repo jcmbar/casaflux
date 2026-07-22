@@ -4,7 +4,8 @@ import { getConfirmedCategoryForCommit } from "../categories/category-suggestion
 import type { CreditCardBillingConfig } from "@/lib/finance/credit-card-billing";
 import {
   getInvoicePaymentCycleTargetSelection,
-  resolveImportedInvoicePaymentCycleId,
+  resolveInvoicePaymentCycleTarget,
+  type InvoicePaymentCycleResolveContext,
   type InvoicePaymentCycleTargetSelection,
 } from "../invoice-payment/invoice-payment-cycle-target";
 import {
@@ -19,8 +20,10 @@ export type CommitImportTransactionDraft = {
   description: string;
   transactionDate: string;
   categoryId?: string | null;
-  /** Closing-date ISO for credit-card invoice payment legs. */
+  /** Closing-date ISO for credit-card invoice payment legs (legacy). */
   statementCycleId?: string | null;
+  /** Preferred invoice linkage: due date ISO chosen at import/retarget. */
+  statementDueDate?: string | null;
   /** Tags invoice payment legs for future manual↔imported reconciliation. */
   invoicePaymentOrigin?: "manual" | "imported" | null;
 };
@@ -55,6 +58,7 @@ export function mapImportRowToTransactions(
     number,
     InvoicePaymentCycleTargetSelection
   > = {},
+  cycleContext?: InvoicePaymentCycleResolveContext | null,
 ): CommitImportTransactionDraft[] {
   const base = {
     amount: row.amount,
@@ -77,16 +81,19 @@ export function mapImportRowToTransactions(
       throw new Error("Conta de origem obrigatória para pagamento de fatura.");
     }
 
-    const statementCycleId = billingConfig
-      ? resolveImportedInvoicePaymentCycleId({
+    const resolved = billingConfig
+      ? resolveInvoicePaymentCycleTarget(
           billingConfig,
-          paymentDate: row.date,
-          selection: getInvoicePaymentCycleTargetSelection(
+          row.date,
+          getInvoicePaymentCycleTargetSelection(
             invoicePaymentCycleTargets,
             row.sourceLine,
           ),
-        })
+          cycleContext,
+        )
       : null;
+    const statementCycleId = resolved?.cycleId ?? null;
+    const statementDueDate = resolved?.dueDate?.slice(0, 10) ?? null;
 
     return [
       {
@@ -95,6 +102,7 @@ export function mapImportRowToTransactions(
         type: "expense",
         description: `Pagamento fatura (origem) — ${row.description}`,
         statementCycleId,
+        statementDueDate,
         invoicePaymentOrigin: "imported",
       },
       {
@@ -103,6 +111,7 @@ export function mapImportRowToTransactions(
         type: "income",
         description: row.description,
         statementCycleId,
+        statementDueDate,
         invoicePaymentOrigin: "imported",
       },
     ];
@@ -184,6 +193,10 @@ export function getCommitImportValidationError(input: {
   contentHash: string;
   source: string | null;
   invoicePaymentModes?: Record<number, InvoicePaymentImportMode>;
+  statementFileCycle?: {
+    closingDate: string;
+    dueDate: string;
+  } | null;
 }): string | null {
   if (!input.source) {
     return "Fonte de importação inválida.";
@@ -195,6 +208,20 @@ export function getCommitImportValidationError(input: {
 
   if (!input.contentHash) {
     return "Hash do arquivo ausente.";
+  }
+
+  if (input.source === "nubank_credit_card") {
+    const closingDate = input.statementFileCycle?.closingDate?.slice(0, 10) ?? "";
+    const dueDate = input.statementFileCycle?.dueDate?.slice(0, 10) ?? "";
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(closingDate) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)
+    ) {
+      return "Informe a data de fechamento e a data de vencimento da fatura deste arquivo.";
+    }
+    if (closingDate > dueDate) {
+      return "A data de fechamento deve ser anterior ou igual à data de vencimento.";
+    }
   }
 
   const modes = input.invoicePaymentModes ?? {};
@@ -272,6 +299,7 @@ export function buildCommitImportRowPayload(
     number,
     InvoicePaymentCycleTargetSelection
   > = {},
+  cycleContext?: InvoicePaymentCycleResolveContext | null,
 ): CommitImportRowPayload {
   const invoiceSourceAccountId = invoiceSourceAccounts[row.sourceLine];
   const invoicePaymentMode = getInvoicePaymentImportMode(
@@ -287,6 +315,7 @@ export function buildCommitImportRowPayload(
       billingConfig,
       invoicePaymentMode,
       invoicePaymentCycleTargets,
+      cycleContext,
     ),
     invoicePaymentMode,
   );
@@ -327,6 +356,7 @@ export function toRpcCommitRowPayload(row: CommitImportRowPayload) {
       transaction_date: transaction.transactionDate,
       category_id: transaction.categoryId ?? null,
       statement_cycle_id: transaction.statementCycleId ?? null,
+      statement_due_date: transaction.statementDueDate ?? null,
       invoice_payment_origin: transaction.invoicePaymentOrigin ?? null,
     })),
   };

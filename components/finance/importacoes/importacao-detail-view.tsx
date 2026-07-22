@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAppContext } from "@/contexts/app-context";
+import { ImportBatchRollbackButton } from "@/components/finance/importacoes/import-batch-rollback-button";
 import {
   fetchImportationDetail,
   type ImportationDetail,
@@ -139,17 +140,27 @@ export function ImportacaoDetailView() {
               {detail.statusLabel}
             </Badge>
           </div>
-          <PageIntro description="Veja o que esta importação gerou, o que foi ignorado e importe novamente com o mesmo contexto quando precisar." />
+          <PageIntro description="Veja o que esta importação gerou, o que foi ignorado e, se precisar, exclua o lote para reimportar o arquivo sem zerar a conta." />
         </div>
 
-        <Link
-          href={detail.reimportHref}
-          className={cn(buttonVariants(), "shrink-0 gap-2 self-start")}
-          data-testid="importacao-reimportar"
-        >
-          <RefreshCw className="size-4" />
-          Importar novamente
-        </Link>
+        <div className="flex flex-wrap gap-2 self-start">
+          <Link
+            href={detail.reimportHref}
+            className={cn(buttonVariants(), "gap-2")}
+            data-testid="importacao-reimportar"
+          >
+            <RefreshCw className="size-4" />
+            Importar novamente
+          </Link>
+          {user ? (
+            <ImportBatchRollbackButton
+              batchId={detail.id}
+              ownerUserId={user.id}
+              variant="destructive"
+              redirectToList
+            />
+          ) : null}
+        </div>
       </div>
 
       <section className="space-y-3" aria-labelledby="importacao-resumo">
@@ -217,6 +228,14 @@ export function ImportacaoDetailView() {
           <RefreshCw className="size-4" />
           Importar novamente
         </Link>
+        {user ? (
+          <ImportBatchRollbackButton
+            batchId={detail.id}
+            ownerUserId={user.id}
+            variant="outline"
+            redirectToList
+          />
+        ) : null}
         <Link
           href="/importacoes"
           className={cn(buttonVariants({ variant: "outline" }), "gap-2")}

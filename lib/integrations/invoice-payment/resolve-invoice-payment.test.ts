@@ -127,6 +127,10 @@ describe("invoice payment commit + statement settlement", () => {
         familyId: null,
         fileName: "card.csv",
         contentHash: hashImportContent("x"),
+        statementFileCycle: {
+          closingDate: "2026-06-25",
+          dueDate: "2026-07-03",
+        },
       }),
     ).toMatch(/origem/i);
   });

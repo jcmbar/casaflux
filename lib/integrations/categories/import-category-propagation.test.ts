@@ -222,6 +222,14 @@ describe("applyCategoryPropagation", () => {
 
     expect(result.propagatedLines).toEqual([2]);
     expect(result.offer).toBeNull();
+
+    const propagated = result.rows.find((row) => row.sourceLine === 2);
+    expect(propagated?.categorySuggestion?.source).toBe("propagated");
+    expect(propagated?.categorySuggestion?.propagatedFromSourceLine).toBe(1);
+
+    const source = result.rows.find((row) => row.sourceLine === 1);
+    expect(source?.categorySuggestion?.source).not.toBe("propagated");
+    expect(source?.categorySuggestion?.propagatedFromSourceLine).toBeUndefined();
   });
 
   it("only highlights similar lines in manual mode", () => {

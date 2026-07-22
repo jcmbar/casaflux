@@ -18,6 +18,7 @@ import { normalizeImportText } from "./normalize-merchant";
 
 export function mapCategoriesToSuggestionCatalog(
   categories: Array<Pick<Category, "id" | "name" | "type">>,
+  keywordsByCategoryId?: ReadonlyMap<string, string[]>,
 ): CategorySuggestionCatalogItem[] {
   return categories
     .filter((category) => category.type === "income" || category.type === "expense")
@@ -25,6 +26,7 @@ export function mapCategoriesToSuggestionCatalog(
       id: category.id,
       name: category.name,
       type: category.type as TransactionType,
+      keywords: keywordsByCategoryId?.get(category.id) ?? [],
     }));
 }
 
@@ -78,6 +80,10 @@ export function applyConfirmedCategoryToRow(
   row: ImportPreviewRow,
   categoryId: string | null,
   categories: CategorySuggestionCatalogItem[],
+  options?: {
+    /** Mark this confirmation as propagated from another reviewed line. */
+    propagatedFromSourceLine?: number;
+  },
 ): ImportPreviewRow {
   if (!categoryId) {
     return {
@@ -92,6 +98,18 @@ export function applyConfirmedCategoryToRow(
     return row;
   }
 
+  const propagatedFromSourceLine = options?.propagatedFromSourceLine;
+  const isPropagated =
+    propagatedFromSourceLine != null &&
+    propagatedFromSourceLine !== row.sourceLine;
+
+  const previousSource = row.categorySuggestion?.source;
+  const source = isPropagated
+    ? "propagated"
+    : previousSource === "propagated"
+      ? "exact_match"
+      : (previousSource ?? "exact_match");
+
   return {
     ...row,
     categoryStatus: "confirmed",
@@ -100,8 +118,15 @@ export function applyConfirmedCategoryToRow(
       categoryId: category.id,
       categoryName: category.name,
       confidence: row.categorySuggestion?.confidence ?? "medium",
-      source: row.categorySuggestion?.source ?? "exact_match",
+      source,
       basedOnCount: row.categorySuggestion?.basedOnCount ?? 1,
+      matchedKeyword:
+        !isPropagated && source === "category_keyword"
+          ? row.categorySuggestion?.matchedKeyword
+          : undefined,
+      propagatedFromSourceLine: isPropagated
+        ? propagatedFromSourceLine
+        : undefined,
     },
   };
 }

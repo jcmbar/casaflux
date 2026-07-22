@@ -1,4 +1,8 @@
-import { normalizeIsoDate, parseCsvContent } from "./normalize";
+import {
+  detectCsvDelimiter,
+  normalizeIsoDate,
+  parseCsvContent,
+} from "./normalize";
 import {
   identifyImportFile,
   type IdentifiedImportFile,
@@ -24,6 +28,15 @@ export type ImportFileConfirmation = {
   signals: ImportFileConfirmationSignal[];
 };
 
+export type ImportFileTransactionDateRange = {
+  /** Inclusive min transaction date (`YYYY-MM-DD`). */
+  from: string;
+  /** Inclusive max transaction date (`YYYY-MM-DD`). */
+  to: string;
+};
+
+const DATE_HEADER_NAMES = new Set(["date", "data"]);
+
 function formatPeriodDate(iso: string): string {
   const [year, month, day] = iso.split("-");
   if (!year || !month || !day) return iso;
@@ -39,14 +52,27 @@ function tryNormalizeDate(raw: string): string | null {
   }
 }
 
-function buildSignals(
-  source: ImportSource,
+function resolveDateColumnIndex(header: string[]): number {
+  const normalized = header.map((column) => column.trim().toLowerCase());
+  const byName = normalized.findIndex((column) => DATE_HEADER_NAMES.has(column));
+  return byName >= 0 ? byName : 0;
+}
+
+/**
+ * Real file date span from CSV line dates only (min/max).
+ * Never derives statement-cycle bounds (closing/due / periodStart+1).
+ */
+export function getImportFileTransactionDateRange(
   content: string,
-): ImportFileConfirmationSignal[] {
-  const layout = getImportLayoutBySource(source);
-  const rows = parseCsvContent(content);
-  const dataRows = rows.length > 1 ? rows.slice(1) : [];
-  const dateColumnIndex = 0;
+): ImportFileTransactionDateRange | null {
+  const delimiter = detectCsvDelimiter(content);
+  const rows = parseCsvContent(content, delimiter);
+  if (rows.length <= 1) {
+    return null;
+  }
+
+  const [header, ...dataRows] = rows;
+  const dateColumnIndex = resolveDateColumnIndex(header ?? []);
 
   const dates: string[] = [];
   for (const row of dataRows) {
@@ -56,7 +82,37 @@ function buildSignals(
     if (iso) dates.push(iso);
   }
 
+  if (dates.length === 0) {
+    return null;
+  }
+
   dates.sort();
+  return {
+    from: dates[0]!,
+    to: dates[dates.length - 1]!,
+  };
+}
+
+/** Preview PERÍODO label from the real file date range (not invoice cycle). */
+export function formatImportFilePeriodLabel(
+  range: ImportFileTransactionDateRange,
+): string {
+  if (range.from === range.to) {
+    return formatPeriodDate(range.from);
+  }
+
+  return `${formatPeriodDate(range.from)} a ${formatPeriodDate(range.to)}`;
+}
+
+function buildSignals(
+  source: ImportSource,
+  content: string,
+): ImportFileConfirmationSignal[] {
+  const layout = getImportLayoutBySource(source);
+  const delimiter = detectCsvDelimiter(content);
+  const rows = parseCsvContent(content, delimiter);
+  const dataRows = rows.length > 1 ? rows.slice(1) : [];
+  const dateRange = getImportFileTransactionDateRange(content);
 
   const signals: ImportFileConfirmationSignal[] = [
     {
@@ -72,15 +128,10 @@ function buildSignals(
     },
   ];
 
-  if (dates.length > 0) {
-    const from = dates[0];
-    const to = dates[dates.length - 1];
+  if (dateRange) {
     signals.push({
       label: "Período",
-      value:
-        from === to
-          ? formatPeriodDate(from)
-          : `${formatPeriodDate(from)} a ${formatPeriodDate(to)}`,
+      value: formatImportFilePeriodLabel(dateRange),
     });
   }
 

@@ -2,13 +2,16 @@ import {
   formatFullBrDate,
   formatStatementPeriodLabel,
   getCreditCardBillingConfig,
-  getStatementCyclePaidByPaymentDate,
   type CreditCardBillingConfig,
   type StatementCycle,
 } from "@/lib/finance/credit-card-billing";
 import type { Account } from "@/types/account";
 import type { ImportDirection, ImportPreviewRow } from "../types";
 import { isNubankInvoicePayment } from "../sources/nubank/payment-detector";
+import {
+  resolveInvoicePaymentCycleAnchors,
+  type InvoicePaymentCycleResolveContext,
+} from "./invoice-payment-cycle-target";
 
 export type InvoicePaymentImportMode = "payment" | "common";
 
@@ -49,14 +52,16 @@ export function isCreditCardInvoicePaymentCandidate(input: {
 export function resolveImportedInvoicePayment(input: {
   paymentDate: string;
   billingConfig: CreditCardBillingConfig | null;
+  context?: InvoicePaymentCycleResolveContext | null;
 }): ImportedInvoicePaymentResolution | null {
   if (!input.billingConfig) {
     return null;
   }
 
-  const cycle = getStatementCyclePaidByPaymentDate(
+  const { previous: cycle } = resolveInvoicePaymentCycleAnchors(
     input.billingConfig,
     input.paymentDate,
+    input.context,
   );
 
   return {
@@ -75,6 +80,7 @@ export function resolveImportedInvoicePaymentForAccount(input: {
     Account,
     "type" | "statement_closing_day" | "statement_due_day"
   > | null;
+  context?: InvoicePaymentCycleResolveContext | null;
 }): ImportedInvoicePaymentResolution | null {
   if (!input.cardAccount) {
     return null;
@@ -83,6 +89,7 @@ export function resolveImportedInvoicePaymentForAccount(input: {
   return resolveImportedInvoicePayment({
     paymentDate: input.paymentDate,
     billingConfig: getCreditCardBillingConfig(input.cardAccount),
+    context: input.context,
   });
 }
 

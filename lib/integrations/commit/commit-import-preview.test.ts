@@ -69,12 +69,14 @@ describe("mapImportRowToTransactions", () => {
       type: "expense",
       amount: 3598.45,
       statementCycleId: "2026-06-20",
+      statementDueDate: "2026-06-27",
     });
     expect(transactions[1]).toMatchObject({
       accountId: CARD_ACCOUNT_ID,
       type: "income",
       amount: 3598.45,
       statementCycleId: "2026-06-20",
+      statementDueDate: "2026-06-27",
     });
   });
 
@@ -175,6 +177,10 @@ describe("commitImportPreview selection", () => {
       familyId: null,
       fileName: "partial.csv",
       contentHash: hashImportContent(content),
+      statementFileCycle: {
+        closingDate: "2026-07-25",
+        dueDate: "2026-08-01",
+      },
     });
     expect(validationError).toBe("Todas as linhas deste arquivo já haviam sido importadas.");
   });
@@ -239,6 +245,10 @@ describe("commitImportPreview selection", () => {
       familyId: null,
       fileName: "partial.csv",
       contentHash: hashImportContent(content),
+      statementFileCycle: {
+        closingDate: "2026-07-25",
+        dueDate: "2026-08-01",
+      },
     });
     expect(validationError).toBeNull();
   });
@@ -267,7 +277,7 @@ describe("commitImportPreview selection", () => {
     expect(payload[0]?.identity_key).toContain("store");
   });
 
-  it("includes statement_cycle_id on invoice payment RPC payload when card is configured", () => {
+  it("includes statement_cycle_id and statement_due_date on invoice payment RPC payload", () => {
     const preview = buildImportPreview({
       content: [
         "date,title,amount",
@@ -300,12 +310,14 @@ describe("commitImportPreview selection", () => {
           account_id: SOURCE_CHECKING_ID,
           type: "expense",
           statement_cycle_id: "2026-07-20",
+          statement_due_date: "2026-07-27",
           invoice_payment_origin: "imported",
         }),
         expect.objectContaining({
           account_id: CARD_ACCOUNT_ID,
           type: "income",
           statement_cycle_id: "2026-07-20",
+          statement_due_date: "2026-07-27",
           invoice_payment_origin: "imported",
         }),
       ]),

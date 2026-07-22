@@ -60,6 +60,28 @@ export function resolveSuggestionConfidence(input: {
     return "high";
   }
 
+  if (input.source === "category_keyword") {
+    if (input.distinctCategories > 1) {
+      return "low";
+    }
+    // Long unique keywords can auto-confirm in automatic mode.
+    if (input.dominantCount >= 6) {
+      return "high";
+    }
+    if (input.dominantCount >= 3) {
+      return "medium";
+    }
+    return "low";
+  }
+
+  if (input.source === "propagated") {
+    // Propagation confidence is decided by similarity strength upstream.
+    if (input.dominantCount >= 1) {
+      return "medium";
+    }
+    return "low";
+  }
+
   if (
     input.source === "historical_frequency" &&
     input.totalCount >= HIGH_FREQUENCY_MIN_COUNT &&

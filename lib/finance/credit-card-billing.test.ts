@@ -15,6 +15,7 @@ import {
   getStatementSettlement,
   getTransactionStatementRelation,
   hasCreditCardBillingConfig,
+  isPaymentAttributedToStatementCycle,
   STATEMENT_STATUS_LABELS,
   summarizeStatementCycleTransactions,
 } from "./credit-card-billing";
@@ -183,6 +184,14 @@ describe("credit card statement cycle", () => {
     expect(
       getCreditCardBillingValidationError({
         type: "credit_card",
+        statementClosingDay: null,
+        statementDueDay: null,
+      }),
+    ).toBeNull();
+
+    expect(
+      getCreditCardBillingValidationError({
+        type: "credit_card",
         statementClosingDay: 20,
         statementDueDay: null,
       }),
@@ -224,16 +233,100 @@ describe("statement payment cycle + settlement status", () => {
     },
   ];
 
-  it("resolves the paid cycle from payment date (latest closed on/before date)", () => {
-    expect(getStatementCyclePaidByPaymentDate(config, "2026-07-26").cycleId).toBe(
-      "2026-07-20",
-    );
-    expect(getStatementCyclePaidByPaymentDate(config, "2026-07-20").cycleId).toBe(
-      "2026-07-20",
-    );
-    expect(getStatementCyclePaidByPaymentDate(config, "2026-07-15").cycleId).toBe(
-      "2026-06-20",
-    );
+  it("attributes payments by statementDueDate before legacy statementCycleId", () => {
+    const cycle = {
+      ...julyCycle,
+      source: "imported" as const,
+      dueDate: "2026-05-04",
+    };
+
+    expect(
+      isPaymentAttributedToStatementCycle({
+        accountId: "card-1",
+        cycle,
+        config,
+        transaction: {
+          accountId: "card-1",
+          date: "2026-05-01",
+          type: "income",
+          amount: 3844.33,
+          statementDueDate: "2026-05-04",
+          // Intentionally wrong/legacy closing — due must win.
+          statementCycleId: "2026-04-24",
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      isPaymentAttributedToStatementCycle({
+        accountId: "card-1",
+        cycle,
+        config,
+        transaction: {
+          accountId: "card-1",
+          date: "2026-05-01",
+          type: "income",
+          amount: 100,
+          statementDueDate: "2026-06-04",
+          statementCycleId: cycle.cycleId,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps legacy closing attribution when statementDueDate is absent", () => {
+    expect(
+      isPaymentAttributedToStatementCycle({
+        accountId: "card-1",
+        cycle: julyCycle,
+        config,
+        transaction: {
+          accountId: "card-1",
+          date: "2026-07-26",
+          type: "income",
+          amount: 50,
+          statementCycleId: julyCycle.cycleId,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("settles imported invoice status from due-linked payment", () => {
+    const cycle = {
+      ...julyCycle,
+      source: "imported" as const,
+      dueDate: "2026-05-04",
+      issuerAmountDue: 3844.33,
+    };
+
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle,
+      referenceDate: "2026-05-10",
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-04-10",
+          type: "expense",
+          amount: 800,
+        },
+        {
+          accountId: "card-1",
+          date: "2026-05-01",
+          type: "income",
+          amount: 3844.33,
+          statementDueDate: "2026-05-04",
+          statementCycleId: null,
+          invoicePaymentOrigin: "imported",
+        },
+      ],
+    });
+
+    expect(settlement.amountDueTotal).toBe(3844.33);
+    expect(settlement.paidTotal).toBe(3844.33);
+    expect(settlement.remainingTotal).toBe(0);
+    expect(settlement.status).toBe("paid");
   });
 
   it("status open: before due, unpaid", () => {
@@ -414,6 +507,195 @@ describe("statement payment cycle + settlement status", () => {
     expect(settlement.paidTotal).toBe(100);
     expect(settlement.remainingTotal).toBe(100);
     expect(settlement.status).toBe("partial");
+  });
+
+  it("does not count unlinked estorno/credit incomes as invoice payments", () => {
+    const mayCycle = {
+      cycleId: "2026-05-25",
+      periodStart: "2026-04-26",
+      periodEnd: "2026-05-25",
+      closingDate: "2026-05-25",
+      dueDate: "2026-06-01",
+      source: "imported" as const,
+      issuerAmountDue: 4654.46,
+    };
+
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle: mayCycle,
+      referenceDate: "2026-06-10",
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-05-25",
+          type: "income",
+          amount: 4654.46,
+          statementDueDate: "2026-06-01",
+          statementCycleId: "2026-05-25",
+          invoicePaymentOrigin: "imported",
+          description: "Pagamento recebido",
+        },
+        {
+          accountId: "card-1",
+          date: "2026-06-22",
+          type: "income",
+          amount: 49.97,
+          description: 'Estorno de "Ifd*Ocaneco Bar Ltda." (iFood)',
+        },
+      ],
+      includeRolledInPurchases: false,
+    });
+
+    // Estorno on 06-22 would previously infer into closing 05-25 via date.
+    expect(settlement.paidTotal).toBe(4654.46);
+    expect(settlement.remainingTotal).toBe(0);
+    expect(settlement.status).toBe("paid");
+  });
+
+  it("uses stored issuer amount_due for imported bills over purchase-window sum", () => {
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle: {
+        ...julyCycle,
+        source: "imported",
+        issuerAmountDue: 4654.46,
+      },
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-07-10",
+          type: "expense",
+          amount: 3790.98,
+        },
+      ],
+      referenceDate: "2026-08-10",
+      includeRolledInPurchases: true,
+    });
+
+    expect(settlement.amountDueTotal).toBe(4654.46);
+    expect(settlement.cyclePurchasesTotal).toBe(3790.98);
+    expect(settlement.issuerPurchaseGap).toBe(863.48);
+    expect(settlement.remainingTotal).toBe(4654.46);
+    expect(settlement.status).toBe("overdue");
+  });
+
+  it("uses issuer amount_due for imported bills even when purchases are a partial window", () => {
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle: {
+        ...julyCycle,
+        source: "imported",
+        issuerAmountDue: 3844.33,
+      },
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-07-10",
+          type: "expense",
+          amount: 820.48,
+        },
+        {
+          accountId: "card-1",
+          date: "2026-07-26",
+          type: "income",
+          amount: 3844.33,
+          statementCycleId: "2026-07-20",
+          invoicePaymentOrigin: "imported",
+        },
+      ],
+      referenceDate: "2026-07-26",
+    });
+
+    expect(settlement.amountDueTotal).toBe(3844.33);
+    expect(settlement.paidTotal).toBe(3844.33);
+    expect(settlement.remainingTotal).toBe(0);
+    expect(settlement.status).toBe("paid");
+  });
+
+  it("uses linked payment as A pagar for imported bills when amount_due was cleared", () => {
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle: {
+        ...julyCycle,
+        source: "imported",
+        issuerAmountDue: null,
+      },
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-07-10",
+          type: "expense",
+          amount: 863.46,
+        },
+        {
+          accountId: "card-1",
+          date: "2026-07-26",
+          type: "income",
+          amount: 3844.33,
+          statementCycleId: "2026-07-20",
+          invoicePaymentOrigin: "imported",
+        },
+      ],
+      referenceDate: "2026-07-26",
+    });
+
+    expect(settlement.amountDueTotal).toBe(3844.33);
+    expect(settlement.paidTotal).toBe(3844.33);
+    expect(settlement.remainingTotal).toBe(0);
+  });
+
+  it("keeps derived cycles on purchase totals even if a stray issuer amount_due is present", () => {
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle: {
+        ...julyCycle,
+        source: "derived",
+        issuerAmountDue: 3844.33,
+      },
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-07-10",
+          type: "expense",
+          amount: 820.48,
+        },
+      ],
+      referenceDate: "2026-07-26",
+    });
+
+    expect(settlement.amountDueTotal).toBe(820.48);
+  });
+
+  it("falls back to issuer amount_due when the purchase window is empty", () => {
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle: {
+        ...julyCycle,
+        source: "imported",
+        issuerAmountDue: 1500,
+      },
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-07-26",
+          type: "income",
+          amount: 1500,
+          statementCycleId: "2026-07-20",
+          invoicePaymentOrigin: "imported",
+        },
+      ],
+      referenceDate: "2026-07-26",
+    });
+
+    expect(settlement.amountDueTotal).toBe(1500);
+    expect(settlement.paidTotal).toBe(1500);
+    expect(settlement.status).toBe("paid");
   });
 
   it("builds UI snapshot fields: total, paid, remaining, status label", () => {

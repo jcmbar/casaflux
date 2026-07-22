@@ -102,6 +102,7 @@ export function PayInvoiceSheet({
       cardAccountId: cardAccount.id,
       paymentDate,
       statementCycleId: cycle.cycleId,
+      statementDueDate: cycle.dueDate,
       hasBillingConfig: true,
       sourceAccount: selectedSourceAccount,
       userId,
@@ -128,6 +129,7 @@ export function PayInvoiceSheet({
       userId,
       familyId: cardAccount.family_id,
       statementCycleId: cycle.cycleId,
+      statementDueDate: cycle.dueDate,
       notes: notes.trim() || null,
       origin: "manual",
     });

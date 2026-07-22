@@ -18,14 +18,20 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ImportRowCategoryField } from "@/components/finance/import-row-category-field";
+import { CategorySuggestionOriginChip } from "@/components/finance/category-suggestion-origin-chip";
 import { ImportCategoryReviewPanel } from "@/components/finance/integracoes/import-category-review-panel";
 import { upsertCategoryInList } from "@/lib/finance/category-list-utils";
-import { FormSelect } from "@/components/forms/form-controls";
+import { FormInput, FormSelect } from "@/components/forms/form-controls";
 import { PageIntro } from "@/components/layout/page-intro";
 import { useConfirm } from "@/components/feedback/confirm-dialog-provider";
 import { AccountIdentityMark } from "@/components/finance/account-identity";
 import { InvoicePaymentImportPanel } from "@/components/finance/integracoes/invoice-payment-import-panel";
 import { useAppContext } from "@/contexts/app-context";
+import {
+  fetchCardStatementCyclesForAccount,
+  parseStatementDueDateFromFileName,
+  type CardStatementCycleRecord,
+} from "@/lib/finance/card-statement-cycles";
 import { buildImportPreview } from "@/lib/integrations/core/import-orchestrator";
 import {
   identifyImportFile,
@@ -33,11 +39,10 @@ import {
 import { buildImportFileConfirmation } from "@/lib/integrations/core/import-file-confirmation";
 import {
   formatPlannedImportBanksSummary,
-  formatSupportedImportBanksSummary,
   getImportFileSelectHint,
   getImportLayoutBySource,
   getImportReviewPageIntro,
-  getSupportedImportFileTip,
+  getSupportedImportBankSummaries,
 } from "@/lib/integrations/catalog/import-integrations";
 import { getImportSourceProvider } from "@/lib/integrations/providers/registry";
 import {
@@ -59,12 +64,19 @@ import {
   buildImportReviewContext,
   collectUniqueInvoicePeriodLabels,
 } from "@/lib/integrations/core/import-review-context";
+import { buildImportFinancialSummary } from "@/lib/integrations/core/import-financial-summary";
 import {
   buildInvoicePaymentCycleTargetOptions,
+  buildInvoicePaymentDueDateOptions,
   buildInvoicePaymentFutureCycleOptions,
   getInvoicePaymentCycleTargetSelection,
+  hydrateInvoicePaymentCycleTargetSelection,
+  isValidInvoicePaymentFileCycle,
   resolveImportedInvoicePaymentCycleId,
+  suggestStatementClosingDateForDueDate,
+  type InvoicePaymentCycleResolveContext,
   type InvoicePaymentCycleTargetSelection,
+  type InvoicePaymentFileCycle,
 } from "@/lib/integrations/invoice-payment/invoice-payment-cycle-target";
 import {
   getInvoicePaymentImportMode,
@@ -98,6 +110,7 @@ import {
   resolveImportCategoryStatusLabel,
   withCategorySummary,
 } from "@/lib/integrations/categories/category-suggestion-service";
+import { formatCategorySuggestionConfidencePt } from "@/lib/integrations/categories/category-suggestion-origin";
 import {
   getImportRowSelectedCategoryId,
   syncImportRowsAfterCategorySaved,
@@ -118,6 +131,7 @@ import {
   fetchHiddenSystemCategoryIds,
   filterActiveCategories,
 } from "@/lib/finance/active-categories";
+import { fetchUserCategoryKeywords } from "@/lib/finance/user-category-keywords";
 import {
   createEmptyHistoryContext,
   enrichImportPreviewWithHistory,
@@ -188,15 +202,6 @@ const filterOptions: { value: RowFilter; label: string }[] = [
   { value: "invalid", label: "Inválidos" },
 ];
 
-const categorySourceLabels: Record<
-  NonNullable<ImportPreviewRow["categorySuggestion"]>["source"],
-  string
-> = {
-  exact_match: "Match exato",
-  normalized_merchant: "Merchant normalizado",
-  historical_frequency: "Frequência histórica",
-};
-
 function filterRows(rows: ImportPreviewRow[], filter: RowFilter) {
   switch (filter) {
     case "ready":
@@ -228,13 +233,14 @@ function CategoryStatusBadge({ row }: { row: ImportPreviewRow }) {
     <Badge variant="outline" className={categoryStatusBadgeClass[status]}>
       {resolveImportCategoryStatusLabel(status)}
       {row.categorySuggestion && status === "suggested" ? (
-        <span className="ml-1 text-[10px] uppercase">
-          {row.categorySuggestion.confidence}
+        <span className="ml-1 text-[10px]">
+          {formatCategorySuggestionConfidencePt(row.categorySuggestion.confidence)}
         </span>
       ) : null}
     </Badge>
   );
 }
+
 function SummaryCard({
   label,
   value,
@@ -435,6 +441,11 @@ export function ImportReviewView() {
   const [contentHash, setContentHash] = useState<string | null>(null);
   const [cardAccountId, setCardAccountId] = useState("");
   const [checkingAccountId, setCheckingAccountId] = useState("");
+  const [statementClosingDate, setStatementClosingDate] = useState("");
+  const [statementDueDate, setStatementDueDate] = useState("");
+  const [importedStatementCycles, setImportedStatementCycles] = useState<
+    CardStatementCycleRecord[]
+  >([]);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -450,6 +461,9 @@ export function ImportReviewView() {
   >(null);
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [keywordsByCategoryId, setKeywordsByCategoryId] = useState<
+    Map<string, string[]>
+  >(() => new Map());
   const [categoryRows, setCategoryRows] = useState<ImportPreviewRow[]>([]);
   const [categoryFeedbackByLine, setCategoryFeedbackByLine] = useState<
     Record<number, ImportCategoryFeedback>
@@ -614,8 +628,8 @@ export function ImportReviewView() {
   }, [basePreview, csvContent, supabase, targetAccountId, user, historyRefreshKey]);
 
   const categoryCatalog = useMemo(
-    () => mapCategoriesToSuggestionCatalog(categories),
-    [categories],
+    () => mapCategoriesToSuggestionCatalog(categories, keywordsByCategoryId),
+    [categories, keywordsByCategoryId],
   );
 
   const displayPreview: ImportPreview | null = useMemo(() => {
@@ -660,6 +674,22 @@ export function ImportReviewView() {
     [selectedCardAccount],
   );
 
+  const statementFileCycle = useMemo((): InvoicePaymentFileCycle | null => {
+    const candidate = {
+      closingDate: statementClosingDate,
+      dueDate: statementDueDate,
+    };
+    return isValidInvoicePaymentFileCycle(candidate) ? candidate : null;
+  }, [statementClosingDate, statementDueDate]);
+
+  const invoicePaymentCycleResolveContext =
+    useMemo((): InvoicePaymentCycleResolveContext => {
+      return {
+        fileCycle: statementFileCycle,
+        importedCycles: importedStatementCycles,
+      };
+    }, [importedStatementCycles, statementFileCycle]);
+
   const invoicePaymentCycleContext = useMemo(() => {
     if (!activePreview || !cardBillingConfig) {
       return {} as Record<
@@ -667,6 +697,7 @@ export function ImportReviewView() {
         {
           options: ReturnType<typeof buildInvoicePaymentCycleTargetOptions>;
           futureOptions: ReturnType<typeof buildInvoicePaymentFutureCycleOptions>;
+          dueDateOptions: ReturnType<typeof buildInvoicePaymentDueDateOptions>;
           selection: InvoicePaymentCycleTargetSelection;
         }
       >;
@@ -677,6 +708,7 @@ export function ImportReviewView() {
       {
         options: ReturnType<typeof buildInvoicePaymentCycleTargetOptions>;
         futureOptions: ReturnType<typeof buildInvoicePaymentFutureCycleOptions>;
+        dueDateOptions: ReturnType<typeof buildInvoicePaymentDueDateOptions>;
         selection: InvoicePaymentCycleTargetSelection;
       }
     > = {};
@@ -686,24 +718,44 @@ export function ImportReviewView() {
         continue;
       }
 
+      const rawSelection = getInvoicePaymentCycleTargetSelection(
+        invoicePaymentCycleTargets,
+        row.sourceLine,
+      );
+
       context[row.sourceLine] = {
         options: buildInvoicePaymentCycleTargetOptions(
           cardBillingConfig,
           row.date,
+          invoicePaymentCycleResolveContext,
         ),
         futureOptions: buildInvoicePaymentFutureCycleOptions(
           cardBillingConfig,
           row.date,
+          6,
+          invoicePaymentCycleResolveContext,
         ),
-        selection: getInvoicePaymentCycleTargetSelection(
-          invoicePaymentCycleTargets,
-          row.sourceLine,
+        dueDateOptions: buildInvoicePaymentDueDateOptions(
+          cardBillingConfig,
+          row.date,
+          invoicePaymentCycleResolveContext,
+        ),
+        selection: hydrateInvoicePaymentCycleTargetSelection(
+          rawSelection,
+          cardBillingConfig,
+          row.date,
+          invoicePaymentCycleResolveContext,
         ),
       };
     }
 
     return context;
-  }, [activePreview, cardBillingConfig, invoicePaymentCycleTargets]);
+  }, [
+    activePreview,
+    cardBillingConfig,
+    invoicePaymentCycleResolveContext,
+    invoicePaymentCycleTargets,
+  ]);
 
   const invoicePaymentSettlementTransactions = useMemo(() => {
     if (!activePreview || !cardAccountId) {
@@ -727,6 +779,18 @@ export function ImportReviewView() {
         (row) => row.kind === "card_invoice_payment",
       ),
     [activePreview],
+  );
+
+  const importFinancialSummary = useMemo(
+    () =>
+      activePreview
+        ? buildImportFinancialSummary({
+            rows: activePreview.rows,
+            source: activePreview.source,
+            invoicePaymentModes,
+          })
+        : null,
+    [activePreview, invoicePaymentModes],
   );
 
   const invoiceReconcileSuggestions = useMemo(() => {
@@ -760,6 +824,7 @@ export function ImportReviewView() {
                   invoicePaymentCycleTargets,
                   row.sourceLine,
                 ),
+                context: invoicePaymentCycleResolveContext,
               }) ??
               resolution?.cycleId ??
               null,
@@ -778,6 +843,7 @@ export function ImportReviewView() {
     cardAccountId,
     cardBillingConfig,
     detectedSource,
+    invoicePaymentCycleResolveContext,
     invoicePaymentCycleTargets,
     invoicePaymentModes,
     invoiceSourceAccounts,
@@ -866,6 +932,7 @@ export function ImportReviewView() {
       familyId: activeFamily?.id ?? null,
       fileName,
       contentHash,
+      statementFileCycle,
     });
   }, [
     activeFamily?.id,
@@ -874,6 +941,7 @@ export function ImportReviewView() {
     fileName,
     invoicePaymentModes,
     invoiceSourceAccounts,
+    statementFileCycle,
     targetAccountId,
     user,
   ]);
@@ -995,6 +1063,7 @@ export function ImportReviewView() {
       const window = getInvoicePaymentEstimateTransactionWindow({
         billingConfig: cardBillingConfig,
         paymentDates: paymentRows.map((row) => row.date),
+        context: invoicePaymentCycleResolveContext,
       });
 
       const { data, error } = await fetchAllTransactionsForAccounts<{
@@ -1036,8 +1105,68 @@ export function ImportReviewView() {
     cardAccountId,
     cardBillingConfig,
     detectedSource,
+    invoicePaymentCycleResolveContext,
     supabase,
   ]);
+
+  useEffect(() => {
+    if (!fileName || statementDueDate) {
+      return;
+    }
+
+    const dueFromFile = parseStatementDueDateFromFileName(fileName);
+    if (dueFromFile) {
+      setStatementDueDate(dueFromFile);
+    }
+  }, [fileName, statementDueDate]);
+
+  useEffect(() => {
+    if (!cardBillingConfig || !statementDueDate || statementClosingDate) {
+      return;
+    }
+
+    const suggested = suggestStatementClosingDateForDueDate(
+      cardBillingConfig,
+      statementDueDate,
+    );
+    if (suggested) {
+      setStatementClosingDate(suggested);
+    }
+  }, [cardBillingConfig, statementClosingDate, statementDueDate]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadImportedCycles() {
+      if (!cardAccountId || detectedSource !== "nubank_credit_card") {
+        setImportedStatementCycles([]);
+        return;
+      }
+
+      const result = await fetchCardStatementCyclesForAccount(
+        supabase,
+        cardAccountId,
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      if (result.errorMessage) {
+        console.error(result.errorMessage);
+        setImportedStatementCycles([]);
+        return;
+      }
+
+      setImportedStatementCycles(result.cycles);
+    }
+
+    void loadImportedCycles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cardAccountId, detectedSource, supabase]);
 
   useEffect(() => {
     async function loadAccounts() {
@@ -1148,13 +1277,25 @@ export function ImportReviewView() {
         setCategories(loadedCategories);
 
         const accountIds = filterRealAccounts(accounts).map((account) => account.id);
-        const history = await fetchCategoryHistoryTransactions(
-          supabase,
-          accountIds,
-          500,
-          user.id,
+        const [history, keywordsResult] = await Promise.all([
+          fetchCategoryHistoryTransactions(
+            supabase,
+            accountIds,
+            500,
+            user.id,
+          ),
+          fetchUserCategoryKeywords(supabase, user.id),
+        ]);
+        if (keywordsResult.errorMessage) {
+          console.error(keywordsResult.errorMessage);
+        }
+        if (!cancelled) {
+          setKeywordsByCategoryId(keywordsResult.keywordsByCategoryId);
+        }
+        const catalog = mapCategoriesToSuggestionCatalog(
+          loadedCategories,
+          keywordsResult.keywordsByCategoryId,
         );
-        const catalog = mapCategoriesToSuggestionCatalog(loadedCategories);
         const enriched = enrichPreviewWithCategorySuggestions(preview, history, catalog);
 
         if (!cancelled) {
@@ -1232,7 +1373,10 @@ export function ImportReviewView() {
     mode: "create" | "update",
   ) {
     const nextCategories = upsertCategoryInList(categories, category);
-    const nextCatalog = mapCategoriesToSuggestionCatalog(nextCategories);
+    const nextCatalog = mapCategoriesToSuggestionCatalog(
+      nextCategories,
+      keywordsByCategoryId,
+    );
     const baseRows = categoryRows.length > 0 ? categoryRows : (preview?.rows ?? []);
 
     let nextRows = syncImportRowsAfterCategorySaved({
@@ -1316,6 +1460,9 @@ export function ImportReviewView() {
     setReadingFile(true);
     setFileName(file.name);
     setFileConfirmed(false);
+    setStatementClosingDate("");
+    setStatementDueDate("");
+    setImportedStatementCycles([]);
     setPreview(null);
     setCategoryFeedbackByLine({});
     setCommitSkippedRows([]);
@@ -1388,6 +1535,8 @@ export function ImportReviewView() {
       fileName,
       contentHash,
       targetAccount,
+      statementFileCycle,
+      importedStatementCycles,
     });
 
     setCommitting(false);
@@ -1436,6 +1585,9 @@ export function ImportReviewView() {
     setFileConfirmed(false);
     setCardAccountId("");
     setCheckingAccountId("");
+    setStatementClosingDate("");
+    setStatementDueDate("");
+    setImportedStatementCycles([]);
     setPreview(null);
     setCategoryRows([]);
     setCategoryFeedbackByLine({});
@@ -1468,9 +1620,13 @@ export function ImportReviewView() {
         resolution={resolveImportedInvoicePaymentForAccount({
           paymentDate: row.date,
           cardAccount: selectedCardAccount,
+          context: invoicePaymentCycleResolveContext,
         })}
         cycleTargetOptions={
           invoicePaymentCycleContext[row.sourceLine]?.options ?? []
+        }
+        dueDateOptions={
+          invoicePaymentCycleContext[row.sourceLine]?.dueDateOptions ?? []
         }
         cycleTargetSelection={
           invoicePaymentCycleContext[row.sourceLine]?.selection ?? {
@@ -1480,27 +1636,16 @@ export function ImportReviewView() {
         futureCycleOptions={
           invoicePaymentCycleContext[row.sourceLine]?.futureOptions ?? []
         }
-        onCycleTargetChange={(target) =>
+        onCycleTargetSelectionChange={(selection) =>
           setInvoicePaymentCycleTargets((current) => ({
             ...current,
-            [row.sourceLine]: {
-              ...getInvoicePaymentCycleTargetSelection(current, row.sourceLine),
-              target,
-            },
-          }))
-        }
-        onFutureCycleChange={(cycleId) =>
-          setInvoicePaymentCycleTargets((current) => ({
-            ...current,
-            [row.sourceLine]: {
-              target: "future",
-              futureCycleId: cycleId,
-            },
+            [row.sourceLine]: selection,
           }))
         }
         billingConfig={cardBillingConfig}
         cardAccountId={cardAccountId}
         settlementTransactions={invoicePaymentSettlementTransactions}
+        cycleContext={invoicePaymentCycleResolveContext}
         mode={getInvoicePaymentImportMode(invoicePaymentModes, row.sourceLine)}
         sourceAccountId={invoiceSourceAccounts[row.sourceLine] ?? ""}
         checkingAccounts={checkingAccounts}
@@ -1529,6 +1674,7 @@ export function ImportReviewView() {
             [row.sourceLine]: decision,
           }))
         }
+        fileName={fileName}
       />
     );
   }
@@ -1562,24 +1708,49 @@ export function ImportReviewView() {
         />
       </div>
 
-      <Alert
-        className="border-border/60 bg-muted/30"
+      <div
+        className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3"
         data-testid="supported-import-banks"
       >
-        <FileSpreadsheet className="size-4" />
-        <AlertTitle>Bancos suportados hoje</AlertTitle>
-        <AlertDescription>
-          <span className="block">{formatSupportedImportBanksSummary()}</span>
-          <span className="mt-1 block text-muted-foreground">
-            {getSupportedImportFileTip()}
-          </span>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Importe de um destes bancos</p>
+            <p className="text-xs text-muted-foreground">
+              CSV do extrato — revise antes de gravar.
+            </p>
+          </div>
           {formatPlannedImportBanksSummary() ? (
-            <span className="mt-2 block text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground sm:text-right">
               Em breve: {formatPlannedImportBanksSummary()}
-            </span>
+            </p>
           ) : null}
-        </AlertDescription>
-      </Alert>
+        </div>
+        <ul className="mt-3 flex flex-wrap gap-2">
+          {getSupportedImportBankSummaries().map((bank) => (
+            <li
+              key={bank.id}
+              className="inline-flex items-center gap-2 rounded-lg border border-border/50 bg-background/80 px-2.5 py-1.5"
+              data-testid={`supported-import-bank-${bank.id}`}
+            >
+              <AccountIdentityMark account={{ name: bank.name }} size="xs" />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium leading-none">
+                  {bank.name}
+                </span>
+                <span className="mt-1 block text-[11px] leading-tight text-muted-foreground">
+                  {bank.layouts
+                    .map((layout) =>
+                      layout
+                        .replace(/^Extrato de /i, "")
+                        .replace(/^extrato de /i, ""),
+                    )
+                    .join(" · ")}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
 
       {isGuidedReimport ? (
         <Alert
@@ -1598,7 +1769,7 @@ export function ImportReviewView() {
 
       <Card className="border-border/50 shadow-sm">
         <CardHeader>
-          <CardTitle className="text-base">Arquivo importado</CardTitle>
+          <CardTitle className="text-base">Arquivo</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1729,31 +1900,66 @@ export function ImportReviewView() {
           ) : null}
 
           {fileConfirmed && requiresCardAccount ? (
-            <FormSelect
-              id="card-account"
-              label="Conta de cartão (obrigatória para o preview)"
-              value={cardAccountId}
-              onChange={(event) => setCardAccountId(event.target.value)}
-              disabled={accountsLoading}
-            >
-              <option value="">Selecione o cartão de destino</option>
-              {creditCardAccounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {formatAccountSelectLabel(account)}
-                </option>
-              ))}
-            </FormSelect>
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium">Contexto deste extrato</p>
+                <p className="text-xs text-muted-foreground">
+                  Usamos as datas do arquivo para encaixar este extrato na
+                  fatura certa — não o dia fixo do cartão.
+                </p>
+              </div>
+              <FormSelect
+                id="card-account"
+                label="Cartão de destino"
+                value={cardAccountId}
+                onChange={(event) => setCardAccountId(event.target.value)}
+                disabled={accountsLoading}
+              >
+                <option value="">Qual cartão é deste extrato?</option>
+                {creditCardAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {formatAccountSelectLabel(account)}
+                  </option>
+                ))}
+              </FormSelect>
+
+              <div
+                className="grid gap-3 sm:grid-cols-2"
+                data-testid="import-statement-file-cycle"
+              >
+                <FormInput
+                  id="statement-closing-date"
+                  label="Fechamento neste extrato"
+                  type="date"
+                  value={statementClosingDate}
+                  onChange={(event) =>
+                    setStatementClosingDate(event.target.value)
+                  }
+                  required
+                  data-testid="import-statement-closing-date"
+                />
+                <FormInput
+                  id="statement-due-date"
+                  label="Vencimento neste extrato"
+                  type="date"
+                  value={statementDueDate}
+                  onChange={(event) => setStatementDueDate(event.target.value)}
+                  required
+                  data-testid="import-statement-due-date"
+                />
+              </div>
+            </div>
           ) : null}
 
           {fileConfirmed && requiresCheckingAccount ? (
             <FormSelect
               id="checking-account"
-              label="Conta de destino (obrigatória para comparação histórica)"
+              label="Conta de destino"
               value={checkingAccountId}
               onChange={(event) => setCheckingAccountId(event.target.value)}
               disabled={accountsLoading}
             >
-              <option value="">Selecione a conta corrente de destino</option>
+              <option value="">Qual conta corrente recebe estes lançamentos?</option>
               {checkingAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
                   {formatAccountSelectLabel(account)}
@@ -1768,10 +1974,10 @@ export function ImportReviewView() {
           csvContent ? (
             <Alert>
               <AlertTriangle className="size-4" />
-              <AlertTitle>Conta de destino pendente</AlertTitle>
+              <AlertTitle>Escolha a conta de destino</AlertTitle>
               <AlertDescription>
-                Selecione a conta corrente para comparar o preview com importações
-                anteriores desta conta.
+                Precisamos da conta corrente para comparar com importações
+                anteriores.
               </AlertDescription>
             </Alert>
           ) : null}
@@ -1781,10 +1987,10 @@ export function ImportReviewView() {
           csvContent ? (
             <Alert>
               <AlertTriangle className="size-4" />
-              <AlertTitle>Conta de cartão pendente</AlertTitle>
+              <AlertTitle>Escolha o cartão para montar a prévia</AlertTitle>
               <AlertDescription>
-                Selecione o cartão de crédito para gerar o preview com fingerprints
-                corretas.
+                Sem o cartão, não dá para gerar fingerprints e encaixar a fatura
+                corretamente.
               </AlertDescription>
             </Alert>
           ) : null}
@@ -1910,64 +2116,87 @@ export function ImportReviewView() {
             </Card>
           )}
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            <SummaryCard
-              label="Fonte detectada"
-              value={
-                activePreview.source
-                  ? importSourceLabels[activePreview.source]
-                  : "Não reconhecida"
-              }
-            />
-            <SummaryCard label="Total de linhas" value={activePreview.summary.totalRows} />
-            <SummaryCard
-              label="Novas / já importadas"
-              value={`${activePreview.summary.historicalNewRowCount} / ${activePreview.summary.historicalAlreadyImportedRowCount}`}
-              hint={
-                activePreview.historicalSummary?.partialOverlap
-                  ? "Sobreposição parcial com histórico"
-                  : undefined
-              }
-            />
-            <SummaryCard
-              label="Válidas / inválidas"
-              value={`${activePreview.summary.validRows} / ${activePreview.summary.invalidRows}`}
-            />
-            <SummaryCard
-              label="Precisam revisão"
-              value={activePreview.needsReview.length}
-              hint={`${activePreview.summary.duplicateGroupCount} grupo(s) intra-arquivo`}
-            />
+          <div className="space-y-3">
+            {importFinancialSummary ? (
+              <div
+                className="grid gap-3 sm:grid-cols-2"
+                data-testid="import-financial-summary"
+              >
+                <SummaryCard
+                  label="Total da fatura"
+                  value={formatCurrency(importFinancialSummary.invoiceTotal)}
+                  hint="Compras menos estornos neste arquivo"
+                />
+                <SummaryCard
+                  label="Total de pagamentos"
+                  value={formatCurrency(importFinancialSummary.paymentsTotal)}
+                  hint={
+                    importFinancialSummary.paymentCount === 0
+                      ? "Nenhum crédito de pagamento detectado"
+                      : `${importFinancialSummary.paymentCount} crédito${
+                          importFinancialSummary.paymentCount === 1 ? "" : "s"
+                        } de pagamento`
+                  }
+                />
+              </div>
+            ) : null}
+
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <SummaryCard
+                label="Fonte detectada"
+                value={
+                  activePreview.source
+                    ? importSourceLabels[activePreview.source]
+                    : "Não reconhecida"
+                }
+              />
+              <SummaryCard label="Total de linhas" value={activePreview.summary.totalRows} />
+              <SummaryCard
+                label="Novas / já importadas"
+                value={`${activePreview.summary.historicalNewRowCount} / ${activePreview.summary.historicalAlreadyImportedRowCount}`}
+                hint={
+                  activePreview.historicalSummary?.partialOverlap
+                    ? "Sobreposição parcial com histórico"
+                    : undefined
+                }
+              />
+              <SummaryCard
+                label="Válidas / inválidas"
+                value={`${activePreview.summary.validRows} / ${activePreview.summary.invalidRows}`}
+              />
+              <SummaryCard
+                label="Precisam revisão"
+                value={activePreview.needsReview.length}
+                hint={`${activePreview.summary.duplicateGroupCount} grupo(s) intra-arquivo`}
+              />
+            </div>
           </div>
 
           {invoicePaymentRows.length > 0 ? (
             <Card
-              className="border-violet-500/25 shadow-sm"
+              className="border-border/50 shadow-sm"
               data-testid="import-invoice-payment-review-section"
             >
               <CardHeader>
-                <CardTitle className="text-base">
-                  Pagamentos de fatura detectados
-                </CardTitle>
+                <CardTitle className="text-base">Pagamentos detectados</CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  Confirme a conta de origem e a fatura alvo (anterior, atual ou
-                  futura) antes de revisar categorias dos demais lançamentos.
+                  Confirme de onde saiu o dinheiro e qual fatura recebe o crédito.
                 </p>
               </CardHeader>
               <CardContent className="space-y-3">
                 {invoicePaymentRows.map((row) => (
                   <div
                     key={`invoice-payment-review-${row.sourceLine}`}
-                    className="rounded-xl border border-violet-500/20 bg-violet-500/5 px-4 py-3"
+                    className="rounded-xl border border-border/50 px-4 py-3"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="text-sm font-medium">
-                          Linha {row.sourceLine} — {row.description}
+                          Pagamento · {formatCurrency(row.amount)}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {formatDate(row.date)} · {formatCurrency(row.amount)} ·{" "}
-                          {importKindLabels[row.kind]}
+                          L{row.sourceLine} · {formatDate(row.date)} ·{" "}
+                          {row.description}
                         </p>
                       </div>
                       <ImportRowBadges
@@ -2123,9 +2352,9 @@ export function ImportReviewView() {
 
                     {row.kind === "card_invoice_payment" ? (
                       <p className="mt-3 text-xs text-muted-foreground">
-                        Configure conta de origem e fatura alvo na seção{" "}
+                        Configure origem e fatura na seção{" "}
                         <span className="font-medium text-foreground">
-                          Pagamentos de fatura detectados
+                          Pagamentos detectados
                         </span>{" "}
                         acima.
                       </p>
@@ -2211,9 +2440,9 @@ export function ImportReviewView() {
                               </p>
                             ) : null}
                             {row.categorySuggestion ? (
-                              <p
+                              <div
                                 className={cn(
-                                  "text-xs text-muted-foreground",
+                                  "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
                                   highlightCategoryLabel &&
                                     "rounded-md bg-emerald-500/10 px-2 py-1 text-foreground",
                                 )}
@@ -2224,15 +2453,22 @@ export function ImportReviewView() {
                                     : "none"
                                 }
                               >
-                                Sugestão:{" "}
-                                <span className="font-medium text-foreground">
-                                  {row.categorySuggestion.categoryName}
-                                </span>{" "}
-                                · {categorySourceLabels[row.categorySuggestion.source]} ·{" "}
-                                {row.categorySuggestion.basedOnCount} ocorrência(s) ·{" "}
-                                confiança {row.categorySuggestion.confidence}
-                              </p>
-                            ) : null}
+                                <span>
+                                  Sugestão:{" "}
+                                  <span className="font-medium text-foreground">
+                                    {row.categorySuggestion.categoryName}
+                                  </span>
+                                </span>
+                                <CategorySuggestionOriginChip
+                                  suggestion={row.categorySuggestion}
+                                  showConfidence
+                                />
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <CategorySuggestionOriginChip suggestion={null} />
+                              </div>
+                            )}
                           </div>
 
                           <div className="text-right">
@@ -2245,9 +2481,9 @@ export function ImportReviewView() {
 
                         {isInvoicePayment ? (
                           <p className="mt-3 text-xs text-muted-foreground">
-                            Configure conta de origem e fatura alvo na seção{" "}
+                            Configure origem e fatura na seção{" "}
                             <span className="font-medium text-foreground">
-                              Pagamentos de fatura detectados
+                              Pagamentos detectados
                             </span>{" "}
                             acima.
                           </p>
@@ -2295,15 +2531,27 @@ export function ImportReviewView() {
 
           <Card className="border-border/50 shadow-sm">
             <CardContent className="flex flex-col gap-3 py-6 sm:flex-row sm:items-center sm:justify-between">
-              <div>
+              <div className="min-w-0 space-y-1">
                 <p className="text-sm font-medium">Importação controlada</p>
                 <p className="text-sm text-muted-foreground">
                   {committableRows.length > 0
                     ? `${committableRows.length} linha(s) nova(s) pronta(s) para gravar.`
                     : "Nenhuma linha nova e pronta para importar."}
                 </p>
-                {commitValidationError && committableRows.length === 0 ? (
-                  <p className="mt-1 text-xs text-muted-foreground">
+                {historyLoading ? (
+                  <p
+                    className="text-xs text-muted-foreground"
+                    data-testid="import-commit-history-loading"
+                  >
+                    Verificando histórico de importações…
+                  </p>
+                ) : null}
+                {commitValidationError ? (
+                  <p
+                    className="text-xs text-amber-800 dark:text-amber-200"
+                    data-testid="import-commit-validation-error"
+                    role="status"
+                  >
                     {commitValidationError}
                   </p>
                 ) : null}
@@ -2317,6 +2565,14 @@ export function ImportReviewView() {
                   Boolean(commitValidationError)
                 }
                 onClick={() => void handleCommit()}
+                data-testid="import-commit-button"
+                title={
+                  commitValidationError
+                    ? commitValidationError
+                    : historyLoading
+                      ? "Aguardando verificação do histórico"
+                      : undefined
+                }
               >
                 {committing ? (
                   <>

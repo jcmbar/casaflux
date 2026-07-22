@@ -280,11 +280,7 @@ export function getUnsupportedImportFileMessage(): string {
 }
 
 export function getImportReviewPageIntro(): string {
-  const banks = getSupportedImportBankSummaries();
-  if (banks.length === 1) {
-    return `Importe um CSV do ${banks[0]!.name}, revise o que será criado e confirme. Nada é gravado até você confirmar.`;
-  }
-  return "Importe um CSV de um banco disponível hoje, revise o que será criado e confirme. Nada é gravado até você confirmar.";
+  return "Importe o CSV, revise o que será criado e confirme. Nada é gravado até você confirmar.";
 }
 
 export function getImportFileSelectHint(): string {

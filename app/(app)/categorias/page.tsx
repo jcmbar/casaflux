@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FormInput, FormSelect } from "@/components/forms/form-controls";
+import { KeywordChipsInput } from "@/components/finance/keyword-chips-input";
 import { PageIntro } from "@/components/layout/page-intro";
 import { useConfirm } from "@/components/feedback/confirm-dialog-provider";
 import {
@@ -43,6 +44,10 @@ import {
   CATEGORIES_CHANGED_EVENT,
   notifyCategoriesChanged,
 } from "@/lib/finance/category-events";
+import {
+  fetchUserCategoryKeywords,
+  upsertUserCategoryKeywords,
+} from "@/lib/finance/user-category-keywords";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -55,11 +60,13 @@ import {
 type FormState = {
   name: string;
   type: CategoryType;
+  keywords: string[];
 };
 
 const defaultForm: FormState = {
   name: "",
   type: "expense",
+  keywords: [],
 };
 
 const typeLabels: Record<CategoryType, string> = {
@@ -70,6 +77,7 @@ const typeLabels: Record<CategoryType, string> = {
 
 function CategoryRow({
   category,
+  keywordCount = 0,
   onEdit,
   onDeactivate,
   onReactivate,
@@ -77,6 +85,7 @@ function CategoryRow({
   inactive = false,
 }: {
   category: Category;
+  keywordCount?: number;
   onEdit?: (category: Category) => void;
   onDeactivate?: (category: Category) => void;
   onReactivate?: (category: Category) => void;
@@ -112,6 +121,11 @@ function CategoryRow({
               Padrão
             </Badge>
           )}
+          {keywordCount > 0 ? (
+            <Badge variant="outline" className="text-[11px]">
+              {keywordCount} palavra{keywordCount === 1 ? "" : "s"}-chave
+            </Badge>
+          ) : null}
           {inactive ? (
             <Badge variant="outline" className="text-[11px]">
               Inativa
@@ -146,7 +160,7 @@ function CategoryRow({
           </>
         ) : (
           <>
-            {custom && onEdit ? (
+            {onEdit ? (
               <Button
                 type="button"
                 variant="ghost"
@@ -192,6 +206,9 @@ export default function CategoriasPage() {
   const confirm = useConfirm();
   const { user, loading: authLoading } = useAppContext();
   const [categories, setCategories] = useState<Category[]>([]);
+  const [keywordsByCategoryId, setKeywordsByCategoryId] = useState<
+    Map<string, string[]>
+  >(() => new Map());
   const [visibilityContext, setVisibilityContext] =
     useState<CategoryVisibilityContext>({
       hiddenSystemCategoryIds: new Set(),
@@ -200,6 +217,7 @@ export default function CategoriasPage() {
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingIsSystem, setEditingIsSystem] = useState(false);
   const [form, setForm] = useState<FormState>(defaultForm);
   const [inactiveExpanded, setInactiveExpanded] = useState<
     Record<CategoryType, boolean>
@@ -218,6 +236,7 @@ export default function CategoriasPage() {
 
     if (!user) {
       setCategories([]);
+      setKeywordsByCategoryId(new Map());
       setVisibilityContext({ hiddenSystemCategoryIds: new Set() });
       setLoading(false);
       return;
@@ -225,14 +244,16 @@ export default function CategoriasPage() {
 
     setLoading(true);
 
-    const [categoriesRes, hiddenSystemCategoryIds] = await Promise.all([
-      supabase
-        .from("categories")
-        .select("*")
-        .order("type", { ascending: true })
-        .order("name", { ascending: true }),
-      fetchHiddenSystemCategoryIds(supabase, user.id),
-    ]);
+    const [categoriesRes, hiddenSystemCategoryIds, keywordsResult] =
+      await Promise.all([
+        supabase
+          .from("categories")
+          .select("*")
+          .order("type", { ascending: true })
+          .order("name", { ascending: true }),
+        fetchHiddenSystemCategoryIds(supabase, user.id),
+        fetchUserCategoryKeywords(supabase, user.id),
+      ]);
 
     if (categoriesRes.error) {
       console.error(categoriesRes.error);
@@ -241,12 +262,17 @@ export default function CategoriasPage() {
       return;
     }
 
+    if (keywordsResult.errorMessage) {
+      console.error(keywordsResult.errorMessage);
+    }
+
     setCategories(
       ((categoriesRes.data ?? []) as Category[]).map((category) => ({
         ...category,
         is_active: category.is_active ?? true,
       })),
     );
+    setKeywordsByCategoryId(keywordsResult.keywordsByCategoryId);
     setVisibilityContext({ hiddenSystemCategoryIds });
     setLoading(false);
   }, [supabase, user]);
@@ -299,6 +325,7 @@ export default function CategoriasPage() {
   function resetForm() {
     setForm(defaultForm);
     setEditingId(null);
+    setEditingIsSystem(false);
   }
 
   function handleOpenNew() {
@@ -307,12 +334,12 @@ export default function CategoriasPage() {
   }
 
   function handleOpenEdit(category: Category) {
-    if (!isCustomCategory(category)) return;
-
     setEditingId(category.id);
+    setEditingIsSystem(!isCustomCategory(category));
     setForm({
       name: category.name,
       type: category.type,
+      keywords: keywordsByCategoryId.get(category.id) ?? [],
     });
     setOpen(true);
   }
@@ -389,34 +416,61 @@ export default function CategoriasPage() {
     if (!user || !supabase) return;
 
     const name = form.name.trim();
-    if (!name) return;
+    if (!name && !editingIsSystem) return;
 
     setSaving(true);
 
-    if (editingId) {
-      const { error } = await supabase
-        .from("categories")
-        .update({ name, type: form.type })
-        .eq("id", editingId);
+    let categoryId = editingId;
 
-      if (error) {
-        console.error(error);
-        toast.error("Não foi possível atualizar a categoria.");
-        setSaving(false);
-        return;
+    if (editingId) {
+      if (!editingIsSystem) {
+        const { error } = await supabase
+          .from("categories")
+          .update({ name, type: form.type })
+          .eq("id", editingId);
+
+        if (error) {
+          console.error(error);
+          toast.error("Não foi possível atualizar a categoria.");
+          setSaving(false);
+          return;
+        }
       }
     } else {
-      const { error } = await supabase.from("categories").insert({
-        name,
-        type: form.type,
-        owner_user_id: user.id,
-        is_active: true,
-      });
+      const { data, error } = await supabase
+        .from("categories")
+        .insert({
+          name,
+          type: form.type,
+          owner_user_id: user.id,
+          is_active: true,
+        })
+        .select("id")
+        .single();
 
-      if (error) {
+      if (error || !data) {
         console.error(error);
         toast.error("Não foi possível criar a categoria.");
         setSaving(false);
+        return;
+      }
+
+      categoryId = data.id as string;
+    }
+
+    if (categoryId) {
+      const keywordsResult = await upsertUserCategoryKeywords(supabase, {
+        ownerUserId: user.id,
+        categoryId,
+        keywords: form.keywords,
+      });
+
+      if (!keywordsResult.ok) {
+        console.error(keywordsResult.message);
+        toast.error("Categoria salva, mas as palavras-chave falharam.");
+        setSaving(false);
+        await loadCategories();
+        notifyCategoriesChanged();
         return;
       }
     }
@@ -426,14 +480,20 @@ export default function CategoriasPage() {
     setOpen(false);
     resetForm();
     setSaving(false);
-    toast.success(editingId ? "Categoria atualizada." : "Categoria criada.");
+    toast.success(
+      editingId
+        ? editingIsSystem
+          ? "Palavras-chave atualizadas."
+          : "Categoria atualizada."
+        : "Categoria criada.",
+    );
   }
 
   const isEditing = Boolean(editingId);
 
   return (
     <div className="space-y-6 md:space-y-8">
-      <PageIntro description="Organize receitas e despesas do seu jeito." />
+      <PageIntro description="Organize receitas e despesas do seu jeito. Palavras-chave ajudam a sugerir categorias na importação." />
 
       <div className="flex justify-stretch sm:justify-end">
         <Button
@@ -479,6 +539,9 @@ export default function CategoriasPage() {
                       <CategoryRow
                         key={category.id}
                         category={category}
+                        keywordCount={
+                          keywordsByCategoryId.get(category.id)?.length ?? 0
+                        }
                         onEdit={handleOpenEdit}
                         onDeactivate={handleDeactivate}
                         onDelete={handleDelete}
@@ -515,6 +578,9 @@ export default function CategoriasPage() {
                           <CategoryRow
                             key={category.id}
                             category={category}
+                            keywordCount={
+                              keywordsByCategoryId.get(category.id)?.length ?? 0
+                            }
                             inactive
                             onReactivate={handleReactivate}
                             onDelete={
@@ -544,8 +610,17 @@ export default function CategoriasPage() {
         <SheetContent side="right" className="w-full sm:max-w-md">
           <SheetHeader>
             <SheetTitle>
-              {isEditing ? "Editar categoria" : "Nova categoria"}
+              {isEditing
+                ? editingIsSystem
+                  ? "Palavras-chave"
+                  : "Editar categoria"
+                : "Nova categoria"}
             </SheetTitle>
+            <p className="text-sm text-muted-foreground">
+              {editingIsSystem
+                ? "Defina termos para reconhecer esta categoria na importação."
+                : "Nome, tipo e palavras-chave usadas na importação."}
+            </p>
           </SheetHeader>
 
           <form
@@ -560,13 +635,15 @@ export default function CategoriasPage() {
                 setForm((current) => ({ ...current, name: event.target.value }))
               }
               placeholder="Ex.: Mercado, Freelance"
-              autoFocus
+              autoFocus={!editingIsSystem}
+              disabled={editingIsSystem}
             />
 
             <FormSelect
               id="category-type"
               label="Tipo"
               value={form.type}
+              disabled={editingIsSystem}
               onChange={(event) =>
                 setForm((current) => ({
                   ...current,
@@ -578,11 +655,21 @@ export default function CategoriasPage() {
               <option value="income">Receita</option>
             </FormSelect>
 
+            <KeywordChipsInput
+              id="category-keywords"
+              value={form.keywords ?? []}
+              onChange={(keywords) =>
+                setForm((current) => ({ ...current, keywords }))
+              }
+              disabled={saving}
+              className="rounded-xl border border-border/60 bg-muted/20 p-3"
+            />
+
             <SheetFooter className="mt-auto px-0">
               <Button
                 type="submit"
                 className="w-full"
-                disabled={saving || !form.name.trim()}
+                disabled={saving || (!editingIsSystem && !form.name.trim())}
               >
                 {saving ? (
                   <>

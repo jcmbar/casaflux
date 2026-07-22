@@ -489,17 +489,18 @@ export default function ContasPage() {
               {form.type === "credit_card" ? (
                 <div className="space-y-3 rounded-xl border border-violet-500/20 bg-violet-500/5 p-4">
                   <p className="text-sm text-muted-foreground">
-                    Ciclo da fatura: compras entre um fechamento e o próximo
-                    entram na mesma fatura.
+                    Opcional — fallback quando ainda não há fatura importada.
+                    Na importação do CSV você informa o fechamento e o vencimento
+                    reais de cada fatura.
                   </p>
                   <div className="grid gap-5 sm:grid-cols-2">
                     <FormInput
                       id="statement-closing-day"
-                      label="Dia de fechamento"
+                      label="Dia de fechamento (fallback)"
                       type="number"
                       min={1}
                       max={31}
-                      placeholder="Ex.: 20"
+                      placeholder="Ex.: 25"
                       value={form.statementClosingDay}
                       onChange={(event) =>
                         setForm((current) => ({
@@ -511,11 +512,11 @@ export default function ContasPage() {
                     />
                     <FormInput
                       id="statement-due-day"
-                      label="Dia de vencimento"
+                      label="Dia de vencimento (fallback)"
                       type="number"
                       min={1}
                       max={31}
-                      placeholder="Ex.: 27"
+                      placeholder="Ex.: 4"
                       value={form.statementDueDay}
                       onChange={(event) =>
                         setForm((current) => ({
