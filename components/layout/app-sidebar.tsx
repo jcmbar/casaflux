@@ -6,7 +6,7 @@ import { SidebarNav } from "./sidebar-nav";
 
 export function AppSidebar() {
   return (
-    <aside className="hidden h-svh w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
+    <aside className="relative z-[1] hidden h-svh w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
       <div className="flex h-16 items-center px-5">
         <BrandMark
           href="/dashboard"

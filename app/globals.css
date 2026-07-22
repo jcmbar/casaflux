@@ -56,25 +56,26 @@
 }
 
 :root {
-  --background: oklch(0.988 0.004 162);
+  /* Tinted neutral v2 — clearer canvas → sunken → card elevation */
+  --background: oklch(0.948 0.02 162);
   --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
+  --card: oklch(0.997 0.002 162);
   --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
+  --popover: oklch(0.997 0.002 162);
   --popover-foreground: oklch(0.145 0 0);
   --primary: oklch(0.52 0.14 162);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.965 0.004 162);
+  --secondary: oklch(0.932 0.016 162);
   --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.965 0.004 162);
-  --muted-foreground: oklch(0.48 0.024 162);
-  --accent: oklch(0.96 0.006 162);
+  --muted: oklch(0.932 0.016 162);
+  --muted-foreground: oklch(0.46 0.024 162);
+  --accent: oklch(0.938 0.018 162);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.91 0.006 162);
-  --input: oklch(0.91 0.006 162);
+  --border: oklch(0.875 0.014 162);
+  --input: oklch(0.875 0.014 162);
   --ring: oklch(0.52 0.14 162 / 40%);
-  --surface-sunken: oklch(0.975 0.004 162);
+  --surface-sunken: oklch(0.925 0.016 162);
   --brand: oklch(0.52 0.14 162);
   --brand-foreground: oklch(0.45 0.12 162);
   --chart-1: oklch(0.55 0.16 162);
@@ -85,40 +86,42 @@
   --dashboard-elevated: oklch(0.24 0.02 162);
   --dashboard-elevated-foreground: oklch(0.98 0.004 162);
   --dashboard-elevated-muted: oklch(0.72 0.02 162);
-  --dashboard-surface: oklch(0.97 0.004 162);
+  --dashboard-surface: oklch(0.96 0.01 162);
   --dashboard-glow-income: oklch(0.55 0.16 162 / 45%);
   --dashboard-glow-expense: oklch(0.62 0.2 25 / 40%);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0.003 162);
+  /* Sidebar sits above canvas (closer to card) so the tinted floor reads */
+  --sidebar: oklch(0.988 0.005 162);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.52 0.14 162);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.965 0.004 162);
+  --sidebar-accent: oklch(0.94 0.014 162);
   --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.91 0.006 162);
+  --sidebar-border: oklch(0.875 0.014 162);
   --sidebar-ring: oklch(0.52 0.14 162 / 40%);
 }
 
 .dark {
-  --background: oklch(0.16 0.006 162);
+  /* Dark tinted neutral — deeper canvas, clearer elevation steps (parity with light) */
+  --background: oklch(0.11 0.022 162);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.008 162);
+  --card: oklch(0.255 0.014 162);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.008 162);
+  --popover: oklch(0.255 0.014 162);
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.72 0.14 162);
   --primary-foreground: oklch(0.18 0.02 162);
-  --secondary: oklch(0.26 0.008 162);
+  --secondary: oklch(0.175 0.016 162);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.26 0.008 162);
+  --muted: oklch(0.175 0.016 162);
   --muted-foreground: oklch(0.74 0.024 162);
-  --accent: oklch(0.26 0.008 162);
+  --accent: oklch(0.185 0.016 162);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 12%);
+  --border: oklch(1 0 0 / 13%);
+  --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.72 0.14 162 / 35%);
-  --surface-sunken: oklch(0.19 0.006 162);
+  --surface-sunken: oklch(0.155 0.018 162);
   --brand: oklch(0.72 0.14 162);
   --brand-foreground: oklch(0.78 0.12 162);
   --chart-1: oklch(0.76 0.16 162);
@@ -129,16 +132,17 @@
   --dashboard-elevated: oklch(0.17 0.014 162);
   --dashboard-elevated-foreground: oklch(0.98 0.004 162);
   --dashboard-elevated-muted: oklch(0.68 0.02 162);
-  --dashboard-surface: oklch(0.2 0.012 162);
+  --dashboard-surface: oklch(0.19 0.016 162);
   --dashboard-glow-income: oklch(0.76 0.16 162 / 55%);
   --dashboard-glow-expense: oklch(0.72 0.19 25 / 50%);
-  --sidebar: oklch(0.21 0.008 162);
+  /* Sidebar elevated above canvas (closer to card), same logic as light */
+  --sidebar: oklch(0.22 0.014 162);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.62 0.14 162);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.26 0.008 162);
+  --sidebar-accent: oklch(0.27 0.014 162);
   --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-border: oklch(1 0 0 / 13%);
   --sidebar-ring: oklch(0.72 0.14 162 / 35%);
 }
 
@@ -155,6 +159,32 @@
 }
 
 @layer utilities {
+  /**
+   * App canvas atmosphere — grain only on the shell background.
+   * Do not apply inside cards, tables, or form controls.
+   */
+  .app-canvas {
+    isolation: isolate;
+  }
+
+  .app-canvas::before {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    opacity: 0.055;
+    mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-size: 160px 160px;
+  }
+
+  .dark .app-canvas::before {
+    opacity: 0.12;
+    mix-blend-mode: overlay;
+  }
+
   .animate-enter {
     animation: enter-fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
