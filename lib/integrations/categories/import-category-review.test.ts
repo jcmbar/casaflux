@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ImportPreviewRow } from "../types";
-import { applyHighConfidenceCategorySuggestions } from "./category-suggestion-service";
+import {
+  applyHighConfidenceCategorySuggestions,
+  summarizeCategoryStates,
+} from "./category-suggestion-service";
 import {
   clampAssistedReviewIndex,
   getAssistedReviewRow,
@@ -170,5 +173,19 @@ describe("import category review modes", () => {
   it("skip wraps assisted index within the pending queue", () => {
     expect(getNextAssistedReviewIndex(1, 3, "skip")).toBe(2);
     expect(getNextAssistedReviewIndex(2, 3, "skip")).toBe(0);
+  });
+
+  it("category summary ignores invoice payment rows for withoutCategoryCount", () => {
+    const summary = summarizeCategoryStates([
+      buildRow({ sourceLine: 1, categoryStatus: "none" }),
+      buildRow({
+        sourceLine: 2,
+        kind: "card_invoice_payment",
+        direction: "in",
+        categoryStatus: "none",
+      }),
+    ]);
+
+    expect(summary.withoutCategoryCount).toBe(1);
   });
 });

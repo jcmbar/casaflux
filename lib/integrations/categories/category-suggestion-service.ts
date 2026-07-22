@@ -14,6 +14,7 @@ import {
   type CategoryHistoryTransaction,
   type CategorySuggestionCatalogItem,
 } from "./category-suggester";
+import { isImportRowCategorizable } from "./import-category-review";
 import { normalizeImportText } from "./normalize-merchant";
 
 export function mapCategoriesToSuggestionCatalog(
@@ -58,8 +59,11 @@ export function enrichPreviewWithCategorySuggestions(
     enrichImportRowWithCategorySuggestion(row, index, categories),
   );
 
-  const suggestedCount = rows.filter((row) => row.categoryStatus === "suggested").length;
-  const highConfidenceCount = rows.filter(
+  const categorizableRows = rows.filter(isImportRowCategorizable);
+  const suggestedCount = categorizableRows.filter(
+    (row) => row.categoryStatus === "suggested",
+  ).length;
+  const highConfidenceCount = categorizableRows.filter(
     (row) => row.categorySuggestion?.confidence === "high",
   ).length;
 
@@ -71,7 +75,9 @@ export function enrichPreviewWithCategorySuggestions(
       suggestedCount,
       highConfidenceCount,
       confirmedCount: 0,
-      withoutCategoryCount: rows.filter((row) => row.categoryStatus === "none").length,
+      withoutCategoryCount: categorizableRows.filter(
+        (row) => row.categoryStatus === "none",
+      ).length,
     },
   };
 }
@@ -224,13 +230,21 @@ export async function fetchCategoryHistoryTransactions(
 }
 
 export function summarizeCategoryStates(rows: ImportPreviewRow[]) {
+  const categorizableRows = rows.filter(isImportRowCategorizable);
+
   return {
-    suggestedCount: rows.filter((row) => row.categoryStatus === "suggested").length,
-    highConfidenceCount: rows.filter(
+    suggestedCount: categorizableRows.filter(
+      (row) => row.categoryStatus === "suggested",
+    ).length,
+    highConfidenceCount: categorizableRows.filter(
       (row) => row.categorySuggestion?.confidence === "high",
     ).length,
-    confirmedCount: rows.filter((row) => row.categoryStatus === "confirmed").length,
-    withoutCategoryCount: rows.filter((row) => row.categoryStatus === "none").length,
+    confirmedCount: categorizableRows.filter(
+      (row) => row.categoryStatus === "confirmed",
+    ).length,
+    withoutCategoryCount: categorizableRows.filter(
+      (row) => row.categoryStatus === "none",
+    ).length,
   };
 }
 
