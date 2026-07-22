@@ -17,6 +17,8 @@ import {
   applyInvoicePaymentDueDateChange,
   deriveInvoicePaymentSuggestionForDueDate,
 } from "@/lib/integrations/invoice-payment/invoice-payment-cycle-target";
+import type { InvoicePaymentAmountMatchRecommendation } from "@/lib/integrations/invoice-payment/recommend-invoice-payment-target-by-amount";
+import { formatCurrency } from "@/lib/format";
 
 export function InvoicePaymentCycleTargetRadioGroup({
   controlId,
@@ -28,6 +30,7 @@ export function InvoicePaymentCycleTargetRadioGroup({
   billingConfig = null,
   paymentDate = "",
   cycleContext = null,
+  amountMatchRecommendation = { kind: "none", matches: [], message: null },
 }: {
   /** Stable id for radio name / test ids. Prefer this over sourceLine. */
   controlId?: string | number;
@@ -42,6 +45,7 @@ export function InvoicePaymentCycleTargetRadioGroup({
   billingConfig?: CreditCardBillingConfig | null;
   paymentDate?: string;
   cycleContext?: InvoicePaymentCycleResolveContext | null;
+  amountMatchRecommendation?: InvoicePaymentAmountMatchRecommendation;
 }) {
   const id = String(controlId ?? sourceLine ?? "default");
 
@@ -141,11 +145,19 @@ export function InvoicePaymentCycleTargetRadioGroup({
           data-testid={`invoice-cycle-target-${recommended.target}-${id}`}
           data-selected="false"
           data-amount-known={recommended.amountKnown ? "true" : "false"}
+          data-amount-match={
+            amountMatchRecommendation.kind === "unique" ? "true" : "false"
+          }
         >
-          Usar recomendada: {recommended.label.toLowerCase()}
-          {recommended.dueDateLabel
-            ? ` · vence ${recommended.dueDateLabel}`
-            : ""}
+          {amountMatchRecommendation.kind === "unique" &&
+          amountMatchRecommendation.match.dueDate ===
+            recommended.dueDate?.slice(0, 10)
+            ? `Usar recomendada: ${formatCurrency(amountMatchRecommendation.match.amountDue)} · vence ${amountMatchRecommendation.match.dueDateLabel}`
+            : `Usar recomendada: ${recommended.label.toLowerCase()}${
+                recommended.dueDateLabel
+                  ? ` · vence ${recommended.dueDateLabel}`
+                  : ""
+              }`}
         </button>
       ) : null}
     </fieldset>

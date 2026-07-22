@@ -16,7 +16,9 @@ import type {
   InvoicePaymentCycleTargetSelection,
 } from "../invoice-payment/invoice-payment-cycle-target";
 import { hydrateInvoicePaymentCycleTargetSelection } from "../invoice-payment/invoice-payment-cycle-target";
+import { resolveMaterializedImportStatementFileCycle } from "../invoice-payment/infer-import-statement-closing";
 import type { InvoicePaymentImportMode } from "../invoice-payment/resolve-invoice-payment";
+import type { CardStatementCycleRecord } from "@/lib/finance/card-statement-cycles";
 import type {
   InvoicePaymentReconcileDecision,
   InvoicePaymentReconcileSuggestion,
@@ -71,13 +73,19 @@ export type CommitImportPreviewInput = {
     Account,
     "type" | "statement_closing_day" | "statement_due_day"
   > | null;
-  /** Real closing/due of the imported CC statement file. */
+  /**
+   * Real closing/due of the imported CC statement file.
+   * Prefer due + optional closing + confirmation so closing can be materialized.
+   */
   statementFileCycle?: {
     closingDate: string;
     dueDate: string;
   } | null;
+  statementDueDate?: string | null;
+  statementClosingDate?: string | null;
+  confirmLowConfidenceClosing?: boolean;
   /** Persisted imported cycles for the card (due-date resolution). */
-  importedStatementCycles?: InvoicePaymentCycleResolveContext["importedCycles"];
+  importedStatementCycles?: readonly CardStatementCycleRecord[];
 };
 
 export type CommitImportPreviewResult =
@@ -159,9 +167,37 @@ function buildReconcileBatchItems(input: CommitImportPreviewInput) {
   return items;
 }
 
+export function resolveCommitStatementFileCycle(
+  input: CommitImportPreviewInput,
+): ReturnType<typeof resolveMaterializedImportStatementFileCycle> | null {
+  if (input.preview.source !== "nubank_credit_card") {
+    return null;
+  }
+
+  const billingConfig = resolveImportBillingConfig(input.targetAccount);
+  const dueDate =
+    input.statementDueDate?.slice(0, 10) ||
+    input.statementFileCycle?.dueDate?.slice(0, 10) ||
+    "";
+  const userClosingDate =
+    input.statementClosingDate?.slice(0, 10) ||
+    input.statementFileCycle?.closingDate?.slice(0, 10) ||
+    null;
+
+  return resolveMaterializedImportStatementFileCycle({
+    dueDate,
+    userClosingDate,
+    billingConfig,
+    importedCycles: input.importedStatementCycles,
+    confirmLowConfidenceClosing: input.confirmLowConfidenceClosing,
+  });
+}
+
 export function getCommitImportPreviewValidationError(
   input: CommitImportPreviewInput,
 ): string | null {
+  const billingConfig = resolveImportBillingConfig(input.targetAccount);
+
   return getCommitImportValidationError({
     previewRows: input.preview.rows,
     invoiceSourceAccounts: input.invoiceSourceAccounts,
@@ -170,6 +206,11 @@ export function getCommitImportPreviewValidationError(
     source: input.preview.source,
     invoicePaymentModes: input.invoicePaymentModes,
     statementFileCycle: input.statementFileCycle,
+    statementDueDate: input.statementDueDate,
+    statementClosingDate: input.statementClosingDate,
+    confirmLowConfidenceClosing: input.confirmLowConfidenceClosing,
+    billingConfig,
+    importedStatementCycles: input.importedStatementCycles,
   });
 }
 
@@ -189,10 +230,15 @@ export function buildCommitImportRpcPayload(input: CommitImportPreviewInput) {
     modes,
   );
   const billingConfig = resolveImportBillingConfig(input.targetAccount);
+  const materialized = resolveCommitStatementFileCycle(input);
+  const statementFileCycle =
+    materialized?.ok === true
+      ? materialized.cycle
+      : input.statementFileCycle ?? null;
   const cycleContext: InvoicePaymentCycleResolveContext | null =
-    input.statementFileCycle || input.importedStatementCycles?.length
+    statementFileCycle || input.importedStatementCycles?.length
       ? {
-          fileCycle: input.statementFileCycle ?? null,
+          fileCycle: statementFileCycle,
           importedCycles: input.importedStatementCycles,
         }
       : null;
@@ -327,6 +373,12 @@ export async function commitImportPreview(
 
     const billingConfig = resolveImportBillingConfig(input.targetAccount);
     if (billingConfig) {
+      const materialized = resolveCommitStatementFileCycle(input);
+      const fileCycle =
+        materialized?.ok === true
+          ? materialized.cycle
+          : input.statementFileCycle ?? null;
+
       const cycleUpserts = buildImportedCardStatementCycleUpserts({
         rows: input.preview.rows,
         billingConfig,
@@ -334,7 +386,7 @@ export async function commitImportPreview(
         ownerUserId: input.ownerUserId,
         familyId: input.familyId,
         fileName: input.fileName,
-        fileCycle: input.statementFileCycle,
+        fileCycle,
         importBatchId: batchId,
         invoicePaymentModes: input.invoicePaymentModes,
         invoicePaymentCycleTargets: input.invoicePaymentCycleTargets,

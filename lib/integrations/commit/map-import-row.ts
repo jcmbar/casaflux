@@ -1,7 +1,9 @@
 import type { TransactionType } from "@/types/transaction";
 import type { ImportPreviewRow, NormalizedImportKind } from "../types";
 import { getConfirmedCategoryForCommit } from "../categories/category-suggestion-service";
+import type { CardStatementCycleRecord } from "@/lib/finance/card-statement-cycles";
 import type { CreditCardBillingConfig } from "@/lib/finance/credit-card-billing";
+import { resolveMaterializedImportStatementFileCycle } from "../invoice-payment/infer-import-statement-closing";
 import {
   getInvoicePaymentCycleTargetSelection,
   resolveInvoicePaymentCycleTarget,
@@ -193,10 +195,19 @@ export function getCommitImportValidationError(input: {
   contentHash: string;
   source: string | null;
   invoicePaymentModes?: Record<number, InvoicePaymentImportMode>;
+  /**
+   * Legacy full cycle. Prefer `statementDueDate` + `statementClosingDate` +
+   * billing/history inputs so closing can be materialized via inference.
+   */
   statementFileCycle?: {
     closingDate: string;
     dueDate: string;
   } | null;
+  statementDueDate?: string | null;
+  statementClosingDate?: string | null;
+  confirmLowConfidenceClosing?: boolean;
+  billingConfig?: CreditCardBillingConfig | null;
+  importedStatementCycles?: readonly CardStatementCycleRecord[];
 }): string | null {
   if (!input.source) {
     return "Fonte de importação inválida.";
@@ -211,16 +222,25 @@ export function getCommitImportValidationError(input: {
   }
 
   if (input.source === "nubank_credit_card") {
-    const closingDate = input.statementFileCycle?.closingDate?.slice(0, 10) ?? "";
-    const dueDate = input.statementFileCycle?.dueDate?.slice(0, 10) ?? "";
-    if (
-      !/^\d{4}-\d{2}-\d{2}$/.test(closingDate) ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)
-    ) {
-      return "Informe a data de fechamento e a data de vencimento da fatura deste arquivo.";
-    }
-    if (closingDate > dueDate) {
-      return "A data de fechamento deve ser anterior ou igual à data de vencimento.";
+    const dueDate =
+      input.statementDueDate?.slice(0, 10) ||
+      input.statementFileCycle?.dueDate?.slice(0, 10) ||
+      "";
+    const userClosingDate =
+      input.statementClosingDate?.slice(0, 10) ||
+      input.statementFileCycle?.closingDate?.slice(0, 10) ||
+      null;
+
+    const materialized = resolveMaterializedImportStatementFileCycle({
+      dueDate,
+      userClosingDate,
+      billingConfig: input.billingConfig,
+      importedCycles: input.importedStatementCycles,
+      confirmLowConfidenceClosing: input.confirmLowConfidenceClosing,
+    });
+
+    if (!materialized.ok) {
+      return materialized.message;
     }
   }
 

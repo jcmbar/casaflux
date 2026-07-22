@@ -33,6 +33,7 @@ import type {
   InvoicePaymentReconcileDecision,
   InvoicePaymentReconcileSuggestion,
 } from "@/lib/integrations/invoice-payment/suggest-invoice-payment-reconcile";
+import type { InvoicePaymentAmountMatchRecommendation } from "@/lib/integrations/invoice-payment/recommend-invoice-payment-target-by-amount";
 import type { Account } from "@/types/account";
 import type { ImportPreviewRow } from "@/lib/integrations/types";
 import { InvoicePaymentCycleTargetRadioGroup } from "@/components/finance/integracoes/invoice-payment-cycle-target-radio-group";
@@ -62,6 +63,7 @@ export function InvoicePaymentImportPanel({
   cycleTargetOptions,
   dueDateOptions = [],
   cycleTargetSelection,
+  amountRecommendation = { kind: "none", matches: [], message: null },
   futureCycleOptions,
   onCycleTargetSelectionChange,
   billingConfig = null,
@@ -83,6 +85,7 @@ export function InvoicePaymentImportPanel({
   cycleTargetOptions: InvoicePaymentCycleTargetOption[];
   dueDateOptions?: InvoicePaymentDueDateOption[];
   cycleTargetSelection: InvoicePaymentCycleTargetSelection;
+  amountRecommendation?: InvoicePaymentAmountMatchRecommendation;
   futureCycleOptions: InvoicePaymentFutureCycleOption[];
   onCycleTargetSelectionChange: (
     selection: InvoicePaymentCycleTargetSelection,
@@ -277,15 +280,18 @@ export function InvoicePaymentImportPanel({
     selectedOption,
   ]);
 
-  const suggestionLine = recommendedOption
-    ? `${recommendedOption.label.toLowerCase()}${
-        recommendedOption.dueDateLabel
-          ? ` · ${recommendedOption.dueDateLabel}`
-          : ""
-      }`
-    : resolution
-      ? `anterior · ${resolution.dueDateLabel}`
-      : null;
+  const suggestionLine =
+    amountRecommendation.kind === "unique"
+      ? `recomendada · ${amountRecommendation.match.dueDateLabel}`
+      : recommendedOption
+        ? `${recommendedOption.label.toLowerCase()}${
+            recommendedOption.dueDateLabel
+              ? ` · ${recommendedOption.dueDateLabel}`
+              : ""
+          }`
+        : resolution
+          ? `anterior · ${resolution.dueDateLabel}`
+          : null;
 
   return (
     <div
@@ -350,6 +356,39 @@ export function InvoicePaymentImportPanel({
           {cycleTargetOptions.length > 0 ? (
             <div>
               <StepLabel step={2} title="Fatura que recebe o crédito" />
+
+              {amountRecommendation.kind === "unique" &&
+              amountRecommendation.message ? (
+                <div
+                  className="mb-2 rounded-md border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-2"
+                  data-testid={`invoice-amount-match-unique-${row.sourceLine}`}
+                  data-due-date={amountRecommendation.match.dueDate}
+                >
+                  <p className="text-xs font-medium text-emerald-900 dark:text-emerald-100">
+                    Fatura recomendada identificada
+                  </p>
+                  <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                    {amountRecommendation.message}
+                  </p>
+                </div>
+              ) : null}
+
+              {amountRecommendation.kind === "ambiguous" &&
+              amountRecommendation.message ? (
+                <div
+                  className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2"
+                  data-testid={`invoice-amount-match-ambiguous-${row.sourceLine}`}
+                  data-match-count={amountRecommendation.matches.length}
+                >
+                  <p className="text-xs font-medium text-amber-950 dark:text-amber-100">
+                    Mais de uma fatura compatível
+                  </p>
+                  <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                    {amountRecommendation.message}
+                  </p>
+                </div>
+              ) : null}
+
               <InvoicePaymentCycleTargetRadioGroup
                 sourceLine={row.sourceLine}
                 options={cycleTargetOptions}
@@ -358,6 +397,7 @@ export function InvoicePaymentImportPanel({
                 billingConfig={billingConfig}
                 paymentDate={row.date}
                 cycleContext={cycleContext}
+                amountMatchRecommendation={amountRecommendation}
               />
 
               <div className="mt-2 space-y-1.5">

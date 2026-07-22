@@ -74,14 +74,23 @@ import {
 } from "@/lib/integrations/core/import-review-context";
 import { buildImportFinancialSummary } from "@/lib/integrations/core/import-financial-summary";
 import {
+  applyAmountMatchRecommendationToCycleTargetOptions,
+  applyAmountMatchRecommendationToDueDateOptions,
+  applyUniqueAmountMatchToCycleTargetSelection,
+  recommendImportedInvoicePaymentTargetByAmount,
+  type InvoicePaymentAmountMatchRecommendation,
+} from "@/lib/integrations/invoice-payment/recommend-invoice-payment-target-by-amount";
+import {
+  inferImportStatementClosing,
+  resolveMaterializedImportStatementFileCycle,
+} from "@/lib/integrations/invoice-payment/infer-import-statement-closing";
+import {
   buildInvoicePaymentCycleTargetOptions,
   buildInvoicePaymentDueDateOptions,
   buildInvoicePaymentFutureCycleOptions,
   getInvoicePaymentCycleTargetSelection,
   hydrateInvoicePaymentCycleTargetSelection,
-  isValidInvoicePaymentFileCycle,
   resolveImportedInvoicePaymentCycleId,
-  suggestStatementClosingDateForDueDate,
   type InvoicePaymentCycleResolveContext,
   type InvoicePaymentCycleTargetSelection,
   type InvoicePaymentFileCycle,
@@ -451,6 +460,8 @@ export function ImportReviewView() {
   const [checkingAccountId, setCheckingAccountId] = useState("");
   const [statementClosingDate, setStatementClosingDate] = useState("");
   const [statementDueDate, setStatementDueDate] = useState("");
+  const [confirmLowConfidenceClosing, setConfirmLowConfidenceClosing] =
+    useState(false);
   const [importedStatementCycles, setImportedStatementCycles] = useState<
     CardStatementCycleRecord[]
   >([]);
@@ -685,13 +696,47 @@ export function ImportReviewView() {
     [selectedCardAccount],
   );
 
-  const statementFileCycle = useMemo((): InvoicePaymentFileCycle | null => {
-    const candidate = {
-      closingDate: statementClosingDate,
+  const statementClosingInference = useMemo(() => {
+    if (!requiresCardAccount || !statementDueDate) {
+      return null;
+    }
+
+    return inferImportStatementClosing({
       dueDate: statementDueDate,
-    };
-    return isValidInvoicePaymentFileCycle(candidate) ? candidate : null;
-  }, [statementClosingDate, statementDueDate]);
+      userClosingDate: statementClosingDate || null,
+      billingConfig: cardBillingConfig,
+      importedCycles: importedStatementCycles,
+    });
+  }, [
+    cardBillingConfig,
+    importedStatementCycles,
+    requiresCardAccount,
+    statementClosingDate,
+    statementDueDate,
+  ]);
+
+  const statementFileCycle = useMemo((): InvoicePaymentFileCycle | null => {
+    if (!requiresCardAccount || !statementDueDate) {
+      return null;
+    }
+
+    const materialized = resolveMaterializedImportStatementFileCycle({
+      dueDate: statementDueDate,
+      userClosingDate: statementClosingDate || null,
+      billingConfig: cardBillingConfig,
+      importedCycles: importedStatementCycles,
+      confirmLowConfidenceClosing,
+    });
+
+    return materialized.ok ? materialized.cycle : null;
+  }, [
+    cardBillingConfig,
+    confirmLowConfidenceClosing,
+    importedStatementCycles,
+    requiresCardAccount,
+    statementClosingDate,
+    statementDueDate,
+  ]);
 
   const invoicePaymentCycleResolveContext =
     useMemo((): InvoicePaymentCycleResolveContext => {
@@ -700,73 +745,6 @@ export function ImportReviewView() {
         importedCycles: importedStatementCycles,
       };
     }, [importedStatementCycles, statementFileCycle]);
-
-  const invoicePaymentCycleContext = useMemo(() => {
-    if (!activePreview || !cardBillingConfig) {
-      return {} as Record<
-        number,
-        {
-          options: ReturnType<typeof buildInvoicePaymentCycleTargetOptions>;
-          futureOptions: ReturnType<typeof buildInvoicePaymentFutureCycleOptions>;
-          dueDateOptions: ReturnType<typeof buildInvoicePaymentDueDateOptions>;
-          selection: InvoicePaymentCycleTargetSelection;
-        }
-      >;
-    }
-
-    const context: Record<
-      number,
-      {
-        options: ReturnType<typeof buildInvoicePaymentCycleTargetOptions>;
-        futureOptions: ReturnType<typeof buildInvoicePaymentFutureCycleOptions>;
-        dueDateOptions: ReturnType<typeof buildInvoicePaymentDueDateOptions>;
-        selection: InvoicePaymentCycleTargetSelection;
-      }
-    > = {};
-
-    for (const row of activePreview.rows) {
-      if (row.kind !== "card_invoice_payment") {
-        continue;
-      }
-
-      const rawSelection = getInvoicePaymentCycleTargetSelection(
-        invoicePaymentCycleTargets,
-        row.sourceLine,
-      );
-
-      context[row.sourceLine] = {
-        options: buildInvoicePaymentCycleTargetOptions(
-          cardBillingConfig,
-          row.date,
-          invoicePaymentCycleResolveContext,
-        ),
-        futureOptions: buildInvoicePaymentFutureCycleOptions(
-          cardBillingConfig,
-          row.date,
-          6,
-          invoicePaymentCycleResolveContext,
-        ),
-        dueDateOptions: buildInvoicePaymentDueDateOptions(
-          cardBillingConfig,
-          row.date,
-          invoicePaymentCycleResolveContext,
-        ),
-        selection: hydrateInvoicePaymentCycleTargetSelection(
-          rawSelection,
-          cardBillingConfig,
-          row.date,
-          invoicePaymentCycleResolveContext,
-        ),
-      };
-    }
-
-    return context;
-  }, [
-    activePreview,
-    cardBillingConfig,
-    invoicePaymentCycleResolveContext,
-    invoicePaymentCycleTargets,
-  ]);
 
   const invoicePaymentSettlementTransactions = useMemo(() => {
     if (!activePreview || !cardAccountId) {
@@ -783,6 +761,168 @@ export function ImportReviewView() {
       previewPurchases,
     );
   }, [activePreview, cardAccountId, cardSettlementTransactions]);
+
+  const invoicePaymentCycleContext = useMemo(() => {
+    if (!activePreview || !cardBillingConfig) {
+      return {} as Record<
+        number,
+        {
+          options: ReturnType<typeof buildInvoicePaymentCycleTargetOptions>;
+          futureOptions: ReturnType<typeof buildInvoicePaymentFutureCycleOptions>;
+          dueDateOptions: ReturnType<typeof buildInvoicePaymentDueDateOptions>;
+          selection: InvoicePaymentCycleTargetSelection;
+          amountRecommendation: InvoicePaymentAmountMatchRecommendation;
+        }
+      >;
+    }
+
+    const context: Record<
+      number,
+      {
+        options: ReturnType<typeof buildInvoicePaymentCycleTargetOptions>;
+        futureOptions: ReturnType<typeof buildInvoicePaymentFutureCycleOptions>;
+        dueDateOptions: ReturnType<typeof buildInvoicePaymentDueDateOptions>;
+        selection: InvoicePaymentCycleTargetSelection;
+        amountRecommendation: InvoicePaymentAmountMatchRecommendation;
+      }
+    > = {};
+
+    for (const row of activePreview.rows) {
+      if (row.kind !== "card_invoice_payment") {
+        continue;
+      }
+
+      const rawSelection = getInvoicePaymentCycleTargetSelection(
+        invoicePaymentCycleTargets,
+        row.sourceLine,
+      );
+
+      const amountRecommendation = recommendImportedInvoicePaymentTargetByAmount({
+        paymentAmount: row.amount,
+        paymentDate: row.date,
+        importedCycles: importedStatementCycles,
+        billingConfig: cardBillingConfig,
+        cardAccountId: cardAccountId || undefined,
+        settlementTransactions: invoicePaymentSettlementTransactions,
+        context: invoicePaymentCycleResolveContext,
+      });
+
+      const hydrated = hydrateInvoicePaymentCycleTargetSelection(
+        applyUniqueAmountMatchToCycleTargetSelection({
+          selection: rawSelection,
+          recommendation: amountRecommendation,
+          billingConfig: cardBillingConfig,
+          paymentDate: row.date,
+          context: invoicePaymentCycleResolveContext,
+        }),
+        cardBillingConfig,
+        row.date,
+        invoicePaymentCycleResolveContext,
+      );
+
+      const options = applyAmountMatchRecommendationToCycleTargetOptions(
+        buildInvoicePaymentCycleTargetOptions(
+          cardBillingConfig,
+          row.date,
+          invoicePaymentCycleResolveContext,
+        ),
+        amountRecommendation,
+      );
+
+      const dueDateOptions = applyAmountMatchRecommendationToDueDateOptions(
+        buildInvoicePaymentDueDateOptions(
+          cardBillingConfig,
+          row.date,
+          invoicePaymentCycleResolveContext,
+        ),
+        amountRecommendation,
+      );
+
+      context[row.sourceLine] = {
+        options,
+        futureOptions: buildInvoicePaymentFutureCycleOptions(
+          cardBillingConfig,
+          row.date,
+          6,
+          invoicePaymentCycleResolveContext,
+        ),
+        dueDateOptions,
+        selection: hydrated,
+        amountRecommendation,
+      };
+    }
+
+    return context;
+  }, [
+    activePreview,
+    cardAccountId,
+    cardBillingConfig,
+    importedStatementCycles,
+    invoicePaymentCycleResolveContext,
+    invoicePaymentCycleTargets,
+    invoicePaymentSettlementTransactions,
+  ]);
+
+  useEffect(() => {
+    if (!activePreview || !cardBillingConfig) {
+      return;
+    }
+
+    const patches: Record<number, InvoicePaymentCycleTargetSelection> = {};
+
+    for (const row of activePreview.rows) {
+      if (row.kind !== "card_invoice_payment") {
+        continue;
+      }
+
+      const rawSelection = getInvoicePaymentCycleTargetSelection(
+        invoicePaymentCycleTargets,
+        row.sourceLine,
+      );
+      if (rawSelection.targetDueDate) {
+        continue;
+      }
+
+      const recommendation =
+        invoicePaymentCycleContext[row.sourceLine]?.amountRecommendation;
+      if (!recommendation || recommendation.kind !== "unique") {
+        continue;
+      }
+
+      patches[row.sourceLine] = applyUniqueAmountMatchToCycleTargetSelection({
+        selection: rawSelection,
+        recommendation,
+        billingConfig: cardBillingConfig,
+        paymentDate: row.date,
+        context: invoicePaymentCycleResolveContext,
+      });
+    }
+
+    const patchLines = Object.keys(patches);
+    if (patchLines.length === 0) {
+      return;
+    }
+
+    setInvoicePaymentCycleTargets((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const [line, selection] of Object.entries(patches)) {
+        const sourceLine = Number(line);
+        if (current[sourceLine]?.targetDueDate) {
+          continue;
+        }
+        next[sourceLine] = selection;
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [
+    activePreview,
+    cardBillingConfig,
+    invoicePaymentCycleContext,
+    invoicePaymentCycleResolveContext,
+    invoicePaymentCycleTargets,
+  ]);
 
   const invoicePaymentRows = useMemo(
     () =>
@@ -980,15 +1120,25 @@ export function ImportReviewView() {
       familyId: activeFamily?.id ?? null,
       fileName,
       contentHash,
+      targetAccount: selectedCardAccount,
+      statementDueDate,
+      statementClosingDate: statementClosingDate || null,
+      confirmLowConfidenceClosing,
       statementFileCycle,
+      importedStatementCycles,
     });
   }, [
     activeFamily?.id,
     activePreview,
+    confirmLowConfidenceClosing,
     contentHash,
     fileName,
+    importedStatementCycles,
     invoicePaymentModes,
     invoiceSourceAccounts,
+    selectedCardAccount,
+    statementClosingDate,
+    statementDueDate,
     statementFileCycle,
     targetAccountId,
     user,
@@ -1169,18 +1319,23 @@ export function ImportReviewView() {
   }, [fileName, statementDueDate]);
 
   useEffect(() => {
-    if (!cardBillingConfig || !statementDueDate || statementClosingDate) {
+    if (
+      !cardBillingConfig ||
+      !statementDueDate ||
+      statementClosingDate ||
+      !statementClosingInference ||
+      statementClosingInference.confidence !== "high"
+    ) {
       return;
     }
 
-    const suggested = suggestStatementClosingDateForDueDate(
-      cardBillingConfig,
-      statementDueDate,
-    );
-    if (suggested) {
-      setStatementClosingDate(suggested);
-    }
-  }, [cardBillingConfig, statementClosingDate, statementDueDate]);
+    setStatementClosingDate(statementClosingInference.closingDate);
+  }, [
+    cardBillingConfig,
+    statementClosingDate,
+    statementClosingInference,
+    statementDueDate,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1610,6 +1765,9 @@ export function ImportReviewView() {
       fileName,
       contentHash,
       targetAccount,
+      statementDueDate,
+      statementClosingDate: statementClosingDate || null,
+      confirmLowConfidenceClosing,
       statementFileCycle,
       importedStatementCycles,
     });
@@ -1662,6 +1820,7 @@ export function ImportReviewView() {
     setCheckingAccountId("");
     setStatementClosingDate("");
     setStatementDueDate("");
+    setConfirmLowConfidenceClosing(false);
     setImportedStatementCycles([]);
     setPreview(null);
     setCategoryRows([]);
@@ -1706,6 +1865,13 @@ export function ImportReviewView() {
         cycleTargetSelection={
           invoicePaymentCycleContext[row.sourceLine]?.selection ?? {
             target: "previous",
+          }
+        }
+        amountRecommendation={
+          invoicePaymentCycleContext[row.sourceLine]?.amountRecommendation ?? {
+            kind: "none",
+            matches: [],
+            message: null,
           }
         }
         futureCycleOptions={
@@ -2050,30 +2216,81 @@ export function ImportReviewView() {
                     data-testid="import-statement-file-cycle"
                   >
                     <FormInput
-                      id="statement-closing-date"
-                      label="Fechamento neste extrato"
-                      type="date"
-                      value={statementClosingDate}
-                      onChange={(event) =>
-                        setStatementClosingDate(event.target.value)
-                      }
-                      required
-                      data-testid="import-statement-closing-date"
-                      className="max-md:h-9"
-                    />
-                    <FormInput
                       id="statement-due-date"
                       label="Vencimento neste extrato"
                       type="date"
                       value={statementDueDate}
-                      onChange={(event) =>
-                        setStatementDueDate(event.target.value)
-                      }
+                      onChange={(event) => {
+                        setStatementDueDate(event.target.value);
+                        setConfirmLowConfidenceClosing(false);
+                        setStatementClosingDate("");
+                      }}
                       required
                       data-testid="import-statement-due-date"
                       className="max-md:h-9"
                     />
+                    <FormInput
+                      id="statement-closing-date"
+                      label="Fechamento neste extrato"
+                      type="date"
+                      value={statementClosingDate}
+                      onChange={(event) => {
+                        setStatementClosingDate(event.target.value);
+                        setConfirmLowConfidenceClosing(false);
+                      }}
+                      required={
+                        statementClosingInference?.confidence === "none" ||
+                        (statementClosingInference?.confidence === "low" &&
+                          !confirmLowConfidenceClosing &&
+                          !statementClosingDate)
+                      }
+                      data-testid="import-statement-closing-date"
+                      className="max-md:h-9"
+                    />
                   </div>
+
+                  {statementClosingInference?.confidence === "low" &&
+                  !confirmLowConfidenceClosing &&
+                  !statementClosingDate ? (
+                    <Alert
+                      className="border-amber-500/25 bg-amber-500/5"
+                      data-testid="import-statement-closing-low-confidence"
+                    >
+                      <AlertTriangle className="size-4" />
+                      <AlertTitle>Confirme o fechamento sugerido</AlertTitle>
+                      <AlertDescription className="space-y-2">
+                        <p>
+                          Inferimos {statementClosingInference.closingDate} a
+                          partir do cartão, mas a confiança é baixa. Confirme
+                          antes de aplicar.
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setStatementClosingDate(
+                              statementClosingInference.closingDate,
+                            );
+                            setConfirmLowConfidenceClosing(true);
+                          }}
+                          data-testid="import-confirm-low-confidence-closing"
+                        >
+                          Usar fechamento sugerido
+                        </Button>
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+
+                  {statementClosingInference?.confidence === "high" &&
+                  statementClosingDate ? (
+                    <p
+                      className="text-[11px] text-muted-foreground"
+                      data-testid="import-statement-closing-high-confidence"
+                    >
+                      Fechamento definido automaticamente.
+                    </p>
+                  ) : null}
                 </>
               )}
             </div>
