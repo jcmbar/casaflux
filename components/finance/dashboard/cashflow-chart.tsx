@@ -18,7 +18,7 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 import type { DailyCashflowPoint } from "@/lib/finance/dashboard-stats";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrencyOrHidden } from "@/lib/format";
 
 const chartConfig = {
   income: {
@@ -37,6 +37,7 @@ type CashflowChartProps = {
   monthLabel: string;
   totalIncome: number;
   totalExpense: number;
+  hideAmounts?: boolean;
 };
 
 export function CashflowChart({
@@ -45,7 +46,9 @@ export function CashflowChart({
   monthLabel,
   totalIncome,
   totalExpense,
+  hideAmounts = false,
 }: CashflowChartProps) {
+  const money = (value: number) => formatCurrencyOrHidden(value, hideAmounts);
   const hasActivity = data.some(
     (point) => point.income > 0 || point.expense > 0,
   );
@@ -60,17 +63,17 @@ export function CashflowChart({
             <>
               <DashboardStatPill
                 label="Receitas"
-                value={formatCurrency(totalIncome)}
+                value={money(totalIncome)}
                 tone="income"
               />
               <DashboardStatPill
                 label="Despesas"
-                value={formatCurrency(totalExpense)}
+                value={money(totalExpense)}
                 tone="expense"
               />
               <DashboardStatPill
                 label="Saldo"
-                value={formatCurrency(totalIncome - totalExpense)}
+                value={money(totalIncome - totalExpense)}
                 tone="accent"
               />
             </>
@@ -144,10 +147,12 @@ export function CashflowChart({
                 tickCount={5}
                 className="text-xs fill-foreground/65"
                 tickFormatter={(value) =>
-                  new Intl.NumberFormat("pt-BR", {
-                    notation: "compact",
-                    compactDisplay: "short",
-                  }).format(Number(value))
+                  hideAmounts
+                    ? "••••"
+                    : new Intl.NumberFormat("pt-BR", {
+                        notation: "compact",
+                        compactDisplay: "short",
+                      }).format(Number(value))
                 }
               />
 
@@ -159,7 +164,7 @@ export function CashflowChart({
                       return day ? `Dia ${day}` : "Dia";
                     }}
                     formatter={(value, name) => [
-                      formatCurrency(Number(value)),
+                      money(Number(value)),
                       chartConfig[name as keyof typeof chartConfig]?.label ??
                         name,
                     ]}

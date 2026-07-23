@@ -6,7 +6,7 @@ import { DashboardPanelHeader } from "@/components/finance/dashboard/dashboard-p
 import { DashboardPanel } from "@/components/finance/dashboard/dashboard-panel";
 import { CardContent } from "@/components/ui/card";
 import type { MemberMonthStat } from "@/lib/finance/dashboard-stats";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrencyOrHidden } from "@/lib/format";
 
 function getInitials(name: string) {
   return name
@@ -23,6 +23,7 @@ type FamilyOverviewProps = {
   members: MemberMonthStat[];
   monthLabel: string;
   hasActiveFamily: boolean;
+  hideAmounts?: boolean;
 };
 
 export function FamilyOverview({
@@ -30,6 +31,7 @@ export function FamilyOverview({
   members,
   monthLabel,
   hasActiveFamily,
+  hideAmounts = false,
 }: FamilyOverviewProps) {
   return (
     <DashboardPanel delayMs={280} className="h-full">
@@ -73,10 +75,12 @@ export function FamilyOverview({
 
               <div className="text-sm sm:text-right">
                 <p className="text-primary tabular-nums">
-                  Entrada: {formatCurrency(member.income)}
+                  Entrada:{" "}
+                  {formatCurrencyOrHidden(member.income, hideAmounts)}
                 </p>
                 <p className="text-muted-foreground tabular-nums">
-                  Saída: {formatCurrency(member.expense)}
+                  Saída:{" "}
+                  {formatCurrencyOrHidden(member.expense, hideAmounts)}
                 </p>
               </div>
             </div>

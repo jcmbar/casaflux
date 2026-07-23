@@ -10,7 +10,7 @@ import {
   getPredictionDiff,
 } from "@/lib/finance/prediction-diff";
 import type { MonthlyPredictionAggregates } from "@/lib/finance/prediction-aggregates";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrencyOrHidden } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type PredictionSummaryProps = {
@@ -18,6 +18,7 @@ type PredictionSummaryProps = {
   aggregates: MonthlyPredictionAggregates;
   monthKey: string;
   monthLabel: string;
+  hideAmounts?: boolean;
 };
 
 export function PredictionSummary({
@@ -25,12 +26,14 @@ export function PredictionSummary({
   aggregates,
   monthKey,
   monthLabel,
+  hideAmounts = false,
 }: PredictionSummaryProps) {
+  const money = (value: number) => formatCurrencyOrHidden(value, hideAmounts);
   const diff = getPredictionDiff(aggregates.predicted, aggregates.realized);
   const deltaDescription =
     diff.kind === "equal"
       ? "Igual ao previsto"
-      : `${formatCurrency(diff.amount)} ${
+      : `${money(diff.amount)} ${
           diff.kind === "above" ? "acima" : "abaixo"
         } do previsto`;
 
@@ -64,7 +67,7 @@ export function PredictionSummary({
                 className="text-xl font-semibold tabular-nums sm:text-2xl"
                 data-testid="dashboard-predicted-total"
               >
-                {formatCurrency(aggregates.predicted)}
+                {money(aggregates.predicted)}
               </p>
             </div>
 
@@ -74,7 +77,7 @@ export function PredictionSummary({
                 className="text-xl font-semibold tabular-nums sm:text-2xl"
                 data-testid="dashboard-realized-total"
               >
-                {formatCurrency(aggregates.realized)}
+                {money(aggregates.realized)}
               </p>
             </div>
 
@@ -89,7 +92,7 @@ export function PredictionSummary({
                 )}
                 data-testid="dashboard-prediction-delta"
               >
-                {formatCurrency(Math.abs(aggregates.delta))}
+                {money(Math.abs(aggregates.delta))}
               </p>
               <p
                 className={cn(

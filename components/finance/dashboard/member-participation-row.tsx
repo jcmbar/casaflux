@@ -11,7 +11,7 @@ import { DashboardPanel } from "@/components/finance/dashboard/dashboard-panel";
 import { CardContent } from "@/components/ui/card";
 import { type ChartConfig, ChartContainer } from "@/components/ui/chart";
 import type { MemberParticipationStat } from "@/lib/finance/dashboard-stats";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrencyOrHidden } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type MemberParticipationRowProps = {
@@ -20,6 +20,7 @@ type MemberParticipationRowProps = {
   monthLabel: string;
   hasActiveFamily: boolean;
   totalExpense: number;
+  hideAmounts?: boolean;
 };
 
 function buildParticipationConfig(
@@ -48,10 +49,12 @@ function ParticipationCard({
   member,
   config,
   featured = false,
+  hideAmounts = false,
 }: {
   member: MemberParticipationStat;
   config: ChartConfig;
   featured?: boolean;
+  hideAmounts?: boolean;
 }) {
   return (
     <div
@@ -129,7 +132,7 @@ function ParticipationCard({
 
           <div className="space-y-1">
             <p className="text-lg font-semibold tabular-nums tracking-tight">
-              {formatCurrency(member.expense)}
+              {formatCurrencyOrHidden(member.expense, hideAmounts)}
             </p>
             <p className="text-xs font-medium leading-snug text-foreground/70">
               {member.percentage}% das despesas do mês
@@ -162,6 +165,7 @@ export function MemberParticipationRow({
   monthLabel,
   hasActiveFamily,
   totalExpense,
+  hideAmounts = false,
 }: MemberParticipationRowProps) {
   const participationConfig = buildParticipationConfig(participation);
   const topMember = participation[0];
@@ -176,7 +180,7 @@ export function MemberParticipationRow({
             <>
               <DashboardStatPill
                 label="Total"
-                value={formatCurrency(totalExpense)}
+                value={formatCurrencyOrHidden(totalExpense, hideAmounts)}
                 tone="expense"
               />
               <DashboardStatPill
@@ -217,6 +221,7 @@ export function MemberParticipationRow({
                 member={member}
                 config={participationConfig}
                 featured={index === 0}
+                hideAmounts={hideAmounts}
               />
             ))}
           </div>

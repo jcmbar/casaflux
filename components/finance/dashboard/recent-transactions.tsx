@@ -12,7 +12,7 @@ import { DashboardPanel } from "@/components/finance/dashboard/dashboard-panel";
 import { Badge } from "@/components/ui/badge";
 import { CardContent } from "@/components/ui/card";
 import type { RecentTransactionItem } from "@/lib/finance/dashboard-stats";
-import { formatCurrency, formatDate } from "@/lib/format";
+import { formatCurrencyOrHidden, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const typeConfig = {
@@ -40,12 +40,14 @@ type RecentTransactionsProps = {
   loading: boolean;
   transactions: RecentTransactionItem[];
   monthKey: string;
+  hideAmounts?: boolean;
 };
 
 export function RecentTransactions({
   loading,
   transactions,
   monthKey,
+  hideAmounts = false,
 }: RecentTransactionsProps) {
   return (
     <DashboardPanel delayMs={200}>
@@ -142,7 +144,7 @@ export function RecentTransactions({
                       config.valueClass,
                     )}
                   >
-                    {formatCurrency(transaction.amount)}
+                    {formatCurrencyOrHidden(transaction.amount, hideAmounts)}
                   </p>
                   <Badge variant="outline" className={config.badgeClass}>
                     {config.label}

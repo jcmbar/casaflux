@@ -17,7 +17,7 @@ import {
   ChartTooltipContent,
 } from "@/components/ui/chart";
 import type { ExpenseCategoryStat } from "@/lib/finance/dashboard-stats";
-import { formatCurrency, formatPercent } from "@/lib/format";
+import { formatCurrencyOrHidden, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type ExpenseCategoriesProps = {
@@ -26,6 +26,7 @@ type ExpenseCategoriesProps = {
   monthLabel: string;
   monthKey: string;
   yearSharePercent: number | null;
+  hideAmounts?: boolean;
 };
 
 function buildChartConfig(categories: ExpenseCategoryStat[]): ChartConfig {
@@ -44,13 +45,15 @@ export function ExpenseCategories({
   monthLabel,
   monthKey,
   yearSharePercent,
+  hideAmounts = false,
 }: ExpenseCategoriesProps) {
+  const money = (value: number) => formatCurrencyOrHidden(value, hideAmounts);
   const total = categories.reduce((sum, category) => sum + category.amount, 0);
   const chartConfig = buildChartConfig(categories);
   const centerValue =
     yearSharePercent !== null
       ? formatPercent(yearSharePercent / 100)
-      : formatCurrency(total);
+      : money(total);
   const centerLabel =
     yearSharePercent !== null ? "Participação no ano" : "Total do mês";
 
@@ -63,7 +66,7 @@ export function ExpenseCategories({
           !loading && categories.length > 0 ? (
             <DashboardStatPill
               label="Total"
-              value={formatCurrency(total)}
+              value={money(total)}
               tone="expense"
             />
           ) : null
@@ -99,7 +102,7 @@ export function ExpenseCategories({
                       <ChartTooltipContent
                         hideLabel
                         formatter={(value, name) => [
-                          formatCurrency(Number(value)),
+                          money(Number(value)),
                           String(name),
                         ]}
                       />
@@ -190,6 +193,7 @@ type ExpenseBreakdownBarsProps = {
   categories: ExpenseCategoryStat[];
   monthLabel: string;
   monthKey: string;
+  hideAmounts?: boolean;
 };
 
 export function ExpenseBreakdownBars({
@@ -197,7 +201,9 @@ export function ExpenseBreakdownBars({
   categories,
   monthLabel,
   monthKey,
+  hideAmounts = false,
 }: ExpenseBreakdownBarsProps) {
+  const money = (value: number) => formatCurrencyOrHidden(value, hideAmounts);
   const total = categories.reduce((sum, category) => sum + category.amount, 0);
   const topCategory = categories[0];
   const chartConfig = buildChartConfig(categories);
@@ -221,7 +227,7 @@ export function ExpenseBreakdownBars({
             <>
               <DashboardStatPill
                 label="Total"
-                value={formatCurrency(total)}
+                value={money(total)}
                 tone="expense"
               />
               {topCategory ? (
@@ -277,7 +283,7 @@ export function ExpenseBreakdownBars({
                       formatter={(value, _name, item) => {
                         const percentage = item.payload?.percentage;
                         return [
-                          `${formatCurrency(Number(value))}${percentage != null ? ` · ${percentage}%` : ""}`,
+                          `${money(Number(value))}${percentage != null ? ` · ${percentage}%` : ""}`,
                           "Valor",
                         ];
                       }}
@@ -317,7 +323,7 @@ export function ExpenseBreakdownBars({
                         <p className="truncate font-medium">{category.name}</p>
                       </div>
                       <p className="text-lg font-semibold tabular-nums tracking-tight">
-                        {formatCurrency(category.amount)}
+                        {money(category.amount)}
                       </p>
                     </div>
                     <span className="shrink-0 rounded-lg bg-background/60 px-2 py-1 text-sm font-semibold tabular-nums ring-1 ring-inset ring-white/5">

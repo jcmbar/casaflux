@@ -18,7 +18,7 @@ import {
   getGoalCurrentAmount,
   getGoalProgressPercent,
 } from "@/lib/finance/goal-progress";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrencyOrHidden } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { getGoalScope } from "@/types/budget";
 import type { Account } from "@/types/account";
@@ -30,7 +30,11 @@ import {
   type Goal,
 } from "@/types/goal";
 
-export function GoalsHighlight() {
+export function GoalsHighlight({
+  hideAmounts = false,
+}: {
+  hideAmounts?: boolean;
+}) {
   const supabase = useMemo(() => createClient()!, []);
   const { user, activeFamily } = useAppContext();
   const [loading, setLoading] = useState(true);
@@ -166,8 +170,8 @@ export function GoalsHighlight() {
                     <p className="font-medium">{goal.name}</p>
                     <GoalProgressBadge goal={goal} />
                     <p className="text-sm text-muted-foreground tabular-nums">
-                      {formatCurrency(currentAmount)} de{" "}
-                      {formatCurrency(goal.targetAmount)}
+                      {formatCurrencyOrHidden(currentAmount, hideAmounts)} de{" "}
+                      {formatCurrencyOrHidden(goal.targetAmount, hideAmounts)}
                     </p>
                   </div>
                   <span

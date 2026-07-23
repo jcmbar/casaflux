@@ -5,7 +5,7 @@ import { MiniSparkline } from "@/components/finance/dashboard/mini-sparkline";
 import { CardContent } from "@/components/ui/card";
 import type { MonthSummary, SparklinePoint } from "@/lib/finance/dashboard-stats";
 import { getProjectedMonthlyBalance } from "@/lib/finance/prediction-aggregates";
-import { formatCurrency, formatPercent } from "@/lib/format";
+import { formatCurrencyOrHidden, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type SummaryCardsProps = {
@@ -18,6 +18,7 @@ type SummaryCardsProps = {
     income: SparklinePoint[];
     expense: SparklinePoint[];
   };
+  hideAmounts?: boolean;
 };
 
 type KpiCard = {
@@ -38,7 +39,9 @@ export function SummaryCards({
   totalAccountBalance,
   monthlyProjectionDelta,
   sparklines,
+  hideAmounts = false,
 }: SummaryCardsProps) {
+  const money = (value: number) => formatCurrencyOrHidden(value, hideAmounts);
   const netChangeLabel =
     monthSummary.netChangePercent === null
       ? "Sem base no mês anterior"
@@ -51,7 +54,7 @@ export function SummaryCards({
   const cards: KpiCard[] = [
     {
       title: "Saldo real do mês",
-      value: formatCurrency(monthSummary.netBalance),
+      value: money(monthSummary.netBalance),
       change: netChangeLabel,
       tone: monthSummary.netBalance >= 0 ? "income" : "expense",
       sparkline: sparklines.net,
@@ -61,7 +64,7 @@ export function SummaryCards({
     },
     {
       title: "Despesas do mês",
-      value: formatCurrency(monthSummary.expense),
+      value: money(monthSummary.expense),
       change:
         monthSummary.expenseCount === 1
           ? "1 lançamento"
@@ -74,7 +77,7 @@ export function SummaryCards({
     },
     {
       title: "Receitas do mês",
-      value: formatCurrency(monthSummary.income),
+      value: money(monthSummary.income),
       change:
         monthSummary.incomeCount === 1
           ? "1 lançamento"
@@ -87,7 +90,7 @@ export function SummaryCards({
     },
     {
       title: "Saldo em contas",
-      value: formatCurrency(totalAccountBalance),
+      value: money(totalAccountBalance),
       change: "Saldos cadastrados",
       tone: "neutral",
       sparkline: null,
@@ -97,11 +100,11 @@ export function SummaryCards({
     },
     {
       title: "Saldo projetado do mês",
-      value: formatCurrency(projectedBalance),
+      value: money(projectedBalance),
       change:
         monthlyProjectionDelta === 0
           ? "Sem previsões pendentes marcadas"
-          : `${monthlyProjectionDelta > 0 ? "+" : "-"}${formatCurrency(
+          : `${monthlyProjectionDelta > 0 ? "+" : "-"}${money(
               Math.abs(monthlyProjectionDelta),
             )} em previsões pendentes marcadas`,
       tone: projectedBalance >= 0 ? "income" : "expense",

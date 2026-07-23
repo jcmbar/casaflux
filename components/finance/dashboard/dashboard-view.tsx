@@ -1,8 +1,10 @@
 "use client";
 
-import { AlertCircle, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertCircle, Eye, EyeOff, Loader2 } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { CashflowChart } from "@/components/finance/dashboard/cashflow-chart";
 import {
   ExpenseBreakdownBars,
@@ -17,9 +19,14 @@ import { SummaryCards } from "@/components/finance/dashboard/summary-cards";
 import { UpcomingStatementDues } from "@/components/finance/dashboard/upcoming-bills";
 import { useDashboardData } from "@/components/finance/dashboard/use-dashboard-data";
 import { useAppContext } from "@/contexts/app-context";
+import {
+  getHideAmounts,
+  setHideAmounts,
+} from "@/lib/finance/user-ui-preferences";
 
 export function DashboardView() {
-  const { activeFamily } = useAppContext();
+  const { user, activeFamily } = useAppContext();
+  const [hideAmounts, setHideAmountsState] = useState(false);
   const {
     loading,
     error,
@@ -37,12 +44,42 @@ export function DashboardView() {
     upcomingStatementDues,
   } = useDashboardData();
 
+  useEffect(() => {
+    if (!user?.id) {
+      setHideAmountsState(false);
+      return;
+    }
+    setHideAmountsState(getHideAmounts(user.id));
+  }, [user?.id]);
+
+  function toggleHideAmounts() {
+    if (!user?.id) return;
+    const next = !hideAmounts;
+    setHideAmounts(user.id, next);
+    setHideAmountsState(next);
+  }
+
   return (
     <div className="space-y-5 md:space-y-6">
-      <div className="animate-enter space-y-1">
+      <div className="animate-enter flex items-start justify-between gap-3">
         <p className="text-sm font-medium leading-relaxed text-foreground/75">
           Visão geral das finanças familiares com base nos lançamentos do mês.
         </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="shrink-0"
+          onClick={toggleHideAmounts}
+          aria-label={hideAmounts ? "Mostrar valores" : "Ocultar valores"}
+          data-testid="dashboard-toggle-hide-amounts"
+        >
+          {hideAmounts ? (
+            <EyeOff className="size-4" />
+          ) : (
+            <Eye className="size-4" />
+          )}
+        </Button>
       </div>
 
       {error ? (
@@ -66,6 +103,7 @@ export function DashboardView() {
           totalAccountBalance={totalAccountBalance}
           monthlyProjectionDelta={monthlyProjectionDelta}
           sparklines={sparklines}
+          hideAmounts={hideAmounts}
         />
 
         <ExpenseCategories
@@ -74,6 +112,7 @@ export function DashboardView() {
           monthLabel={monthSummary.monthLabel}
           monthKey={monthSummary.monthKey}
           yearSharePercent={yearExpenseSharePercent}
+          hideAmounts={hideAmounts}
         />
       </section>
 
@@ -82,12 +121,14 @@ export function DashboardView() {
         aggregates={monthlyPredictionAggregates}
         monthKey={monthSummary.monthKey}
         monthLabel={monthSummary.monthLabel}
+        hideAmounts={hideAmounts}
       />
 
       <UpcomingStatementDues
         loading={loading}
         items={upcomingStatementDues}
         className="animate-enter-delayed"
+        hideAmounts={hideAmounts}
       />
 
       <CashflowChart
@@ -96,6 +137,7 @@ export function DashboardView() {
         monthLabel={monthSummary.monthLabel}
         totalIncome={monthSummary.income}
         totalExpense={monthSummary.expense}
+        hideAmounts={hideAmounts}
       />
 
       <ExpenseBreakdownBars
@@ -103,6 +145,7 @@ export function DashboardView() {
         categories={expenseCategories}
         monthLabel={monthSummary.monthLabel}
         monthKey={monthSummary.monthKey}
+        hideAmounts={hideAmounts}
       />
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] xl:items-stretch">
@@ -112,22 +155,25 @@ export function DashboardView() {
           monthLabel={monthSummary.monthLabel}
           hasActiveFamily={Boolean(activeFamily)}
           totalExpense={monthSummary.expense}
+          hideAmounts={hideAmounts}
         />
 
         <RecentTransactions
           loading={loading}
           transactions={recentTransactions}
           monthKey={monthSummary.monthKey}
+          hideAmounts={hideAmounts}
         />
       </section>
 
       <section className="grid gap-4 xl:grid-cols-2 xl:items-stretch">
-        <GoalsHighlight />
+        <GoalsHighlight hideAmounts={hideAmounts} />
         <FamilyOverview
           loading={loading}
           members={memberStats}
           monthLabel={monthSummary.monthLabel}
           hasActiveFamily={Boolean(activeFamily)}
+          hideAmounts={hideAmounts}
         />
       </section>
     </div>

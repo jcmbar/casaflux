@@ -10,7 +10,7 @@ import {
   getUpcomingStatementDuesEmptyMessage,
   type UpcomingStatementDueItem,
 } from "@/lib/finance/upcoming-statement-dues";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrencyOrHidden } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const STATUS_BADGE_CLASS: Record<StatementStatus, string> = {
@@ -28,6 +28,7 @@ export function UpcomingStatementDues({
   description = "Faturas de cartão com saldo a pagar, da mais próxima para a mais distante.",
   showSeeAll = true,
   className,
+  hideAmounts = false,
 }: {
   items: UpcomingStatementDueItem[];
   loading?: boolean;
@@ -35,7 +36,9 @@ export function UpcomingStatementDues({
   description?: string;
   showSeeAll?: boolean;
   className?: string;
+  hideAmounts?: boolean;
 }) {
+  const money = (value: number) => formatCurrencyOrHidden(value, hideAmounts);
   return (
     <Card
       className={cn("border-border/50 shadow-sm", className)}
@@ -105,13 +108,13 @@ export function UpcomingStatementDues({
                     <div>
                       <dt className="text-muted-foreground">A pagar</dt>
                       <dd className="font-medium tabular-nums">
-                        {formatCurrency(item.amountDueTotal)}
+                        {money(item.amountDueTotal)}
                       </dd>
                     </div>
                     <div>
                       <dt className="text-muted-foreground">Pago</dt>
                       <dd className="font-medium tabular-nums">
-                        {formatCurrency(item.paidTotal)}
+                        {money(item.paidTotal)}
                       </dd>
                     </div>
                     <div>
@@ -124,7 +127,7 @@ export function UpcomingStatementDues({
                             : "text-primary",
                         )}
                       >
-                        {formatCurrency(item.remainingTotal)}
+                        {money(item.remainingTotal)}
                       </dd>
                     </div>
                   </dl>
