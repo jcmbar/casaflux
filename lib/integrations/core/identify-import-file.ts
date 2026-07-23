@@ -12,6 +12,10 @@ import {
   BRADESCO_UNTRUSTED_IMPORT_MESSAGE,
   looksLikeUntrustedBradescoChecking,
 } from "../sources/bradesco/checking-parser";
+import {
+  C6_UNTRUSTED_IMPORT_MESSAGE,
+  looksLikeUntrustedC6Checking,
+} from "../sources/c6/checking-parser";
 import type { ImportSource } from "../types";
 import type { ImportProviderId } from "../catalog/import-integrations";
 
@@ -73,6 +77,20 @@ function untrustedBradescoFile(): IdentifiedImportFile {
   };
 }
 
+function untrustedC6File(): IdentifiedImportFile {
+  return {
+    status: "unsupported",
+    canContinue: false,
+    source: null,
+    institutionId: null,
+    institutionName: null,
+    layoutLabel: null,
+    headline: "Arquivo do C6 Bank ainda não confiável",
+    message: C6_UNTRUSTED_IMPORT_MESSAGE,
+    tip: getSupportedImportFileTip(),
+  };
+}
+
 /**
  * Identifies the bank/layout of a selected CSV before import continues.
  * Requires both a registered runtime provider and catalog-supported status.
@@ -83,6 +101,9 @@ export function identifyImportFile(content: string): IdentifiedImportFile {
   if (!runtimeProvider) {
     if (looksLikeUntrustedBradescoChecking(content)) {
       return untrustedBradescoFile();
+    }
+    if (looksLikeUntrustedC6Checking(content)) {
+      return untrustedC6File();
     }
     return unsupportedFile();
   }

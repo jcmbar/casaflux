@@ -2,7 +2,8 @@ export type ImportSource =
   | "nubank_checking"
   | "nubank_credit_card"
   | "inter_checking"
-  | "bradesco_checking";
+  | "bradesco_checking"
+  | "c6_checking";
 
 export type NormalizedImportKind =
   | "bank_income"
@@ -43,6 +44,14 @@ export type NormalizedImportMetadata = {
   linkedExternalId?: string;
   reversalPair?: boolean;
   cardAccountId?: string;
+  /** Bank accounting date when distinct from launch date (e.g. C6). */
+  accountingDate?: string;
+  /** Short title / histórico when kept separate from description detail. */
+  title?: string;
+  /** End-of-day balance from the statement row, informational only. */
+  balanceAfter?: number;
+  rawEntrada?: string;
+  rawSaida?: string;
 };
 
 export type NormalizedImportRow = {

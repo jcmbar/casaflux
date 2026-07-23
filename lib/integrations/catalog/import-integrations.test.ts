@@ -14,7 +14,7 @@ import {
 } from "./import-integrations";
 
 describe("import integrations catalog", () => {
-  it("exposes Nubank, Inter and Bradesco checking as supported layouts", () => {
+  it("exposes Nubank, Inter, Bradesco and C6 checking as supported layouts", () => {
     const sources = getSupportedImportSources();
     expect(sources).toEqual(
       expect.arrayContaining([
@@ -22,20 +22,21 @@ describe("import integrations catalog", () => {
         "nubank_credit_card",
         "inter_checking",
         "bradesco_checking",
+        "c6_checking",
       ]),
     );
-    expect(sources).toHaveLength(4);
+    expect(sources).toHaveLength(5);
 
-    expect(getImportLayoutBySource("bradesco_checking")).toMatchObject({
+    expect(getImportLayoutBySource("c6_checking")).toMatchObject({
       status: "supported",
       shortLabel: "conta",
-      label: "Bradesco — Conta corrente",
+      label: "C6 Bank — Conta corrente",
     });
   });
 
   it("lists supported banks for the import UI", () => {
     expect(getSupportedImportProviders().map((entry) => entry.id).sort()).toEqual(
-      ["bradesco", "inter", "nubank"],
+      ["bradesco", "c6", "inter", "nubank"],
     );
     expect(getSupportedImportBankSummaries()).toEqual(
       expect.arrayContaining([
@@ -57,6 +58,11 @@ describe("import integrations catalog", () => {
           name: "Bradesco",
           layouts: ["Extrato de conta corrente"],
         },
+        {
+          id: "c6",
+          name: "C6 Bank",
+          layouts: ["Extrato de conta corrente"],
+        },
       ]),
     );
   });
@@ -74,10 +80,9 @@ describe("import integrations catalog", () => {
       nubank_credit_card: "Nubank — Cartão de crédito",
       inter_checking: "Inter — Conta corrente",
       bradesco_checking: "Bradesco — Conta corrente",
+      c6_checking: "C6 Bank — Conta corrente",
     });
-    expect(getUnsupportedImportFileMessage()).toContain(
-      "CSV de Nubank, Inter, Bradesco",
-    );
+    expect(getUnsupportedImportFileMessage()).toContain("C6 Bank");
     expect(getUnsupportedImportFileMessage()).toContain("Disponível hoje");
     expect(IMPORT_AVAILABILITY_LABELS.supported).toBe("Disponível hoje");
     expect(IMPORT_AVAILABILITY_LABELS.planned).toBe("Em breve");

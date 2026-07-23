@@ -129,6 +129,17 @@ export const IMPORT_INTEGRATIONS: readonly ImportProviderDefinition[] = [
       layoutName: "Extrato de cartão de crédito",
     },
   ]),
+  provider("c6", "supported", [
+    {
+      id: "c6_checking",
+      source: "c6_checking",
+      kind: "checking",
+      status: "supported",
+      label: "C6 Bank — Conta corrente",
+      shortLabel: "conta",
+      layoutName: "Extrato de conta corrente",
+    },
+  ]),
   // Planned providers: registered for future UI, not importable yet.
   provider("itau", "planned", [
     {

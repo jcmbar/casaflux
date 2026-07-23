@@ -1,5 +1,6 @@
 import { isSupportedImportSource } from "../catalog/import-integrations";
 import { bradescoImportIntegration } from "./bradesco/provider";
+import { c6ImportIntegration } from "./c6/provider";
 import { interImportIntegration } from "./inter/provider";
 import { nubankImportIntegration } from "./nubank/provider";
 import type {
@@ -16,6 +17,7 @@ const REGISTERED_INTEGRATIONS: readonly ImportIntegrationProvider[] = [
   nubankImportIntegration,
   interImportIntegration,
   bradescoImportIntegration,
+  c6ImportIntegration,
 ];
 
 export function getRegisteredImportIntegrations(): readonly ImportIntegrationProvider[] {

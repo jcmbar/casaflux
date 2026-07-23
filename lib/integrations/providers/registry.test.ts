@@ -16,6 +16,10 @@ import {
   bradescoImportIntegration,
 } from "./bradesco/provider";
 import {
+  c6CheckingImportProvider,
+  c6ImportIntegration,
+} from "./c6/provider";
+import {
   interCheckingImportProvider,
   interImportIntegration,
 } from "./inter/provider";
@@ -57,6 +61,14 @@ const INTER_FIXTURE = readFileSync(
   "utf8",
 );
 
+const C6_FIXTURE = readFileSync(
+  path.join(
+    process.cwd(),
+    "lib/integrations/__fixtures__/c6/c6_checking_sample.csv",
+  ),
+  "utf8",
+);
+
 function expectProviderContract(provider: ImportSourceProvider) {
   expect(provider.source).toEqual(expect.any(String));
   expect(provider.providerId).toEqual(expect.any(String));
@@ -68,16 +80,18 @@ function expectProviderContract(provider: ImportSourceProvider) {
 }
 
 describe("import source provider contract", () => {
-  it("registers Nubank, Inter and Bradesco layouts that satisfy the provider contract", () => {
+  it("registers Nubank, Inter, Bradesco and C6 layouts that satisfy the provider contract", () => {
     expect(getRegisteredImportIntegrations()).toEqual([
       nubankImportIntegration,
       interImportIntegration,
       bradescoImportIntegration,
+      c6ImportIntegration,
     ]);
 
     const providers = getRegisteredImportSourceProviders();
     expect(providers.map((provider) => provider.source).sort()).toEqual([
       "bradesco_checking",
+      "c6_checking",
       "inter_checking",
       "nubank_checking",
       "nubank_credit_card",
@@ -138,11 +152,28 @@ describe("import source provider contract", () => {
     );
   });
 
+  it("lets the C6 checking provider match and parse fixtures", () => {
+    expect(c6CheckingImportProvider.matches(C6_FIXTURE)).toBe(true);
+    expect(c6CheckingImportProvider.matches(CARD_FIXTURE)).toBe(false);
+    expect(c6CheckingImportProvider.matches(INTER_FIXTURE)).toBe(false);
+    expect(c6CheckingImportProvider.matches(CHECKING_FIXTURE)).toBe(false);
+    expect(c6CheckingImportProvider.matches(BRADESCO_FIXTURE)).toBe(false);
+
+    const parsed = c6CheckingImportProvider.parse({
+      content: C6_FIXTURE,
+    });
+
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows).toHaveLength(5);
+    expect(parsed.rows.every((row) => row.source === "c6_checking")).toBe(true);
+  });
+
   it("resolves identification through the registry and blocks unknown files", () => {
     expect(detectImportSource(CARD_FIXTURE)).toBe("nubank_credit_card");
     expect(detectImportSource(CHECKING_FIXTURE)).toBe("nubank_checking");
     expect(detectImportSource(INTER_FIXTURE)).toBe("inter_checking");
     expect(detectImportSource(BRADESCO_FIXTURE)).toBe("bradesco_checking");
+    expect(detectImportSource(C6_FIXTURE)).toBe("c6_checking");
     expect(detectImportSource("foo,bar\n1,2")).toBeNull();
 
     expect(resolveImportSourceProvider(CARD_FIXTURE)?.source).toBe(
@@ -156,6 +187,9 @@ describe("import source provider contract", () => {
     expect(getImportSourceProvider("bradesco_checking")).toBe(
       bradescoCheckingImportProvider,
     );
+    expect(getImportSourceProvider("c6_checking")).toBe(
+      c6CheckingImportProvider,
+    );
     expect(hasImportSourceProvider("nubank_credit_card")).toBe(true);
   });
 
@@ -166,7 +200,9 @@ describe("import source provider contract", () => {
     expect(sources.some((source) => source.includes("itau"))).toBe(false);
     expect(sources).toContain("inter_checking");
     expect(sources).toContain("bradesco_checking");
+    expect(sources).toContain("c6_checking");
     expect(interCheckingImportProvider.providerId).toBe("inter");
     expect(bradescoCheckingImportProvider.providerId).toBe("bradesco");
+    expect(c6CheckingImportProvider.providerId).toBe("c6");
   });
 });
