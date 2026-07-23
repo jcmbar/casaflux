@@ -11,7 +11,7 @@ import {
   type StatementCycle,
   type StatementStatus,
 } from "@/lib/finance/credit-card-billing";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrencyOrHidden } from "@/lib/format";
 import { getInvoicePaymentReconcileBadge } from "@/lib/finance/lancamentos-filters";
 import { buildFaturasHref } from "@/lib/finance/card-statement-history";
 import type { Account } from "@/types/account";
@@ -38,6 +38,7 @@ export function CreditCardStatementSummary({
   className,
   onPayInvoice,
   payInvoiceDisabled = false,
+  hideAmounts = false,
 }: {
   account: Account;
   transactions: Array<
@@ -61,6 +62,7 @@ export function CreditCardStatementSummary({
     status: StatementStatus;
   }) => void;
   payInvoiceDisabled?: boolean;
+  hideAmounts?: boolean;
 }) {
   const config = getCreditCardBillingConfig(account);
   if (!config) {
@@ -169,7 +171,7 @@ export function CreditCardStatementSummary({
             className="font-medium text-foreground tabular-nums"
             data-testid={`card-statement-cycle-total-${account.id}`}
           >
-            {formatCurrency(settlement.cyclePurchasesTotal)}
+            {formatCurrencyOrHidden(settlement.cyclePurchasesTotal, hideAmounts)}
           </dd>
         </div>
         <div className="flex items-baseline justify-between gap-2 sm:justify-start sm:gap-2">
@@ -178,7 +180,7 @@ export function CreditCardStatementSummary({
             className="font-semibold text-foreground tabular-nums"
             data-testid={`card-statement-amount-due-${account.id}`}
           >
-            {formatCurrency(settlement.amountDueTotal)}
+            {formatCurrencyOrHidden(settlement.amountDueTotal, hideAmounts)}
           </dd>
         </div>
         <div className="flex items-baseline justify-between gap-2 sm:justify-start sm:gap-2">
@@ -187,7 +189,7 @@ export function CreditCardStatementSummary({
             className="font-medium text-foreground tabular-nums"
             data-testid={`card-statement-paid-${account.id}`}
           >
-            {formatCurrency(settlement.paidTotal)}
+            {formatCurrencyOrHidden(settlement.paidTotal, hideAmounts)}
           </dd>
         </div>
         <div className="flex items-baseline justify-between gap-2 sm:justify-start sm:gap-2">
@@ -196,7 +198,7 @@ export function CreditCardStatementSummary({
             className="font-medium text-foreground tabular-nums"
             data-testid={`card-statement-remaining-${account.id}`}
           >
-            {formatCurrency(settlement.remainingTotal)}
+            {formatCurrencyOrHidden(settlement.remainingTotal, hideAmounts)}
           </dd>
         </div>
       </dl>
@@ -205,7 +207,7 @@ export function CreditCardStatementSummary({
           className="mt-1.5 text-[11px] text-muted-foreground"
           data-testid={`card-statement-rolled-in-note-${account.id}`}
         >
-          Inclui {formatCurrency(settlement.rolledInPurchasesTotal)} na virada
+          Inclui {formatCurrencyOrHidden(settlement.rolledInPurchasesTotal, hideAmounts)} na virada
           do fechamento (parcelas/lançamentos) além das despesas do ciclo — por
           isso o total a pagar pode ser maior.
         </p>

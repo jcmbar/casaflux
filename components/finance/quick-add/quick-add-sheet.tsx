@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import Link from "next/link";
-import { CalendarDays, Loader2, Plus, Repeat2 } from "lucide-react";
+import { CalendarDays, Loader2, Plus, Repeat2, Star } from "lucide-react";
 
 import { AccountIdentityChipLabel } from "@/components/finance/account-identity";
 import { CurrencyInput } from "@/components/forms/currency-input";
@@ -59,6 +59,10 @@ import {
   getDefaultDescriptionForType,
   suggestTransactionDraft,
 } from "@/lib/finance/transaction-suggestions";
+import {
+  getPreferredAccountId,
+  setPreferredAccountId,
+} from "@/lib/finance/user-ui-preferences";
 import { getRecurrenceEndValidationError } from "@/lib/finance/recurrence-validation";
 import { TRANSACTIONS_SELECT } from "@/lib/finance/transactions-query";
 import { formatDate } from "@/lib/format";
@@ -180,11 +184,31 @@ export function QuickAddSheet() {
   const [includeInProjection, setIncludeInProjection] = useState(true);
   const [userPickedCategory, setUserPickedCategory] = useState(false);
   const [userPickedAccount, setUserPickedAccount] = useState(false);
+  const [preferredAccountId, setPreferredAccountIdState] = useState<string | null>(
+    null,
+  );
   const [showNewCategory, setShowNewCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
 
   const userId = user?.id ?? null;
   const activeFamilyId = activeFamily?.id ?? null;
+
+  useEffect(() => {
+    setPreferredAccountIdState(getPreferredAccountId(userId));
+  }, [userId]);
+
+  function togglePreferredAccount(accountIdToToggle: string) {
+    if (!userId) return;
+    const next =
+      preferredAccountId === accountIdToToggle ? null : accountIdToToggle;
+    setPreferredAccountId(userId, next);
+    setPreferredAccountIdState(next);
+    toast.success(
+      next
+        ? "Conta marcada como favorita para novos lançamentos."
+        : "Conta favorita removida.",
+    );
+  }
 
   const scope = useMemo(
     () =>
@@ -464,6 +488,7 @@ export function QuickAddSheet() {
         accounts: transferEligibleAccounts,
         fromAccountId: accountId,
         toAccountId,
+        preferredFromAccountId: preferredAccountId,
       });
 
       if (resolved.fromAccountId && resolved.fromAccountId !== accountId) {
@@ -484,6 +509,7 @@ export function QuickAddSheet() {
       accounts: postableAccounts,
       history,
       userId,
+      preferredAccountId,
     });
 
     if (!userPickedAccount && suggestion.accountId) {
@@ -508,6 +534,7 @@ export function QuickAddSheet() {
     userPickedCategory,
     accountId,
     toAccountId,
+    preferredAccountId,
   ]);
 
   useEffect(() => {
@@ -937,7 +964,33 @@ export function QuickAddSheet() {
           ) : (
             <>
               <div className="mt-4 space-y-2">
-                <p className="text-sm font-medium">Conta</p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-medium">Conta</p>
+                  {accountId ? (
+                    <button
+                      type="button"
+                      onClick={() => togglePreferredAccount(accountId)}
+                      className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                      data-testid="quick-add-toggle-favorite-account"
+                      aria-label={
+                        preferredAccountId === accountId
+                          ? "Remover conta favorita"
+                          : "Definir conta selecionada como favorita"
+                      }
+                    >
+                      <Star
+                        className={cn(
+                          "size-3.5",
+                          preferredAccountId === accountId &&
+                            "fill-amber-400 text-amber-500",
+                        )}
+                      />
+                      {preferredAccountId === accountId
+                        ? "Favorita"
+                        : "Tornar favorita"}
+                    </button>
+                  ) : null}
+                </div>
                 {loadingData ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="size-4 animate-spin" />
@@ -951,6 +1004,7 @@ export function QuickAddSheet() {
                   <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
                     {postableAccounts.map((account) => {
                       const selected = account.id === accountId;
+                      const isFavorite = preferredAccountId === account.id;
 
                       return (
                         <button
@@ -958,7 +1012,7 @@ export function QuickAddSheet() {
                           type="button"
                           onClick={() => handleAccountSelect(account.id)}
                           className={cn(
-                            "inline-flex shrink-0 items-center rounded-full border px-2.5 py-1.5 text-sm font-medium transition-colors",
+                            "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-sm font-medium transition-colors",
                             selected
                               ? "border-primary bg-primary/10 text-primary"
                               : "border-border bg-background text-foreground hover:bg-muted/60",
@@ -966,6 +1020,12 @@ export function QuickAddSheet() {
                           data-testid={`quick-add-account-${account.id}`}
                         >
                           <AccountIdentityChipLabel account={account} />
+                          {isFavorite ? (
+                            <Star
+                              className="size-3 fill-amber-400 text-amber-500"
+                              aria-label="Conta favorita"
+                            />
+                          ) : null}
                         </button>
                       );
                     })}

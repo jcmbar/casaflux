@@ -10,6 +10,8 @@ import {
   Check,
   ChevronDown,
   CreditCard,
+  Eye,
+  EyeOff,
   Loader2,
   MoreHorizontal,
   Pause,
@@ -18,6 +20,7 @@ import {
   Plus,
   Repeat2,
   Search,
+  Star,
   Trash2,
   X,
 } from "lucide-react";
@@ -195,7 +198,16 @@ import {
   resolveTransactionOrigin,
 } from "@/lib/finance/transaction-origin";
 import { TRANSACTIONS_SELECT } from "@/lib/finance/transactions-query";
-import { formatCurrency, formatDate } from "@/lib/format";
+import { formatCurrencyOrHidden, formatDate } from "@/lib/format";
+import {
+  getHideAmounts,
+  getPreferredAccountFilter,
+  getPreferredAccountId,
+  resolveDefaultAccountId,
+  setHideAmounts,
+  setPreferredAccountFilter,
+  setPreferredAccountId,
+} from "@/lib/finance/user-ui-preferences";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
 import { canPostToAccount, type Account } from "@/types/account";
@@ -320,10 +332,12 @@ function PredictionDiffLine({
   diff,
   note,
   className = "",
+  hideAmounts = false,
 }: {
   diff: PredictionDiff;
   note?: string;
   className?: string;
+  hideAmounts?: boolean;
 }) {
   if (diff.kind === "equal") {
     return (
@@ -344,7 +358,7 @@ function PredictionDiffLine({
       className={`flex items-center gap-1 text-xs font-medium ${tone} ${className}`}
     >
       <Icon className="size-3.5 shrink-0" aria-hidden />
-      {formatCurrency(diff.amount)}{" "}
+      {formatCurrencyOrHidden(diff.amount, hideAmounts)}{" "}
       {diff.kind === "above" ? "acima" : "abaixo"} do previsto
     </p>
   );
@@ -353,9 +367,11 @@ function PredictionDiffLine({
 function SettlementDiffHint({
   predictedAmount,
   amountCents,
+  hideAmounts = false,
 }: {
   predictedAmount: number;
   amountCents: number;
+  hideAmounts?: boolean;
 }) {
   const isEmpty = amountCents <= 0;
   const diff = getPredictionDiff(
@@ -367,6 +383,7 @@ function SettlementDiffHint({
     <PredictionDiffLine
       diff={diff}
       className="-mt-2"
+      hideAmounts={hideAmounts}
       note={isEmpty ? "— deixe em branco para usar o valor previsto." : undefined}
     />
   );
@@ -489,6 +506,14 @@ function LancamentosPageContent() {
     amountCents: 0,
   });
   const [settling, setSettling] = useState(false);
+  const [preferredAccountId, setPreferredAccountIdState] = useState<
+    string | null
+  >(null);
+  const [preferredAccountFilter, setPreferredAccountFilterState] = useState<
+    string | null
+  >(null);
+  const accountFilterInitializedRef = useRef(false);
+  const [hideAmounts, setHideAmountsState] = useState(false);
   const [payInvoiceOpen, setPayInvoiceOpen] = useState(false);
   const [predictionOpen, setPredictionOpen] = useState(false);
   const [predictionSaving, setPredictionSaving] = useState(false);
@@ -567,6 +592,70 @@ function LancamentosPageContent() {
 
     return accounts.filter((account) => canPostToAccount(account, user.id));
   }, [accounts, user]);
+
+  const postableAccountIds = useMemo(
+    () => postableAccounts.map((account) => account.id),
+    [postableAccounts],
+  );
+
+  const defaultAccountId = useMemo(
+    () =>
+      resolveDefaultAccountId({
+        preferredId: preferredAccountId,
+        postableAccountIds,
+      }),
+    [preferredAccountId, postableAccountIds],
+  );
+
+  useEffect(() => {
+    if (!user?.id) {
+      setPreferredAccountIdState(null);
+      setPreferredAccountFilterState(null);
+      setHideAmountsState(false);
+      accountFilterInitializedRef.current = false;
+      return;
+    }
+    setPreferredAccountIdState(getPreferredAccountId(user.id));
+    setPreferredAccountFilterState(getPreferredAccountFilter(user.id));
+    setHideAmountsState(getHideAmounts(user.id));
+    accountFilterInitializedRef.current = false;
+  }, [user?.id]);
+
+  function toggleHideAmounts() {
+    if (!user?.id) return;
+    const next = !hideAmounts;
+    setHideAmounts(user.id, next);
+    setHideAmountsState(next);
+  }
+
+  function togglePreferredAccount(accountId: string) {
+    if (!user?.id || !accountId) return;
+    const next = preferredAccountId === accountId ? null : accountId;
+    setPreferredAccountId(user.id, next);
+    setPreferredAccountIdState(next);
+    toast.success(
+      next
+        ? "Conta marcada como favorita para novos lançamentos."
+        : "Conta favorita removida.",
+    );
+  }
+
+  function togglePreferredAccountFilter() {
+    if (!user?.id) return;
+    const next =
+      preferredAccountFilter === accountFilter ? null : accountFilter;
+    setPreferredAccountFilter(user.id, next);
+    setPreferredAccountFilterState(next);
+    toast.success(
+      next
+        ? "Filtro de conta marcado como favorito."
+        : "Filtro de conta favorito removido.",
+    );
+  }
+
+  function formatMoney(value: number) {
+    return formatCurrencyOrHidden(value, hideAmounts);
+  }
 
   const transferEligibleAccounts = useMemo(
     () =>
@@ -796,7 +885,12 @@ function LancamentosPageContent() {
       categoryId:
         current.categoryId ||
         getDefaultCategoryId(current.type, activeCategories),
-      accountId: current.accountId || loadedPostable[0]?.id || "",
+      accountId:
+        current.accountId ||
+        resolveDefaultAccountId({
+          preferredId: getPreferredAccountId(user?.id),
+          postableAccountIds: loadedPostable.map((account) => account.id),
+        }),
     }));
 
     setLoading(false);
@@ -888,11 +982,42 @@ function LancamentosPageContent() {
 
   useEffect(() => {
     setPeriod(parsePeriodFromSearchParams(searchParams));
-    setAccountFilter(
-      resolveAccountFilter(searchParams.get("account"), accountIds),
-    );
     setTypeFilter(parseLancamentosTypeFilter(searchParams.get("type")));
     setOriginFilter(parseLancamentosOriginFilter(searchParams.get("origin")));
+
+    const accountParam = searchParams.get("account");
+    if (accountParam) {
+      setAccountFilter(resolveAccountFilter(accountParam, accountIds));
+      accountFilterInitializedRef.current = true;
+    } else if (!accountFilterInitializedRef.current) {
+      const preferred = user?.id ? getPreferredAccountFilter(user.id) : null;
+      const waitingForAccounts =
+        Boolean(preferred) &&
+        preferred !== ALL_ACCOUNTS_FILTER &&
+        accountIds.size === 0;
+
+      if (!waitingForAccounts) {
+        const resolved = resolveAccountFilter(preferred, accountIds);
+        setAccountFilter(resolved);
+        accountFilterInitializedRef.current = true;
+        if (resolved !== ALL_ACCOUNTS_FILTER) {
+          router.replace(
+            buildLancamentosUrl(
+              parsePeriodFromSearchParams(searchParams),
+              resolved,
+              parseSearchFromSearchParams(searchParams.get("search")),
+              {
+                type: parseLancamentosTypeFilter(searchParams.get("type")),
+                origin: parseLancamentosOriginFilter(searchParams.get("origin")),
+              },
+            ),
+            { scroll: false },
+          );
+        }
+      }
+    } else {
+      setAccountFilter(ALL_ACCOUNTS_FILTER);
+    }
 
     const fromUrl = parseSearchFromSearchParams(searchParams.get("search"));
     setAppliedSearchTerm((applied) => {
@@ -903,7 +1028,7 @@ function LancamentosPageContent() {
       setSearchTerm(fromUrl);
       return fromUrl;
     });
-  }, [accountIds, searchParams]);
+  }, [accountIds, router, searchParams, user?.id]);
 
   const quickFilterParams = useMemo(
     () =>
@@ -1501,7 +1626,12 @@ function LancamentosPageContent() {
   function resetForm() {
     setEditingId(null);
     setEditingRecurrenceId(null);
-    const defaultFrom = transferEligibleAccounts[0]?.id ?? postableAccounts[0]?.id ?? "";
+    const defaultFrom =
+      resolveDefaultAccountId({
+        preferredId: preferredAccountId,
+        postableAccountIds: transferEligibleAccounts.map((account) => account.id),
+      }) ||
+      defaultAccountId;
     const defaultTo =
       transferEligibleAccounts.find((account) => account.id !== defaultFrom)?.id ??
       "";
@@ -1510,7 +1640,7 @@ function LancamentosPageContent() {
       amount: "",
       type: "expense",
       categoryId: getDefaultCategoryId("expense", activeCategories),
-      accountId: postableAccounts[0]?.id ?? "",
+      accountId: defaultAccountId,
       toAccountId: defaultTo,
       date: new Date().toISOString().slice(0, 10),
       isRecurring: false,
@@ -1602,8 +1732,13 @@ function LancamentosPageContent() {
         type === "transfer"
           ? transferEligibleAccounts.some((account) => account.id === current.accountId)
             ? current.accountId
-            : transferEligibleAccounts[0]?.id ?? ""
-          : current.accountId || postableAccounts[0]?.id || "";
+            : resolveDefaultAccountId({
+                preferredId: preferredAccountId,
+                postableAccountIds: transferEligibleAccounts.map(
+                  (account) => account.id,
+                ),
+              })
+          : current.accountId || defaultAccountId;
 
       const nextTo =
         type === "transfer"
@@ -1772,7 +1907,7 @@ function LancamentosPageContent() {
     setSettleForm({
       accountId: predictedAccountIsPostable
         ? prediction.accountId!
-        : postableAccounts[0].id,
+        : defaultAccountId || postableAccounts[0]!.id,
       date: new Date().toISOString().slice(0, 10),
       amountCents: 0,
     });
@@ -2244,43 +2379,83 @@ function LancamentosPageContent() {
 
   return (
     <div className="space-y-6 md:space-y-8">
-      <PageIntro description="Visão unificada de receitas e despesas de contas bancárias e cartões de crédito." />
+      <div className="animate-enter flex items-start justify-between gap-3">
+        <PageIntro description="Visão unificada de receitas e despesas de contas bancárias e cartões de crédito." />
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className="shrink-0"
+          onClick={toggleHideAmounts}
+          aria-label={hideAmounts ? "Mostrar valores" : "Ocultar valores"}
+          data-testid="lancamentos-toggle-hide-amounts"
+        >
+          {hideAmounts ? (
+            <EyeOff className="size-4" />
+          ) : (
+            <Eye className="size-4" />
+          )}
+        </Button>
+      </div>
 
       <PeriodFilterBar period={period} onChange={updatePeriod} />
 
       <div className="animate-enter flex flex-col gap-3 rounded-xl border border-border/50 bg-card p-4 shadow-sm sm:flex-row sm:items-end sm:justify-between">
-        <FormSelect
-          id="lancamentos-account-filter"
-          label="Conta"
-          value={accountFilter}
-          onChange={(event) =>
-            updateAccountFilter(
-              resolveAccountFilter(event.target.value, accountIds),
-            )
-          }
-          className="sm:min-w-64"
-          data-testid="lancamentos-account-filter"
-        >
-          <option value={ALL_ACCOUNTS_FILTER}>Todas as contas</option>
-          {bankAccounts.length > 0 ? (
-            <optgroup label="Contas">
-              {bankAccounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {formatAccountSelectLabel(account, { includeScope: true })}
-                </option>
-              ))}
-            </optgroup>
-          ) : null}
-          {creditCards.length > 0 ? (
-            <optgroup label="Cartões">
-              {creditCards.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {formatAccountSelectLabel(account, { includeScope: true })}
-                </option>
-              ))}
-            </optgroup>
-          ) : null}
-        </FormSelect>
+        <div className="space-y-2 sm:min-w-64">
+          <FormSelect
+            id="lancamentos-account-filter"
+            label="Conta"
+            value={accountFilter}
+            onChange={(event) =>
+              updateAccountFilter(
+                resolveAccountFilter(event.target.value, accountIds),
+              )
+            }
+            data-testid="lancamentos-account-filter"
+          >
+            <option value={ALL_ACCOUNTS_FILTER}>
+              Todas as contas
+              {preferredAccountFilter === ALL_ACCOUNTS_FILTER ? " ★" : ""}
+            </option>
+            {bankAccounts.length > 0 ? (
+              <optgroup label="Contas">
+                {bankAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {formatAccountSelectLabel(account, { includeScope: true })}
+                    {preferredAccountFilter === account.id ? " ★" : ""}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            {creditCards.length > 0 ? (
+              <optgroup label="Cartões">
+                {creditCards.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {formatAccountSelectLabel(account, { includeScope: true })}
+                    {preferredAccountFilter === account.id ? " ★" : ""}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+          </FormSelect>
+          <button
+            type="button"
+            onClick={togglePreferredAccountFilter}
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            data-testid="lancamentos-toggle-favorite-account-filter"
+          >
+            <Star
+              className={cn(
+                "size-3.5",
+                preferredAccountFilter === accountFilter &&
+                  "fill-amber-400 text-amber-500",
+              )}
+            />
+            {preferredAccountFilter === accountFilter
+              ? "Filtro favorito ao abrir Lançamentos"
+              : "Definir como favorito"}
+          </button>
+        </div>
 
         <p className="text-xs text-muted-foreground sm:max-w-xs sm:text-right">
           Inclui contas bancárias e cartões. Limpeza em lote:{" "}
@@ -2300,6 +2475,7 @@ function LancamentosPageContent() {
           cycle={cardStatement?.cycle}
           referenceDate={statementReferenceDate}
           className="animate-enter"
+          hideAmounts={hideAmounts}
           onPayInvoice={() => setPayInvoiceOpen(true)}
           payInvoiceDisabled={invoicePaymentSourceAccounts.length === 0}
         />
@@ -2995,23 +3171,47 @@ function LancamentosPageContent() {
                     ))}
                   </FormSelect>
 
-                  <FormSelect
-                    id="account"
-                    label="Conta"
-                    value={form.accountId}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        accountId: event.target.value,
-                      }))
-                    }
-                  >
-                    {postableAccounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {formatAccountSelectLabel(account, { includeScope: true })}
-                      </option>
-                    ))}
-                  </FormSelect>
+                  <div className="space-y-2">
+                    <FormSelect
+                      id="account"
+                      label="Conta"
+                      value={form.accountId}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          accountId: event.target.value,
+                        }))
+                      }
+                    >
+                      {postableAccounts.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {formatAccountSelectLabel(account, {
+                            includeScope: true,
+                          })}
+                          {preferredAccountId === account.id ? " ★" : ""}
+                        </option>
+                      ))}
+                    </FormSelect>
+                    {form.accountId ? (
+                      <button
+                        type="button"
+                        onClick={() => togglePreferredAccount(form.accountId)}
+                        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                        data-testid="lancamentos-toggle-favorite-account"
+                      >
+                        <Star
+                          className={cn(
+                            "size-3.5",
+                            preferredAccountId === form.accountId &&
+                              "fill-amber-400 text-amber-500",
+                          )}
+                        />
+                        {preferredAccountId === form.accountId
+                          ? "Conta favorita para novos lançamentos"
+                          : "Definir como favorita"}
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               )}
 
@@ -3293,7 +3493,7 @@ function LancamentosPageContent() {
                     className={`shrink-0 font-semibold tabular-nums ${typeMap[settleTarget.type].valueClass}`}
                   >
                     {settleTarget.type === "expense" ? "-" : ""}
-                    {formatCurrency(settleTarget.amount)}
+                    {formatMoney(settleTarget.amount)}
                   </span>
                 </div>
               </div>
@@ -3346,7 +3546,7 @@ function LancamentosPageContent() {
                         amountCents: nextCents,
                       }))
                     }
-                    placeholder={formatCurrency(settleTarget.amount)}
+                    placeholder={formatMoney(settleTarget.amount)}
                     className="h-10 w-full min-w-0 rounded-lg border border-input bg-surface-sunken/60 px-2.5 py-1 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/40"
                     data-testid="settle-amount-input"
                   />
@@ -3356,6 +3556,7 @@ function LancamentosPageContent() {
               <SettlementDiffHint
                 predictedAmount={settleTarget.amount}
                 amountCents={settleForm.amountCents}
+                hideAmounts={hideAmounts}
               />
 
               <SheetFooter className="px-0 pb-2">
@@ -3415,7 +3616,7 @@ function LancamentosPageContent() {
               className="text-2xl font-semibold text-primary tabular-nums sm:text-3xl"
               data-testid="lancamentos-income-total"
             >
-              {formatCurrency(incomes)}
+              {formatMoney(incomes)}
             </p>
           </div>
 
@@ -3429,7 +3630,7 @@ function LancamentosPageContent() {
               className="text-2xl font-semibold text-destructive tabular-nums sm:text-3xl"
               data-testid="lancamentos-expense-total"
             >
-              {formatCurrency(expenses)}
+              {formatMoney(expenses)}
             </p>
           </div>
 
@@ -3442,7 +3643,7 @@ function LancamentosPageContent() {
                 className="text-2xl font-semibold text-destructive tabular-nums sm:text-3xl"
                 data-testid="lancamentos-amount-due-total"
               >
-                {formatCurrency(amountDue)}
+                {formatMoney(amountDue)}
               </p>
             </div>
           ) : null}
@@ -3467,7 +3668,7 @@ function LancamentosPageContent() {
               }`}
               data-testid="lancamentos-balance-total"
             >
-              {formatCurrency(
+              {formatMoney(
                 cardStatement?.usesStatementCycle
                   ? cardStatement.settlement.remainingTotal
                   : balance,
@@ -3497,7 +3698,7 @@ function LancamentosPageContent() {
                 className="text-xl font-semibold tabular-nums sm:text-2xl"
                 data-testid="monthly-predicted-total"
               >
-                {formatCurrency(monthlyPredictionAggregates.predicted)}
+                {formatMoney(monthlyPredictionAggregates.predicted)}
               </p>
             </div>
 
@@ -3507,7 +3708,7 @@ function LancamentosPageContent() {
                 className="text-xl font-semibold tabular-nums sm:text-2xl"
                 data-testid="monthly-realized-total"
               >
-                {formatCurrency(monthlyPredictionAggregates.realized)}
+                {formatMoney(monthlyPredictionAggregates.realized)}
               </p>
             </div>
 
@@ -3523,11 +3724,14 @@ function LancamentosPageContent() {
                 }`}
                 data-testid="monthly-prediction-delta"
               >
-                {formatCurrency(
+                {formatMoney(
                   Math.abs(monthlyPredictionAggregates.delta),
                 )}
               </p>
-              <PredictionDiffLine diff={monthlyPredictionDiff} />
+              <PredictionDiffLine
+                diff={monthlyPredictionDiff}
+                hideAmounts={hideAmounts}
+              />
             </div>
           </CardContent>
         </Card>
@@ -3684,7 +3888,7 @@ function LancamentosPageContent() {
                           className={`font-semibold tabular-nums ${config.valueClass}`}
                         >
                           {recurrence.type === "expense" ? "-" : ""}
-                          {formatCurrency(recurrence.amount)}
+                          {formatMoney(recurrence.amount)}
                         </span>
                         <label className="flex items-center gap-2 text-xs text-muted-foreground">
                           <input
@@ -3966,7 +4170,7 @@ function LancamentosPageContent() {
                               className={`font-semibold tabular-nums ${config.valueClass}`}
                             >
                               {prediction.type === "expense" ? "-" : ""}
-                              {formatCurrency(prediction.amount)}
+                              {formatMoney(prediction.amount)}
                             </span>
                             <div className="flex items-center gap-1.5">
                               <label className="mr-1 flex items-center gap-2 text-xs text-muted-foreground">
@@ -4252,6 +4456,7 @@ function LancamentosPageContent() {
                           <PredictionDiffLine
                             diff={settledDiff}
                             className="mt-1.5"
+                            hideAmounts={hideAmounts}
                           />
                         ) : null}
                       </div>
@@ -4274,7 +4479,7 @@ function LancamentosPageContent() {
                           {transaction.type === "expense" || transferOut
                             ? "-"
                             : ""}
-                          {formatCurrency(transaction.amount)}
+                          {formatMoney(transaction.amount)}
                         </span>
                       </div>
 

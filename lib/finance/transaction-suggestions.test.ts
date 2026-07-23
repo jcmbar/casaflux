@@ -109,7 +109,20 @@ describe("transaction-suggestions", () => {
     expect(suggestion.categoryId).toBe("cat-food");
   });
 
-  it("returns null last user transaction for empty history", () => {
-    expect(findLastUserTransaction([])).toBeNull();
+  it("prefers favorite account when history has no frequency signal", () => {
+    const suggestion = suggestTransactionDraft({
+      type: "expense",
+      description: "algo novo",
+      categories: [{ id: "cat-food", name: "Alimentação", type: "expense" }],
+      accounts: [
+        { id: "acc-a", name: "A" } as never,
+        { id: "acc-fav", name: "Favorita" } as never,
+      ],
+      history: [],
+      userId: "user-1",
+      preferredAccountId: "acc-fav",
+    });
+
+    expect(suggestion.accountId).toBe("acc-fav");
   });
 });

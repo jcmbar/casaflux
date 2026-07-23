@@ -47,11 +47,18 @@ export function resolveQuickAddTransferAccounts(input: {
   accounts: Array<Pick<Account, "id" | "type">>;
   fromAccountId: string;
   toAccountId: string;
+  preferredFromAccountId?: string | null;
 }): { fromAccountId: string; toAccountId: string } {
   const eligible = filterTransferEligibleAccounts(input.accounts);
+  const preferredFrom =
+    input.preferredFromAccountId &&
+    eligible.some((account) => account.id === input.preferredFromAccountId)
+      ? input.preferredFromAccountId
+      : null;
+
   const fromAccountId = eligible.some((account) => account.id === input.fromAccountId)
     ? input.fromAccountId
-    : (eligible[0]?.id ?? "");
+    : (preferredFrom ?? eligible[0]?.id ?? "");
 
   const toAccountId = eligible.some(
     (account) =>

@@ -9,6 +9,21 @@ export function formatCurrency(
   }).format(value);
 }
 
+/** Stable mask for privacy mode — never reveals magnitude. */
+export const HIDDEN_CURRENCY_PLACEHOLDER = "R$ ••••";
+
+export function formatCurrencyOrHidden(
+  value: number,
+  hideAmounts: boolean,
+  locale = "pt-BR",
+  currency = "BRL",
+): string {
+  if (hideAmounts) {
+    return HIDDEN_CURRENCY_PLACEHOLDER;
+  }
+  return formatCurrency(value, locale, currency);
+}
+
 export function formatDate(
   value: string | Date,
   locale = "pt-BR",

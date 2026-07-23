@@ -152,6 +152,17 @@ describe("resolveQuickAddTransferAccounts", () => {
       }),
     ).toEqual({ fromAccountId: "c1", toAccountId: "invest" });
   });
+
+  it("prefers favorite from-account when current from is empty", () => {
+    expect(
+      resolveQuickAddTransferAccounts({
+        accounts,
+        fromAccountId: "",
+        toAccountId: "",
+        preferredFromAccountId: "invest",
+      }),
+    ).toEqual({ fromAccountId: "invest", toAccountId: "c1" });
+  });
 });
 
 describe("buildQuickAddTransferInput", () => {

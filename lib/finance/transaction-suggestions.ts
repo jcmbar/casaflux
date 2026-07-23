@@ -139,6 +139,7 @@ export function findLastUserTransaction(
 function suggestAccountFromFrequency(
   userHistory: Transaction[],
   accounts: Account[],
+  preferredAccountId?: string | null,
 ): string | null {
   const frequency = new Map<string, number>();
 
@@ -159,7 +160,16 @@ function suggestAccountFromFrequency(
     }
   }
 
-  return bestAccountId ?? accounts[0]?.id ?? null;
+  if (bestAccountId) return bestAccountId;
+
+  if (
+    preferredAccountId &&
+    accounts.some((account) => account.id === preferredAccountId)
+  ) {
+    return preferredAccountId;
+  }
+
+  return accounts[0]?.id ?? null;
 }
 
 function suggestCategoryFromFrequency(
@@ -208,10 +218,11 @@ function buildSuggestionFromTransaction(
   userHistory: Transaction[],
   source: SuggestionSource,
   confidence: number,
+  preferredAccountId?: string | null,
 ): TransactionDraftSuggestion {
   const accountId = isValidAccount(transaction.accountId, accounts)
     ? transaction.accountId
-    : suggestAccountFromFrequency(userHistory, accounts);
+    : suggestAccountFromFrequency(userHistory, accounts, preferredAccountId);
 
   const categoryId = isValidCategory(transaction.categoryId, categories, type)
     ? transaction.categoryId
@@ -233,6 +244,7 @@ export function suggestTransactionDraft({
   accounts,
   history,
   userId,
+  preferredAccountId = null,
 }: {
   type: TransactionType;
   description: string;
@@ -240,6 +252,7 @@ export function suggestTransactionDraft({
   accounts: Account[];
   history: Transaction[];
   userId: string;
+  preferredAccountId?: string | null;
 }): TransactionDraftSuggestion {
   const userHistory = history.filter(
     (transaction) =>
@@ -263,6 +276,7 @@ export function suggestTransactionDraft({
         userHistory,
         "similar",
         Math.min(0.5 + score * 0.5, 1),
+        preferredAccountId,
       );
     }
   } else {
@@ -278,11 +292,16 @@ export function suggestTransactionDraft({
         userHistory,
         "last_user",
         0.65,
+        preferredAccountId,
       );
     }
   }
 
-  const accountId = suggestAccountFromFrequency(userHistory, accounts);
+  const accountId = suggestAccountFromFrequency(
+    userHistory,
+    accounts,
+    preferredAccountId,
+  );
   const categoryId = suggestCategoryFromFrequency(
     userHistory,
     categories,
