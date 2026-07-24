@@ -19,3 +19,9 @@ export function isPlatformAdminRole(
 ): role is "admin" | "master" {
   return role === "admin" || role === "master";
 }
+
+export function isPlatformMasterRole(
+  role: string | null | undefined,
+): role is "master" {
+  return role === "master";
+}

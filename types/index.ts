@@ -16,7 +16,7 @@ export type {
   ProfileAppRole,
   ProfileStatus,
 } from "./profile";
-export { isPlatformAdminRole } from "./profile";
+export { isPlatformAdminRole, isPlatformMasterRole } from "./profile";
 export type {
   FinancialPrediction,
   FinancialPredictionRow,

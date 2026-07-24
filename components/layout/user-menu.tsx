@@ -1,6 +1,6 @@
 "use client";
 
-import { LogOut, Settings2 } from "lucide-react";
+import { LogOut, Settings2, Shield } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 import { useAppContext } from "@/contexts/app-context";
@@ -14,6 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { isPlatformMasterRole } from "@/types/profile";
 import { cn } from "@/lib/utils";
 
 function getInitials(name: string) {
@@ -29,6 +30,8 @@ function getInitials(name: string) {
 export function UserMenu() {
   const router = useRouter();
   const { profile, activeFamily, signOut } = useAppContext();
+  const showBackoffice =
+    profile?.status === "active" && isPlatformMasterRole(profile.app_role);
 
   async function handleSignOut() {
     await signOut();
@@ -92,6 +95,12 @@ export function UserMenu() {
           <Settings2 className="h-4 w-4" />
           Configurações
         </DropdownMenuItem>
+        {showBackoffice ? (
+          <DropdownMenuItem onClick={() => router.push("/admin/usuarios")}>
+            <Shield className="h-4 w-4" />
+            Painel administrativo
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem onClick={() => handleSignOut()}>
           <LogOut className="h-4 w-4" />
           Sair

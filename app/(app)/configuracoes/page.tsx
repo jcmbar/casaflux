@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, Eraser, Loader2, Settings2 } from "lucide-react";
+import { AlertTriangle, Eraser, Loader2, Settings2, Shield } from "lucide-react";
 import Link from "next/link";
 
 import { useConfirm } from "@/components/feedback/confirm-dialog-provider";
@@ -21,6 +21,7 @@ import {
 } from "@/lib/finance/cleanup-finance-data";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/lib/toast";
+import { isPlatformMasterRole } from "@/types/profile";
 
 type BlockOption = {
   id: Exclude<CleanupFinanceBlock, "all">;
@@ -58,10 +59,8 @@ export default function ConfiguracoesPage() {
   const supabase = useMemo(() => createClient()!, []);
   const confirm = useConfirm();
   const { user, profile, activeFamily, isFamilyAdmin } = useAppContext();
-  const isPlatformAdmin =
-    profile?.status !== "inactive" &&
-    profile?.status !== "deleted" &&
-    (profile?.app_role === "admin" || profile?.app_role === "master");
+  const showMasterBackoffice =
+    profile?.status === "active" && isPlatformMasterRole(profile.app_role);
   const [selected, setSelected] = useState<
     Record<Exclude<CleanupFinanceBlock, "all">, boolean>
   >({
@@ -177,20 +176,30 @@ export default function ConfiguracoesPage() {
             </Link>
             .
           </p>
-          {isPlatformAdmin ? (
-            <p>
-              Acesso administrativo:{" "}
-              <Link
-                href="/admin/usuarios"
-                className="font-medium text-foreground underline-offset-4 hover:underline"
-              >
-                Backoffice de usuários
-              </Link>
-              .
-            </p>
-          ) : null}
         </CardContent>
       </Card>
+
+      {showMasterBackoffice ? (
+        <Card className="animate-enter border-border/40 bg-muted/20 shadow-none">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <Shield className="size-4" />
+              Ferramentas internas
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>Acesso restrito à operação da plataforma.</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              render={<Link href="/admin/usuarios" />}
+            >
+              Painel administrativo
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <ProfileSettingsCard />
 
