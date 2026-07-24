@@ -57,7 +57,11 @@ const BLOCK_OPTIONS: BlockOption[] = [
 export default function ConfiguracoesPage() {
   const supabase = useMemo(() => createClient()!, []);
   const confirm = useConfirm();
-  const { user, activeFamily, isFamilyAdmin } = useAppContext();
+  const { user, profile, activeFamily, isFamilyAdmin } = useAppContext();
+  const isPlatformAdmin =
+    profile?.status !== "inactive" &&
+    profile?.status !== "deleted" &&
+    (profile?.app_role === "admin" || profile?.app_role === "master");
   const [selected, setSelected] = useState<
     Record<Exclude<CleanupFinanceBlock, "all">, boolean>
   >({
@@ -173,6 +177,18 @@ export default function ConfiguracoesPage() {
             </Link>
             .
           </p>
+          {isPlatformAdmin ? (
+            <p>
+              Acesso administrativo:{" "}
+              <Link
+                href="/admin/usuarios"
+                className="font-medium text-foreground underline-offset-4 hover:underline"
+              >
+                Backoffice de usuários
+              </Link>
+              .
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 

@@ -11,7 +11,12 @@ export type {
   FamilyWithMembership,
 } from "./family";
 export type { Goal, GoalStatus } from "./goal";
-export type { Profile } from "./profile";
+export type {
+  Profile,
+  ProfileAppRole,
+  ProfileStatus,
+} from "./profile";
+export { isPlatformAdminRole } from "./profile";
 export type {
   FinancialPrediction,
   FinancialPredictionRow,
