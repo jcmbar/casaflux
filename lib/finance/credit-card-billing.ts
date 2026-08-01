@@ -602,6 +602,7 @@ export function getStatementSettlement(input: {
   let cyclePurchasesTotal = 0;
   let rolledInPurchasesTotal = 0;
   let paidTotal = 0;
+  let importedPaidTotal = 0;
   let purchaseCount = 0;
   let rolledInPurchaseCount = 0;
   let paymentCount = 0;
@@ -648,6 +649,10 @@ export function getStatementSettlement(input: {
     ) {
       paidTotal += amount;
       paymentCount += 1;
+      // Manual-only residuals must not invent an issuer bill total below.
+      if (transaction.invoicePaymentOrigin !== "manual") {
+        importedPaidTotal += amount;
+      }
     }
   }
 
@@ -661,19 +666,25 @@ export function getStatementSettlement(input: {
       ? null
       : roundMoney(Number(input.cycle.issuerAmountDue));
   paidTotal = roundMoney(paidTotal);
+  importedPaidTotal = roundMoney(importedPaidTotal);
 
   const isPersistedBill =
     input.cycle.source === "imported" || input.cycle.source === "manual";
 
   // Derived: purchase window only (never issuer amount_due).
   // Imported/manual: issuer amount_due is the bill total when present.
-  // Fallback: purchase window (incl. virada when requested) or linked payment
-  // when the bill was settled without a stored issuer total.
+  // Fallback: purchase window, or linked payment when a real bill was settled
+  // without a stored issuer total (purchases and/or imported payments).
+  // Do not invent "A pagar" from residual-only manual credits.
   let amountDueTotal: number;
   if (isPersistedBill) {
     if (issuerAmountDue != null && issuerAmountDue > MONEY_EPSILON) {
       amountDueTotal = issuerAmountDue;
-    } else if (paidTotal > computedAmountDue + MONEY_EPSILON) {
+    } else if (
+      paidTotal > computedAmountDue + MONEY_EPSILON &&
+      (computedAmountDue > MONEY_EPSILON ||
+        importedPaidTotal > MONEY_EPSILON)
+    ) {
       amountDueTotal = paidTotal;
     } else {
       amountDueTotal = computedAmountDue;

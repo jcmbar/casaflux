@@ -648,6 +648,62 @@ describe("statement payment cycle + settlement status", () => {
     expect(settlement.remainingTotal).toBe(0);
   });
 
+  it("does not invent A pagar from residual-only manual credits", () => {
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle: {
+        ...julyCycle,
+        source: "imported",
+        issuerAmountDue: null,
+      },
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-07-27",
+          type: "income",
+          amount: 4365.53,
+          statementCycleId: "2026-07-20",
+          statementDueDate: julyCycle.dueDate,
+          invoicePaymentOrigin: "manual",
+        },
+      ],
+      referenceDate: "2026-08-01",
+    });
+
+    expect(settlement.amountDueTotal).toBe(0);
+    expect(settlement.paidTotal).toBe(4365.53);
+    expect(settlement.remainingTotal).toBe(0);
+    expect(settlement.status).toBe("paid");
+  });
+
+  it("still uses imported payment as A pagar when amount_due is null and purchases are empty", () => {
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle: {
+        ...julyCycle,
+        source: "imported",
+        issuerAmountDue: null,
+      },
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-07-26",
+          type: "income",
+          amount: 2410.89,
+          statementCycleId: "2026-07-20",
+          invoicePaymentOrigin: "imported",
+        },
+      ],
+      referenceDate: "2026-07-26",
+    });
+
+    expect(settlement.amountDueTotal).toBe(2410.89);
+    expect(settlement.paidTotal).toBe(2410.89);
+    expect(settlement.remainingTotal).toBe(0);
+  });
+
   it("keeps derived cycles on purchase totals even if a stray issuer amount_due is present", () => {
     const settlement = getStatementSettlement({
       accountId: "card-1",
