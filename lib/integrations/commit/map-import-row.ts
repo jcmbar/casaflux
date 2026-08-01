@@ -226,26 +226,31 @@ export function getCommitImportValidationError(input: {
       input.statementDueDate?.slice(0, 10) ||
       input.statementFileCycle?.dueDate?.slice(0, 10) ||
       "";
-    const userClosingDate =
-      input.statementClosingDate?.slice(0, 10) ||
-      input.statementFileCycle?.closingDate?.slice(0, 10) ||
-      null;
+
+    const statementPeriod =
+      input.statementFileCycle?.periodStart &&
+      input.statementFileCycle?.periodEnd
+        ? {
+            start: input.statementFileCycle.periodStart.slice(0, 10),
+            end: input.statementFileCycle.periodEnd.slice(0, 10),
+          }
+        : (() => {
+            let min: string | null = null;
+            let max: string | null = null;
+            for (const row of input.previewRows) {
+              const date = row.date?.slice(0, 10) ?? "";
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+              if (min == null || date < min) min = date;
+              if (max == null || date > max) max = date;
+            }
+            return min && max ? { start: min, end: max } : null;
+          })();
 
     const materialized = resolveMaterializedImportStatementFileCycle({
       dueDate,
-      userClosingDate,
-      statementActivityMaxDate: (() => {
-        let max: string | null = null;
-        for (const row of input.previewRows) {
-          const date = row.date?.slice(0, 10) ?? "";
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-          if (max == null || date > max) max = date;
-        }
-        return max;
-      })(),
+      statementPeriod,
       billingConfig: input.billingConfig,
       importedCycles: input.importedStatementCycles,
-      confirmLowConfidenceClosing: input.confirmLowConfidenceClosing,
     });
 
     if (!materialized.ok) {

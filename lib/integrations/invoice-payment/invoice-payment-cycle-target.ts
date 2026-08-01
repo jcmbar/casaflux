@@ -485,14 +485,23 @@ export function isValidInvoicePaymentFileCycle(
 
   const closingDate = fileCycle.closingDate?.slice(0, 10) ?? "";
   const dueDate = fileCycle.dueDate?.slice(0, 10) ?? "";
+  const periodStart = fileCycle.periodStart?.slice(0, 10) ?? "";
+  const periodEnd = fileCycle.periodEnd?.slice(0, 10) ?? "";
   if (
     !/^\d{4}-\d{2}-\d{2}$/.test(closingDate) ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)
+    !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(periodStart) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(periodEnd)
   ) {
     return false;
   }
 
-  return closingDate <= dueDate;
+  if (periodStart > periodEnd) {
+    return false;
+  }
+
+  // Identity is dueDate; closingDate equals dueDate for imported file cycles.
+  return closingDate === dueDate || closingDate <= dueDate;
 }
 
 function buildAmountSummaryLine(input: {

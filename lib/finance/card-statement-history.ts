@@ -71,6 +71,11 @@ export type CardStatementHistoryItem = {
   isCurrent: boolean;
   /** True when dates/amount come from an imported or manual cycle record. */
   usesImportedCycle: boolean;
+  /**
+   * True when the bill total is still provisional (awaiting next CSV to confirm
+   * unpaid remainder via carried-balance lines).
+   */
+  isAmountDueProvisional: boolean;
 };
 
 export type CardStatementHistoryDetail = CardStatementHistoryItem & {
@@ -136,6 +141,13 @@ function isReferenceInsideCyclePeriod(
     compareIsoDates(referenceDate, cycle.periodStart) >= 0 &&
     compareIsoDates(referenceDate, cycle.periodEnd) <= 0
   );
+}
+
+function isImportedAmountDueProvisional(cycle: StatementCycle): boolean {
+  if (cycle.source !== "imported" && cycle.source !== "manual") {
+    return false;
+  }
+  return cycle.amountDueConfirmation !== "confirmed";
 }
 
 /**
@@ -470,12 +482,11 @@ export function buildCardStatementHistory(input: {
       cycle,
       transactions: input.transactions,
       referenceDate: input.referenceDate,
-      // Virada: open derived bill, or any imported/manual bill (issuer window).
-      // When issuerAmountDue is set it still wins for A pagar.
+      // Virada only for derived open bills. Imported cycles use the CSV period.
       includeRolledInPurchases:
-        isCurrent ||
-        cycle.source === "imported" ||
-        cycle.source === "manual",
+        isCurrent &&
+        cycle.source !== "imported" &&
+        cycle.source !== "manual",
     });
 
     return {
@@ -488,6 +499,7 @@ export function buildCardStatementHistory(input: {
       isCurrent,
       usesImportedCycle:
         cycle.source === "imported" || cycle.source === "manual",
+      isAmountDueProvisional: isImportedAmountDueProvisional(cycle),
     };
   });
 }
@@ -539,6 +551,7 @@ export function buildCardStatementHistoryDetail(input: {
           dueDate: imported.dueDate,
           source: imported.source,
           issuerAmountDue: imported.amountDue,
+          amountDueConfirmation: imported.amountDueConfirmation,
         }
       : buildStatementCycle({
           closingDate: input.cycleId.slice(0, 10),
@@ -557,9 +570,9 @@ export function buildCardStatementHistoryDetail(input: {
       transactions: input.transactions,
       referenceDate: input.referenceDate,
       includeRolledInPurchases:
-        isCurrent ||
-        cycle.source === "imported" ||
-        cycle.source === "manual",
+        isCurrent &&
+        cycle.source !== "imported" &&
+        cycle.source !== "manual",
     });
 
     return {
@@ -572,6 +585,7 @@ export function buildCardStatementHistoryDetail(input: {
       isCurrent,
       usesImportedCycle:
         cycle.source === "imported" || cycle.source === "manual",
+      isAmountDueProvisional: isImportedAmountDueProvisional(cycle),
       cardAccountId: input.cardAccount.id,
       cardAccountName: input.cardAccount.name,
       payments: listStatementCyclePayments({

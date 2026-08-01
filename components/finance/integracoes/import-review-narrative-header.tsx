@@ -172,6 +172,7 @@ export function ImportReviewNarrativeHeader({
               label="Total da fatura"
               value={formatCurrency(financialSummary.invoiceTotal)}
               tone="primary"
+              hint="Provisório até o próximo extrato"
             />
             <DenseStat
               label="Pagamentos"

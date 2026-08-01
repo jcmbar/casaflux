@@ -64,6 +64,7 @@ describe("mergeCardStatementCycleUpsertWithExisting", () => {
     ).toEqual({
       importBatchId: "batch-old",
       amountDue: 4654.46,
+      amountDueConfirmation: "provisional",
       notes: "Ciclo do arquivo novo",
     });
   });
@@ -115,8 +116,34 @@ describe("mergeCardStatementCycleUpsertWithExisting", () => {
     ).toEqual({
       importBatchId: "batch-new",
       amountDue: null,
+      amountDueConfirmation: "provisional",
       notes: "Reimport",
     });
+  });
+
+  it("never downgrades confirmed amount_due to provisional", () => {
+    expect(
+      mergeCardStatementCycleUpsertWithExisting({
+        incoming: {
+          accountId: "card-1",
+          ownerUserId: "user-1",
+          closingDate: "2026-05-25",
+          periodStart: "2026-04-26",
+          periodEnd: "2026-05-25",
+          dueDate: "2026-06-01",
+          amountDue: 100,
+          amountDueConfirmation: "provisional",
+          source: "imported",
+          importBatchId: "batch-new",
+        },
+        existing: {
+          importBatchId: "batch-old",
+          amountDue: 1847.34,
+          amountDueConfirmation: "confirmed",
+          notes: null,
+        },
+      }).amountDueConfirmation,
+    ).toBe("confirmed");
   });
 
   it("lifts amount_due when a later settlement payment exceeds the CSV net", () => {

@@ -435,7 +435,7 @@ describe("buildCardStatementHistory", () => {
     expect(may.status).toBe("paid");
   });
 
-  it("for imported bills without issuer total, includes virada in the purchase fallback", () => {
+  it("for imported bills without issuer total, uses CSV period only (no virada heuristic)", () => {
     const history = buildCardStatementHistory({
       cardAccount: CARD,
       referenceDate: "2026-08-10",
@@ -473,9 +473,9 @@ describe("buildCardStatementHistory", () => {
 
     const may = history!.find((item) => item.cycle.cycleId === "2026-05-25")!;
     expect(may.settlement.cyclePurchasesTotal).toBe(3790.98);
-    expect(may.settlement.rolledInPurchasesTotal).toBe(863.48);
-    expect(may.settlement.amountDueTotal).toBe(4654.46);
-    expect(may.settlement.remainingTotal).toBe(4654.46);
+    expect(may.settlement.rolledInPurchasesTotal).toBe(0);
+    expect(may.settlement.amountDueTotal).toBe(3790.98);
+    expect(may.settlement.remainingTotal).toBe(3790.98);
   });
 
   it("prefers issuer amount_due on imported bills even when purchases differ", () => {

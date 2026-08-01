@@ -6,6 +6,9 @@ export type CreditCardBillingConfig = {
   statementDueDay: number;
 };
 
+/** Whether issuerAmountDue is still from this CSV or confirmed by N+1. */
+export type StatementAmountDueConfirmation = "provisional" | "confirmed";
+
 export type StatementCycle = {
   /** Stable id: closing date ISO (YYYY-MM-DD). */
   cycleId: string;
@@ -17,6 +20,11 @@ export type StatementCycle = {
   source?: "derived" | "imported" | "manual";
   /** Issuer bill total when known from import/manual capture. */
   issuerAmountDue?: number | null;
+  /**
+   * provisional: total from this bill's CSV (may change after next import).
+   * confirmed: next CSV carried lines (or no carry = fully paid) settled remainder.
+   */
+  amountDueConfirmation?: StatementAmountDueConfirmation | null;
 };
 
 export type StatementCycleRelation = "current" | "previous" | "next" | "other";

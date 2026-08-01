@@ -4,10 +4,13 @@ import {
   buildStatementCycle,
   compareIsoDates,
   type CreditCardBillingConfig,
+  type StatementAmountDueConfirmation,
   type StatementCycle,
 } from "@/lib/finance/credit-card-billing";
 
 export type CardStatementCycleSource = "imported" | "manual" | "derived";
+
+export type { StatementAmountDueConfirmation };
 
 export type CardStatementCycleRecord = {
   id: string;
@@ -19,6 +22,8 @@ export type CardStatementCycleRecord = {
   periodEnd: string;
   dueDate: string;
   amountDue: number | null;
+  /** Defaults to provisional when omitted (e.g. older fixtures). */
+  amountDueConfirmation?: StatementAmountDueConfirmation;
   source: CardStatementCycleSource;
   importBatchId: string | null;
   notes: string | null;
@@ -33,6 +38,7 @@ export type CardStatementCycleUpsertInput = {
   periodEnd: string;
   dueDate: string;
   amountDue?: number | null;
+  amountDueConfirmation?: StatementAmountDueConfirmation | null;
   source: Exclude<CardStatementCycleSource, "derived">;
   importBatchId?: string | null;
   notes?: string | null;
@@ -48,10 +54,20 @@ type CardStatementCycleRow = {
   period_end: string;
   due_date: string;
   amount_due: number | string | null;
+  amount_due_confirmation?: StatementAmountDueConfirmation | null;
   source: CardStatementCycleSource;
   import_batch_id: string | null;
   notes: string | null;
 };
+
+const CYCLE_SELECT =
+  "id, account_id, owner_user_id, family_id, closing_date, period_start, period_end, due_date, amount_due, amount_due_confirmation, source, import_batch_id, notes";
+
+function normalizeAmountDueConfirmation(
+  value: string | null | undefined,
+): StatementAmountDueConfirmation {
+  return value === "confirmed" ? "confirmed" : "provisional";
+}
 
 export function mapCardStatementCycleRow(
   row: CardStatementCycleRow,
@@ -69,6 +85,9 @@ export function mapCardStatementCycleRow(
       row.amount_due == null || row.amount_due === ""
         ? null
         : Number(row.amount_due),
+    amountDueConfirmation: normalizeAmountDueConfirmation(
+      row.amount_due_confirmation,
+    ),
     source: row.source,
     importBatchId: row.import_batch_id,
     notes: row.notes,
@@ -86,6 +105,7 @@ export function cardStatementCycleRecordToStatementCycle(
     dueDate: record.dueDate,
     source: record.source,
     issuerAmountDue: record.amountDue,
+    amountDueConfirmation: record.amountDueConfirmation ?? "provisional",
   };
 }
 
@@ -313,6 +333,13 @@ export function mergeStatementCyclesWithImported(input: {
       ...imported,
       issuerAmountDue:
         imported.issuerAmountDue ?? existing.issuerAmountDue ?? null,
+      amountDueConfirmation:
+        imported.amountDueConfirmation === "confirmed" ||
+        existing.amountDueConfirmation === "confirmed"
+          ? "confirmed"
+          : (imported.amountDueConfirmation ??
+            existing.amountDueConfirmation ??
+            "provisional"),
     });
   }
 
@@ -332,9 +359,7 @@ export async function fetchCardStatementCyclesForAccount(
 }> {
   const { data, error } = await supabase
     .from("card_statement_cycles")
-    .select(
-      "id, account_id, owner_user_id, family_id, closing_date, period_start, period_end, due_date, amount_due, source, import_batch_id, notes",
-    )
+    .select(CYCLE_SELECT)
     .eq("account_id", accountId)
     .order("closing_date", { ascending: false });
 
@@ -364,10 +389,11 @@ export function mergeCardStatementCycleUpsertWithExisting(input: {
   incoming: CardStatementCycleUpsertInput;
   existing: Pick<
     CardStatementCycleRecord,
-    "importBatchId" | "amountDue" | "notes"
+    "importBatchId" | "amountDue" | "notes" | "amountDueConfirmation"
   > | null;
 }): {
   amountDue: number | null;
+  amountDueConfirmation: StatementAmountDueConfirmation;
   importBatchId: string | null;
   notes: string | null;
 } {
@@ -397,8 +423,17 @@ export function mergeCardStatementCycleUpsertWithExisting(input: {
     amountDue = existingAmount;
   }
 
+  // Never downgrade confirmed → provisional.
+  const incomingConfirmation = input.incoming.amountDueConfirmation ?? null;
+  const existingConfirmation = input.existing?.amountDueConfirmation ?? null;
+  const amountDueConfirmation: StatementAmountDueConfirmation =
+    incomingConfirmation === "confirmed" || existingConfirmation === "confirmed"
+      ? "confirmed"
+      : "provisional";
+
   return {
     amountDue,
+    amountDueConfirmation,
     importBatchId:
       input.existing?.importBatchId ?? input.incoming.importBatchId ?? null,
     notes: input.incoming.notes ?? input.existing?.notes ?? null,
@@ -413,7 +448,7 @@ export async function upsertCardStatementCycle(
 
   const { data: existingRow, error: existingError } = await supabase
     .from("card_statement_cycles")
-    .select("id, import_batch_id, amount_due, notes")
+    .select("id, import_batch_id, amount_due, amount_due_confirmation, notes")
     .eq("account_id", input.accountId)
     .eq("closing_date", closingDate)
     .maybeSingle();
@@ -429,6 +464,9 @@ export async function upsertCardStatementCycle(
           existingRow.amount_due == null || existingRow.amount_due === ""
             ? null
             : Number(existingRow.amount_due),
+        amountDueConfirmation: normalizeAmountDueConfirmation(
+          existingRow.amount_due_confirmation as string | null,
+        ),
         notes: (existingRow.notes as string | null) ?? null,
       }
     : null;
@@ -447,6 +485,7 @@ export async function upsertCardStatementCycle(
     period_end: input.periodEnd.slice(0, 10),
     due_date: input.dueDate.slice(0, 10),
     amount_due: merged.amountDue,
+    amount_due_confirmation: merged.amountDueConfirmation,
     source: input.source,
     import_batch_id: merged.importBatchId,
     notes: merged.notes,
@@ -456,9 +495,7 @@ export async function upsertCardStatementCycle(
   const { data, error } = await supabase
     .from("card_statement_cycles")
     .upsert(payload, { onConflict: "account_id,closing_date" })
-    .select(
-      "id, account_id, owner_user_id, family_id, closing_date, period_start, period_end, due_date, amount_due, source, import_batch_id, notes",
-    )
+    .select(CYCLE_SELECT)
     .single();
 
   if (error || !data) {

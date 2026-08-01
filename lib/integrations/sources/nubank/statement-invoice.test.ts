@@ -251,16 +251,108 @@ describe("cross-file prior-cycle enrichment", () => {
       accountId: "card-1",
       ownerUserId: "user-1",
       fileCycle: {
-        closingDate: "2026-02-25",
+        closingDate: "2026-03-01",
         dueDate: "2026-03-01",
+        periodStart: "2026-02-01",
+        periodEnd: "2026-02-25",
       },
+      // Prior due must already exist (user imported that bill) — never invent.
+      existingDueDates: ["2026-02-01"],
+      existingCycles: [
+        {
+          dueDate: "2026-02-01",
+          closingDate: "2026-02-01",
+          periodStart: "2026-01-01",
+          periodEnd: "2026-01-31",
+          amountDue: 1847.34,
+        },
+      ],
     });
 
     const prior = upserts.find((item) => item.dueDate === "2026-02-01");
     expect(prior?.amountDue).toBe(1847.34);
+    expect(prior?.amountDueConfirmation).toBe("confirmed");
 
-    const fileBill = upserts.find((item) => item.closingDate === "2026-02-25");
+    const fileBill = upserts.find((item) => item.dueDate === "2026-03-01");
     expect(fileBill?.amountDue).toBeGreaterThan(0);
+    expect(fileBill?.amountDueConfirmation).toBe("provisional");
+  });
+
+  it("confirms prior as settled when next file has no carried balance", () => {
+    const upserts = buildImportedCardStatementCycleUpserts({
+      rows: [
+        row({
+          sourceLine: 1,
+          date: "2026-02-10",
+          amount: 100,
+          description: "Padaria",
+        }),
+      ],
+      billingConfig: {
+        statementClosingDay: 25,
+        statementDueDay: 1,
+      },
+      accountId: "card-1",
+      ownerUserId: "user-1",
+      fileCycle: {
+        closingDate: "2026-03-01",
+        dueDate: "2026-03-01",
+        periodStart: "2026-02-01",
+        periodEnd: "2026-02-25",
+      },
+      existingDueDates: ["2026-02-01"],
+      existingCycles: [
+        {
+          dueDate: "2026-02-01",
+          closingDate: "2026-01-25",
+          periodStart: "2026-01-01",
+          periodEnd: "2026-01-25",
+          amountDue: 500,
+        },
+      ],
+    });
+
+    const prior = upserts.find((item) => item.dueDate === "2026-02-01");
+    expect(prior?.amountDueConfirmation).toBe("confirmed");
+    expect(prior?.closingDate).toBe("2026-01-25");
+    expect(prior?.amountDue).toBe(500);
+
+    const fileBill = upserts.find((item) => item.dueDate === "2026-03-01");
+    expect(fileBill?.amountDueConfirmation).toBe("provisional");
+  });
+
+  it("does not invent a ghost due from Saldo em atraso alone", () => {
+    const upserts = buildImportedCardStatementCycleUpserts({
+      rows: [
+        row({
+          sourceLine: 1,
+          date: "2026-06-30",
+          amount: 1302.36,
+          description: "Saldo em atraso",
+        }),
+        row({
+          sourceLine: 2,
+          date: "2026-06-10",
+          amount: 100,
+          description: "Padaria",
+        }),
+      ],
+      billingConfig: {
+        statementClosingDay: 20,
+        statementDueDay: 27,
+      },
+      accountId: "card-1",
+      ownerUserId: "user-1",
+      fileCycle: {
+        closingDate: "2026-06-29",
+        dueDate: "2026-06-29",
+        periodStart: "2026-05-21",
+        periodEnd: "2026-06-20",
+      },
+    });
+
+    expect(upserts.every((item) => item.dueDate !== "2026-06-30")).toBe(true);
+    expect(upserts.some((item) => item.dueDate === "2026-06-29")).toBe(true);
   });
 
   it("lifts prior amount_due from post-closing settlement payment", () => {
@@ -290,8 +382,10 @@ describe("cross-file prior-cycle enrichment", () => {
       accountId: "card-1",
       ownerUserId: "user-1",
       fileCycle: {
-        closingDate: "2026-05-25",
+        closingDate: "2026-06-01",
         dueDate: "2026-06-01",
+        periodStart: "2026-05-01",
+        periodEnd: "2026-05-25",
       },
       invoicePaymentModes: { 1: "payment" },
       invoicePaymentCycleTargets: {

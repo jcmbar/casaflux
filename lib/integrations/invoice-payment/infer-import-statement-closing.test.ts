@@ -1,40 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import type { CardStatementCycleRecord } from "@/lib/finance/card-statement-cycles";
-import type { CreditCardBillingConfig } from "@/lib/finance/credit-card-billing";
-import { inferImportStatementClosing, resolveMaterializedImportStatementFileCycle } from "@/lib/integrations/invoice-payment/infer-import-statement-closing";
-
-const CONFIG: CreditCardBillingConfig = {
-  statementClosingDay: 25,
-  statementDueDay: 1,
-};
-
-function makeCycle(
-  overrides: Partial<CardStatementCycleRecord> &
-    Pick<CardStatementCycleRecord, "closingDate" | "dueDate">,
-): CardStatementCycleRecord {
-  return {
-    id: overrides.id ?? `cycle-${overrides.closingDate}`,
-    accountId: overrides.accountId ?? "card-1",
-    ownerUserId: overrides.ownerUserId ?? "user-1",
-    familyId: overrides.familyId ?? null,
-    closingDate: overrides.closingDate,
-    dueDate: overrides.dueDate,
-    periodStart: overrides.periodStart ?? "2026-03-26",
-    periodEnd: overrides.periodEnd ?? overrides.closingDate,
-    source: overrides.source ?? "imported",
-    amountDue: overrides.amountDue ?? 100,
-    importBatchId: overrides.importBatchId ?? null,
-    notes: overrides.notes ?? null,
-  };
-}
+import {
+  inferImportStatementClosing,
+  resolveMaterializedImportStatementFileCycle,
+} from "@/lib/integrations/invoice-payment/infer-import-statement-closing";
 
 describe("inferImportStatementClosing", () => {
   it("returns none when due date is invalid", () => {
     expect(
       inferImportStatementClosing({
         dueDate: "",
-        billingConfig: CONFIG,
+        statementPeriod: { start: "2026-05-01", end: "2026-05-20" },
       }),
     ).toEqual({
       confidence: "none",
@@ -43,194 +19,67 @@ describe("inferImportStatementClosing", () => {
     });
   });
 
-  it("uses user closing with high confidence", () => {
+  it("uses statement period end as informational closing", () => {
     expect(
       inferImportStatementClosing({
         dueDate: "2026-06-01",
-        userClosingDate: "2026-05-23",
-        billingConfig: CONFIG,
+        statementPeriod: { start: "2026-05-01", end: "2026-05-20" },
       }),
     ).toMatchObject({
       confidence: "high",
-      closingDate: "2026-05-23",
+      closingDate: "2026-05-20",
     });
   });
 
-  it("rejects user closing after due", () => {
+  it("warns when period end is after due", () => {
     expect(
       inferImportStatementClosing({
-        dueDate: "2026-06-01",
-        userClosingDate: "2026-06-10",
-        billingConfig: CONFIG,
-      }),
-    ).toMatchObject({
-      confidence: "none",
-      closingDate: null,
-    });
-  });
-
-  it("reuses imported cycle closing for the same due (high)", () => {
-    expect(
-      inferImportStatementClosing({
-        dueDate: "2026-06-01",
-        billingConfig: CONFIG,
-        importedCycles: [
-          makeCycle({
-            closingDate: "2026-05-23",
-            dueDate: "2026-06-01",
-          }),
-        ],
-      }),
-    ).toMatchObject({
-      confidence: "high",
-      closingDate: "2026-05-23",
-    });
-  });
-
-  it("prefers last CSV activity date as closing (high when aligned to card day)", () => {
-    expect(
-      inferImportStatementClosing({
-        dueDate: "2026-06-01",
-        billingConfig: CONFIG,
-        statementActivityMaxDate: "2026-05-25",
-      }),
-    ).toMatchObject({
-      confidence: "high",
-      closingDate: "2026-05-25",
-    });
-  });
-
-  it("uses last CSV activity date with low confidence when it diverges from card day", () => {
-    expect(
-      inferImportStatementClosing({
-        dueDate: "2026-06-01",
-        billingConfig: CONFIG,
-        statementActivityMaxDate: "2026-05-20",
+        dueDate: "2026-05-15",
+        statementPeriod: { start: "2026-05-01", end: "2026-05-20" },
       }),
     ).toMatchObject({
       confidence: "low",
       closingDate: "2026-05-20",
     });
   });
-
-  it("returns high when card days exactly reproduce the due", () => {
-    // closing 25/05 + due day 1 → due 01/06
-    expect(
-      inferImportStatementClosing({
-        dueDate: "2026-06-01",
-        billingConfig: CONFIG,
-      }),
-    ).toMatchObject({
-      confidence: "high",
-      closingDate: "2026-05-25",
-    });
-  });
-
-  it("returns low when only the approximate fallback applies", () => {
-    // Due day 15 does not match config due day 1 → fallback month-before closing.
-    expect(
-      inferImportStatementClosing({
-        dueDate: "2026-06-15",
-        billingConfig: CONFIG,
-      }),
-    ).toMatchObject({
-      confidence: "low",
-      closingDate: "2026-05-25",
-    });
-  });
-
-  it("infers billing days from history when card config is missing", () => {
-    expect(
-      inferImportStatementClosing({
-        dueDate: "2026-07-01",
-        importedCycles: [
-          makeCycle({
-            closingDate: "2026-05-25",
-            dueDate: "2026-06-01",
-          }),
-        ],
-      }),
-    ).toMatchObject({
-      confidence: "high",
-      closingDate: "2026-06-25",
-    });
-  });
-
-  it("returns none without config and without history", () => {
-    expect(
-      inferImportStatementClosing({
-        dueDate: "2026-06-01",
-      }),
-    ).toMatchObject({
-      confidence: "none",
-      closingDate: null,
-    });
-  });
 });
 
 describe("resolveMaterializedImportStatementFileCycle", () => {
-  it("materializes high confidence without confirmation", () => {
+  it("materializes identity = due date and period from CSV", () => {
     const result = resolveMaterializedImportStatementFileCycle({
-      dueDate: "2026-06-01",
-      billingConfig: CONFIG,
+      dueDate: "2026-06-29",
+      statementPeriod: { start: "2026-05-20", end: "2026-06-18" },
     });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.cycle).toEqual({
-      closingDate: "2026-05-25",
-      dueDate: "2026-06-01",
-      periodStart: "2026-04-26",
-      periodEnd: "2026-05-25",
+      // Never invent 30/06 from card closing day — identity is the due informed.
+      closingDate: "2026-06-29",
+      dueDate: "2026-06-29",
+      periodStart: "2026-05-20",
+      periodEnd: "2026-06-18",
     });
-    expect(result.inference.confidence).toBe("high");
   });
 
-  it("blocks low confidence without confirmation", () => {
-    const result = resolveMaterializedImportStatementFileCycle({
-      dueDate: "2026-06-15",
-      billingConfig: CONFIG,
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.message).toMatch(/confirme o fechamento/i);
-    expect(result.inference.confidence).toBe("low");
-  });
-
-  it("materializes low confidence when explicitly confirmed", () => {
-    const result = resolveMaterializedImportStatementFileCycle({
-      dueDate: "2026-06-15",
-      billingConfig: CONFIG,
-      confirmLowConfidenceClosing: true,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.cycle.closingDate).toBe("2026-05-25");
-    expect(result.inference.confidence).toBe("low");
-  });
-
-  it("blocks none without user closing", () => {
+  it("requires a statement period from the CSV", () => {
     const result = resolveMaterializedImportStatementFileCycle({
       dueDate: "2026-06-01",
     });
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.message).toMatch(/fechamento/i);
-    expect(result.inference.confidence).toBe("none");
+    expect(result.message).toMatch(/período/i);
   });
 
-  it("accepts user closing as high materialization", () => {
+  it("requires due date", () => {
     const result = resolveMaterializedImportStatementFileCycle({
-      dueDate: "2026-06-01",
-      userClosingDate: "2026-05-23",
+      dueDate: "",
+      statementPeriod: { start: "2026-05-01", end: "2026-05-20" },
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.cycle.closingDate).toBe("2026-05-23");
-    expect(result.inference.confidence).toBe("high");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toMatch(/vencimento/i);
   });
 });

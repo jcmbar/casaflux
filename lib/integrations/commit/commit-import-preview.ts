@@ -6,7 +6,10 @@ import {
   type CreditCardBillingConfig,
 } from "@/lib/finance/credit-card-billing";
 import { applyInvoicePaymentReconciliationsForBatch } from "@/lib/finance/reconcile-invoice-payment";
-import { upsertCardStatementCycle } from "@/lib/finance/card-statement-cycles";
+import {
+  fetchCardStatementCyclesForAccount,
+  upsertCardStatementCycle,
+} from "@/lib/finance/card-statement-cycles";
 import { snapshotCategoryClassificationMemory } from "@/lib/integrations/categories/category-classification-memory";
 import type { Account } from "@/types/account";
 import { buildImportedCardStatementCycleUpserts } from "../invoice-payment/capture-imported-statement-cycle";
@@ -179,26 +182,31 @@ export function resolveCommitStatementFileCycle(
     input.statementDueDate?.slice(0, 10) ||
     input.statementFileCycle?.dueDate?.slice(0, 10) ||
     "";
-  const userClosingDate =
-    input.statementClosingDate?.slice(0, 10) ||
-    input.statementFileCycle?.closingDate?.slice(0, 10) ||
-    null;
+
+  const statementPeriod =
+    input.statementFileCycle?.periodStart &&
+    input.statementFileCycle?.periodEnd
+      ? {
+          start: input.statementFileCycle.periodStart.slice(0, 10),
+          end: input.statementFileCycle.periodEnd.slice(0, 10),
+        }
+      : (() => {
+          let min: string | null = null;
+          let max: string | null = null;
+          for (const row of input.preview.rows) {
+            const date = row.date?.slice(0, 10) ?? "";
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+            if (min == null || date < min) min = date;
+            if (max == null || date > max) max = date;
+          }
+          return min && max ? { start: min, end: max } : null;
+        })();
 
   return resolveMaterializedImportStatementFileCycle({
     dueDate,
-    userClosingDate,
-    statementActivityMaxDate: (() => {
-      let max: string | null = null;
-      for (const row of input.preview.rows) {
-        const date = row.date?.slice(0, 10) ?? "";
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-        if (max == null || date > max) max = date;
-      }
-      return max;
-    })(),
+    statementPeriod,
     billingConfig,
     importedCycles: input.importedStatementCycles,
-    confirmLowConfidenceClosing: input.confirmLowConfidenceClosing,
   });
 }
 
@@ -388,6 +396,10 @@ export async function commitImportPreview(
           ? materialized.cycle
           : input.statementFileCycle ?? null;
 
+      const existingCycles = await fetchCardStatementCyclesForAccount(
+        supabase,
+        input.targetAccountId,
+      );
       const cycleUpserts = buildImportedCardStatementCycleUpserts({
         rows: input.preview.rows,
         billingConfig,
@@ -399,6 +411,14 @@ export async function commitImportPreview(
         importBatchId: batchId,
         invoicePaymentModes: input.invoicePaymentModes,
         invoicePaymentCycleTargets: input.invoicePaymentCycleTargets,
+        existingDueDates: existingCycles.cycles.map((cycle) => cycle.dueDate),
+        existingCycles: existingCycles.cycles.map((cycle) => ({
+          dueDate: cycle.dueDate,
+          closingDate: cycle.closingDate,
+          periodStart: cycle.periodStart,
+          periodEnd: cycle.periodEnd,
+          amountDue: cycle.amountDue,
+        })),
       });
 
       for (const cycleUpsert of cycleUpserts) {

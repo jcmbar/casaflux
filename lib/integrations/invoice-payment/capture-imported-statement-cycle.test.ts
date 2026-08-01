@@ -42,8 +42,10 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       ownerUserId: "user-1",
       fileName: "Nubank_2026-08-01.csv",
       fileCycle: {
-        closingDate: "2026-07-25",
+        closingDate: "2026-08-01",
         dueDate: "2026-08-01",
+        periodStart: "2026-07-25",
+        periodEnd: "2026-07-25",
       },
       importBatchId: "batch-1",
       invoicePaymentModes: { 1: "payment" },
@@ -53,7 +55,7 @@ describe("buildImportedCardStatementCycleUpserts", () => {
     expect(upserts).toHaveLength(1);
     expect(upserts[0]).toMatchObject({
       accountId: "card-1",
-      closingDate: "2026-07-25",
+      closingDate: "2026-08-01",
       dueDate: "2026-08-01",
       amountDue: null,
       source: "imported",
@@ -97,8 +99,10 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       accountId: "card-1",
       ownerUserId: "user-1",
       fileCycle: {
-        closingDate: "2026-05-25",
+        closingDate: "2026-06-01",
         dueDate: "2026-06-01",
+        periodStart: "2026-05-25",
+        periodEnd: "2026-05-25",
       },
       invoicePaymentModes: { 3: "payment" },
       invoicePaymentCycleTargets: {
@@ -106,7 +110,7 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       },
     });
 
-    const fileBill = upserts.find((row) => row.closingDate === "2026-05-25");
+    const fileBill = upserts.find((row) => row.dueDate === "2026-06-01");
     expect(fileBill).toMatchObject({
       dueDate: "2026-06-01",
       amountDue: 4654.46,
@@ -165,8 +169,10 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       accountId: "card-1",
       ownerUserId: "user-1",
       fileCycle: {
-        closingDate: "2026-06-23",
+        closingDate: "2026-07-01",
         dueDate: "2026-07-01",
+        periodStart: "2026-06-23",
+        periodEnd: "2026-06-23",
       },
       invoicePaymentModes: { 3: "payment" },
       invoicePaymentCycleTargets: {
@@ -174,7 +180,7 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       },
     });
 
-    const fileBill = upserts.find((row) => row.closingDate === "2026-06-23");
+    const fileBill = upserts.find((row) => row.dueDate === "2026-07-01");
     expect(fileBill?.amountDue).toBe(3598.42);
   });
 
@@ -252,13 +258,15 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       accountId: "card-1",
       ownerUserId: "user-1",
       fileCycle: {
-        closingDate: "2026-01-20",
+        closingDate: "2026-02-01",
         dueDate: "2026-02-01",
+        periodStart: "2026-01-20",
+        periodEnd: "2026-01-20",
       },
       invoicePaymentModes: { 1: "payment" },
     });
 
-    const fileBill = upserts.find((item) => item.closingDate === "2026-01-20");
+    const fileBill = upserts.find((item) => item.dueDate === "2026-02-01");
     // 900 + 500 + 450 + 12.30 − 15 = 1847.30; Dec payment excluded as prior.
     expect(fileBill?.amountDue).toBe(1847.3);
   });
@@ -289,13 +297,20 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       rows: [
         row({
           sourceLine: 1,
+          date: "2026-01-05",
+          amount: 50,
+          description: "Saldo em atraso",
+          direction: "out",
+        }),
+        row({
+          sourceLine: 2,
           date: "2026-01-10",
           amount: 1000,
           description: "Mercado",
           direction: "out",
         }),
         row({
-          sourceLine: 2,
+          sourceLine: 3,
           date: "2026-01-15",
           amount: 200,
           description: "Pagamento recebido",
@@ -309,16 +324,17 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       accountId: "card-1",
       ownerUserId: "user-1",
       fileCycle: {
-        closingDate: "2026-01-25",
+        closingDate: "2026-02-01",
         dueDate: "2026-02-01",
+        periodStart: "2026-01-05",
+        periodEnd: "2026-01-15",
       },
-      invoicePaymentModes: { 2: "payment" },
+      invoicePaymentModes: { 3: "payment" },
     });
 
-    // previousDue from closing 25/01 → prior closing 25/12 → due 01/01;
-    // payment on 15/01 applies to this bill.
-    const fileBill = upserts.find((item) => item.closingDate === "2026-01-25");
-    expect(fileBill?.amountDue).toBe(800);
+    // previousDue = Saldo em atraso date (01-05); payment on 15/01 applies.
+    const fileBill = upserts.find((item) => item.dueDate === "2026-02-01");
+    expect(fileBill?.amountDue).toBe(850);
   });
 
   it("does not let a payment tagged to another due reduce the file amount_due", () => {
@@ -353,8 +369,10 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       accountId: "card-1",
       ownerUserId: "user-1",
       fileCycle: {
-        closingDate: "2026-05-25",
+        closingDate: "2026-06-01",
         dueDate: "2026-06-01",
+        periodStart: "2026-05-25",
+        periodEnd: "2026-05-25",
       },
       invoicePaymentModes: { 2: "payment" },
       invoicePaymentCycleTargets: {
@@ -362,7 +380,7 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       },
     });
 
-    const fileBill = upserts.find((row) => row.closingDate === "2026-05-25");
+    const fileBill = upserts.find((row) => row.dueDate === "2026-06-01");
     expect(fileBill?.amountDue).toBe(1000);
 
     const previous = upserts.find((row) => row.dueDate === "2026-05-04");
@@ -385,8 +403,10 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       accountId: "card-1",
       ownerUserId: "user-1",
       fileCycle: {
-        closingDate: "2026-04-24",
+        closingDate: "2026-05-24",
         dueDate: "2026-05-24",
+        periodStart: "2026-04-24",
+        periodEnd: "2026-04-24",
       },
       invoicePaymentModes: { 1: "payment" },
       invoicePaymentCycleTargets: {
@@ -394,11 +414,13 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       },
     });
 
-    // Must not invent closing 2026-04-25 from statement_closing_day=25.
+    // Identity is the due the user informed — never invent closing from card day.
     expect(upserts).toEqual([
       expect.objectContaining({
-        closingDate: "2026-04-24",
+        closingDate: "2026-05-24",
         dueDate: "2026-05-24",
+        periodStart: "2026-04-24",
+        periodEnd: "2026-04-24",
         amountDue: null,
       }),
     ]);
@@ -420,8 +442,10 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       accountId: "card-1",
       ownerUserId: "user-1",
       fileCycle: {
-        closingDate: "2026-04-24",
+        closingDate: "2026-05-24",
         dueDate: "2026-05-24",
+        periodStart: "2026-04-24",
+        periodEnd: "2026-04-24",
       },
       invoicePaymentModes: { 1: "payment" },
       // Force payment onto synthetic closing 04-25 while file is 04-24.

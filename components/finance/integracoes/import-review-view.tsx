@@ -81,9 +81,9 @@ import {
   type InvoicePaymentAmountMatchRecommendation,
 } from "@/lib/integrations/invoice-payment/recommend-invoice-payment-target-by-amount";
 import {
-  inferImportStatementClosing,
   resolveMaterializedImportStatementFileCycle,
 } from "@/lib/integrations/invoice-payment/infer-import-statement-closing";
+import { resolveNubankStatementPeriod } from "@/lib/integrations/sources/nubank/statement-period";
 import {
   buildInvoicePaymentCycleTargetOptions,
   buildInvoicePaymentDueDateOptions,
@@ -696,40 +696,18 @@ export function ImportReviewView() {
     [selectedCardAccount],
   );
 
-  const statementActivityMaxDate = useMemo(() => {
+  const statementPeriod = useMemo(() => {
     if (!requiresCardAccount || !activePreview) {
       return null;
     }
-    let max: string | null = null;
-    for (const row of activePreview.rows) {
-      if (row.historicalStatus === "already_imported") continue;
-      const date = row.date?.slice(0, 10) ?? "";
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-      if (max == null || date > max) max = date;
-    }
-    return max;
-  }, [activePreview, requiresCardAccount]);
-
-  const statementClosingInference = useMemo(() => {
-    if (!requiresCardAccount || !statementDueDate) {
-      return null;
-    }
-
-    return inferImportStatementClosing({
-      dueDate: statementDueDate,
-      userClosingDate: statementClosingDate || null,
-      statementActivityMaxDate,
-      billingConfig: cardBillingConfig,
-      importedCycles: importedStatementCycles,
+    return resolveNubankStatementPeriod({
+      rows: activePreview.rows.map((row) => ({
+        date: row.date,
+        include: row.historicalStatus !== "already_imported",
+      })),
+      textSources: [csvContent, fileName],
     });
-  }, [
-    cardBillingConfig,
-    importedStatementCycles,
-    requiresCardAccount,
-    statementActivityMaxDate,
-    statementClosingDate,
-    statementDueDate,
-  ]);
+  }, [activePreview, csvContent, fileName, requiresCardAccount]);
 
   const statementFileCycle = useMemo((): InvoicePaymentFileCycle | null => {
     if (!requiresCardAccount || !statementDueDate) {
@@ -738,22 +716,18 @@ export function ImportReviewView() {
 
     const materialized = resolveMaterializedImportStatementFileCycle({
       dueDate: statementDueDate,
-      userClosingDate: statementClosingDate || null,
-      statementActivityMaxDate,
+      statementPeriod,
       billingConfig: cardBillingConfig,
       importedCycles: importedStatementCycles,
-      confirmLowConfidenceClosing,
     });
 
     return materialized.ok ? materialized.cycle : null;
   }, [
     cardBillingConfig,
-    confirmLowConfidenceClosing,
     importedStatementCycles,
     requiresCardAccount,
-    statementActivityMaxDate,
-    statementClosingDate,
     statementDueDate,
+    statementPeriod,
   ]);
 
   const invoicePaymentCycleResolveContext =
@@ -1335,25 +1309,6 @@ export function ImportReviewView() {
       setStatementDueDate(dueFromFile);
     }
   }, [fileName, statementDueDate]);
-
-  useEffect(() => {
-    if (
-      !cardBillingConfig ||
-      !statementDueDate ||
-      statementClosingDate ||
-      !statementClosingInference ||
-      statementClosingInference.confidence !== "high"
-    ) {
-      return;
-    }
-
-    setStatementClosingDate(statementClosingInference.closingDate);
-  }, [
-    cardBillingConfig,
-    statementClosingDate,
-    statementClosingInference,
-    statementDueDate,
-  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2240,75 +2195,32 @@ export function ImportReviewView() {
                       value={statementDueDate}
                       onChange={(event) => {
                         setStatementDueDate(event.target.value);
-                        setConfirmLowConfidenceClosing(false);
-                        setStatementClosingDate("");
                       }}
                       required
                       data-testid="import-statement-due-date"
                       className="max-md:h-9"
                     />
-                    <FormInput
-                      id="statement-closing-date"
-                      label="Fechamento neste extrato"
-                      type="date"
-                      value={statementClosingDate}
-                      onChange={(event) => {
-                        setStatementClosingDate(event.target.value);
-                        setConfirmLowConfidenceClosing(false);
-                      }}
-                      required={
-                        statementClosingInference?.confidence === "none" ||
-                        (statementClosingInference?.confidence === "low" &&
-                          !confirmLowConfidenceClosing &&
-                          !statementClosingDate)
-                      }
-                      data-testid="import-statement-closing-date"
-                      className="max-md:h-9"
-                    />
+                    <div className="space-y-1.5">
+                      <p className="text-sm font-medium text-foreground">
+                        Período do extrato
+                      </p>
+                      <p
+                        className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-sm tabular-nums text-foreground max-md:min-h-9 max-md:py-1.5"
+                        data-testid="import-statement-period"
+                      >
+                        {statementPeriod
+                          ? `${statementPeriod.start} → ${statementPeriod.end}`
+                          : "Aguardando datas do CSV"}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Vem só do arquivo (min/max das datas
+                        {statementPeriod?.source === "explicit_text"
+                          ? " ou texto de período"
+                          : ""}
+                        ). O vencimento define o mês da fatura.
+                      </p>
+                    </div>
                   </div>
-
-                  {statementClosingInference?.confidence === "low" &&
-                  !confirmLowConfidenceClosing &&
-                  !statementClosingDate ? (
-                    <Alert
-                      className="border-amber-500/25 bg-amber-500/5"
-                      data-testid="import-statement-closing-low-confidence"
-                    >
-                      <AlertTriangle className="size-4" />
-                      <AlertTitle>Confirme o fechamento sugerido</AlertTitle>
-                      <AlertDescription className="space-y-2">
-                        <p>
-                          Inferimos {statementClosingInference.closingDate} a
-                          partir do cartão, mas a confiança é baixa. Confirme
-                          antes de aplicar.
-                        </p>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setStatementClosingDate(
-                              statementClosingInference.closingDate,
-                            );
-                            setConfirmLowConfidenceClosing(true);
-                          }}
-                          data-testid="import-confirm-low-confidence-closing"
-                        >
-                          Usar fechamento sugerido
-                        </Button>
-                      </AlertDescription>
-                    </Alert>
-                  ) : null}
-
-                  {statementClosingInference?.confidence === "high" &&
-                  statementClosingDate ? (
-                    <p
-                      className="text-[11px] text-muted-foreground"
-                      data-testid="import-statement-closing-high-confidence"
-                    >
-                      Fechamento definido automaticamente.
-                    </p>
-                  ) : null}
                 </>
               )}
             </div>

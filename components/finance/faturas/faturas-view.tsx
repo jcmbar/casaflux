@@ -405,7 +405,7 @@ function FaturasViewContent() {
 
   return (
     <div className="space-y-6 md:space-y-8">
-      <PageIntro description="Histórico de faturas do cartão: totais, status e pagamentos vinculados (manual, importado ou conciliado)." />
+      <PageIntro description="Histórico de faturas do cartão: totais, status e pagamentos. Faturas importadas ficam provisórias até o próximo extrato confirmar o restante." />
 
       {!detail ? (
         <UpcomingStatementDues
@@ -609,6 +609,16 @@ function StatementList({
                           Importada
                         </Badge>
                       ) : null}
+                      {item.isAmountDueProvisional ? (
+                        <Badge
+                          variant="outline"
+                          className="border-stone-500/25 bg-stone-500/10 text-stone-800 dark:text-stone-200"
+                          data-testid={`fatura-provisional-${item.cycle.cycleId}`}
+                          title="Restante confirmado na próxima importação do extrato"
+                        >
+                          Provisória
+                        </Badge>
+                      ) : null}
                     </div>
                     <p className="text-xs text-muted-foreground">
                       Vence em {item.dueDateLabel}
@@ -733,8 +743,26 @@ function StatementDetail({
                   Ciclo importado
                 </Badge>
               ) : null}
+              {detail.isAmountDueProvisional ? (
+                <Badge
+                  variant="outline"
+                  className="border-stone-500/25 bg-stone-500/10 text-stone-800 dark:text-stone-200"
+                  data-testid="fatura-detail-provisional"
+                >
+                  Provisória
+                </Badge>
+              ) : null}
             </div>
           </div>
+          {detail.isAmountDueProvisional ? (
+            <p
+              className="text-xs text-muted-foreground"
+              data-testid="fatura-detail-provisional-hint"
+            >
+              Total e restante ainda provisórios. A confirmação do que ficou em
+              aberto vem no próximo extrato (saldo em atraso / rotativo).
+            </p>
+          ) : null}
         </CardHeader>
         <CardContent className="space-y-4">
           <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
