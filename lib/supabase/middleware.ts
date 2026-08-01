@@ -8,13 +8,19 @@ const AUTH_ROUTES = [
   "/signup",
   "/forgot-password",
   "/reset-password",
+  "/set-password",
   "/auth/callback",
+  "/auth/confirm",
 ];
 
 function isAuthRoute(pathname: string) {
   return AUTH_ROUTES.some(
     (route) => pathname === route || pathname.startsWith(`${route}/`),
   );
+}
+
+function isPasswordSetupRoute(pathname: string) {
+  return pathname === "/reset-password" || pathname === "/set-password";
 }
 
 function isPublicRoute(pathname: string) {
@@ -75,8 +81,9 @@ export async function updateSession(request: NextRequest) {
   if (
     user &&
     isAuthRoute(pathname) &&
-    pathname !== "/reset-password" &&
-    !pathname.startsWith("/auth/callback")
+    !isPasswordSetupRoute(pathname) &&
+    !pathname.startsWith("/auth/callback") &&
+    !pathname.startsWith("/auth/confirm")
   ) {
     const redirectUrl = request.nextUrl.clone();
     redirectUrl.pathname = "/dashboard";
