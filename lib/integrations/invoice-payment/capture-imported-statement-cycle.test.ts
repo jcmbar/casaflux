@@ -112,11 +112,13 @@ describe("buildImportedCardStatementCycleUpserts", () => {
       amountDue: 4654.46,
     });
 
-    // Payment-targeted previous bill must not inherit the file purchase total.
+    // Post-closing settlement tagged to a previous due lifts that bill's
+    // amount_due to the payment amount (never the current file purchase total).
     const previous = upserts.find((row) => row.dueDate === "2026-05-04");
-    if (previous) {
-      expect(previous.amountDue).toBeNull();
-    }
+    expect(previous).toMatchObject({
+      amountDue: 100,
+    });
+    expect(previous?.closingDate).not.toBe("2026-05-25");
   });
 
   it("nets estorno/credits into the file amount_due", () => {

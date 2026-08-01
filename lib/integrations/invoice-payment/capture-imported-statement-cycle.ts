@@ -149,13 +149,25 @@ export function buildImportedCardStatementCycleUpserts(input: {
         fileCycle!.closingDate.slice(0, 10))
       : resolved.periodEnd;
 
+    const paymentAmount = roundMoney(Math.abs(Number(row.amount)));
+    const isPostClosingSettlement =
+      !useFileClosing &&
+      Number.isFinite(paymentAmount) &&
+      paymentAmount > 0.005 &&
+      row.date.slice(0, 10) > closingDate;
+
     const draft = buildImportedStatementCycleDraft({
       config: input.billingConfig,
       closingDate,
       dueDate,
-      // Payment amount is never the bill total. File total only when this
-      // closing is the imported statement itself.
-      amountDue: useFileClosing ? trustedFileAmountDue : null,
+      // File cycle keeps CSV purchase net. A payment tagged to another due
+      // after that bill's closing can lift amount_due to the settled total
+      // (Nubank bill the user actually paid).
+      amountDue: useFileClosing
+        ? trustedFileAmountDue
+        : isPostClosingSettlement
+          ? paymentAmount
+          : null,
       periodStart,
       periodEnd,
     });
@@ -171,6 +183,12 @@ export function buildImportedCardStatementCycleUpserts(input: {
       continue;
     }
 
+    const nextAmountDue = useFileClosing
+      ? trustedFileAmountDue
+      : isPostClosingSettlement
+        ? paymentAmount
+        : null;
+
     byClosing.set(draft.cycleId, {
       accountId: input.accountId,
       ownerUserId: input.ownerUserId,
@@ -179,7 +197,10 @@ export function buildImportedCardStatementCycleUpserts(input: {
       periodStart: draft.periodStart,
       periodEnd: draft.periodEnd,
       dueDate: draft.dueDate,
-      amountDue: useFileClosing ? trustedFileAmountDue : null,
+      amountDue:
+        nextAmountDue != null && existing?.amountDue != null
+          ? Math.max(nextAmountDue, Number(existing.amountDue))
+          : (nextAmountDue ?? existing?.amountDue ?? null),
       source: "imported",
       importBatchId: input.importBatchId ?? null,
       notes: fileCycle

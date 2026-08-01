@@ -749,6 +749,96 @@ describe("statement payment cycle + settlement status", () => {
     expect(settlement.remainingTotal).toBe(0);
   });
 
+  it("adds early + settlement payments into A pagar when both exist", () => {
+    // April: Nubank total 1613.81 after antecipação, plus early 600 paid in-period.
+    // Casaflux A pagar / Pago should be 600 + 1613.81 = 2213.81.
+    const aprilCycle = buildStatementCycle({
+      closingDate: "2026-04-20",
+      closingDay: 20,
+      dueDay: 27,
+    });
+
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle: {
+        ...aprilCycle,
+        source: "imported",
+        issuerAmountDue: 1524.62,
+      },
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-03-30",
+          type: "income",
+          amount: 600,
+          statementCycleId: "2026-04-20",
+          statementDueDate: aprilCycle.dueDate,
+          invoicePaymentOrigin: "imported",
+        },
+        {
+          accountId: "card-1",
+          date: "2026-04-30",
+          type: "income",
+          amount: 1613.81,
+          statementCycleId: "2026-04-20",
+          statementDueDate: aprilCycle.dueDate,
+          invoicePaymentOrigin: "imported",
+        },
+      ],
+      referenceDate: "2026-05-10",
+    });
+
+    expect(settlement.amountDueTotal).toBe(2213.81);
+    expect(settlement.paidTotal).toBe(2213.81);
+    expect(settlement.remainingTotal).toBe(0);
+    expect(settlement.status).toBe("paid");
+  });
+
+  it("still counts in-period payments when there is no post-closing settlement", () => {
+    const mayCycle = buildStatementCycle({
+      closingDate: "2026-05-20",
+      closingDay: 20,
+      dueDay: 27,
+    });
+
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle: {
+        ...mayCycle,
+        source: "imported",
+        issuerAmountDue: 2026.22,
+      },
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-05-09",
+          type: "income",
+          amount: 150,
+          statementCycleId: "2026-05-20",
+          statementDueDate: mayCycle.dueDate,
+          invoicePaymentOrigin: "imported",
+        },
+        {
+          accountId: "card-1",
+          date: "2026-05-15",
+          type: "income",
+          amount: 87.16,
+          statementCycleId: "2026-05-20",
+          statementDueDate: mayCycle.dueDate,
+          invoicePaymentOrigin: "imported",
+        },
+      ],
+      referenceDate: "2026-05-18",
+    });
+
+    expect(settlement.amountDueTotal).toBe(2026.22);
+    expect(settlement.paidTotal).toBe(237.16);
+    expect(settlement.remainingTotal).toBe(1789.06);
+    expect(settlement.status).toBe("partial");
+  });
+
   it("keeps derived cycles on purchase totals even if a stray issuer amount_due is present", () => {
     const settlement = getStatementSettlement({
       accountId: "card-1",

@@ -118,6 +118,30 @@ describe("mergeCardStatementCycleUpsertWithExisting", () => {
       notes: "Reimport",
     });
   });
+
+  it("lifts amount_due when a later settlement payment exceeds the CSV net", () => {
+    expect(
+      mergeCardStatementCycleUpsertWithExisting({
+        incoming: {
+          accountId: "card-1",
+          ownerUserId: "user-1",
+          closingDate: "2026-04-20",
+          periodStart: "2026-03-21",
+          periodEnd: "2026-04-20",
+          dueDate: "2026-04-27",
+          amountDue: 1613.81,
+          source: "imported",
+          importBatchId: "batch-may",
+          notes: "Quitação",
+        },
+        existing: {
+          importBatchId: "batch-apr",
+          amountDue: 1524.62,
+          notes: "CSV net",
+        },
+      }).amountDue,
+    ).toBe(1613.81);
+  });
 });
 
 describe("parseStatementDueDateFromFileName", () => {

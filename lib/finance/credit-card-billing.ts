@@ -601,11 +601,14 @@ export function getStatementSettlement(input: {
 }): StatementSettlement {
   let cyclePurchasesTotal = 0;
   let rolledInPurchasesTotal = 0;
-  let paidTotal = 0;
-  let importedPaidTotal = 0;
+  let settlementPaidTotal = 0;
+  let earlyPaidTotal = 0;
+  let settlementImportedPaidTotal = 0;
+  let earlyImportedPaidTotal = 0;
   let purchaseCount = 0;
   let rolledInPurchaseCount = 0;
   let paymentCount = 0;
+  let earlyPaymentCount = 0;
   const includeRolledIn = input.includeRolledInPurchases !== false;
 
   const windowInput = {
@@ -647,11 +650,20 @@ export function getStatementSettlement(input: {
       }) &&
       shouldCountPaymentTowardSettlement(transaction)
     ) {
-      paidTotal += amount;
-      paymentCount += 1;
-      // Manual-only residuals must not invent an issuer bill total below.
-      if (transaction.invoicePaymentOrigin !== "manual") {
-        importedPaidTotal += amount;
+      const isSettlementPayment =
+        compareIsoDates(transaction.date, input.cycle.closingDate) > 0;
+      if (isSettlementPayment) {
+        settlementPaidTotal += amount;
+        paymentCount += 1;
+        if (transaction.invoicePaymentOrigin !== "manual") {
+          settlementImportedPaidTotal += amount;
+        }
+      } else {
+        earlyPaidTotal += amount;
+        earlyPaymentCount += 1;
+        if (transaction.invoicePaymentOrigin !== "manual") {
+          earlyImportedPaidTotal += amount;
+        }
       }
     }
   }
@@ -665,22 +677,39 @@ export function getStatementSettlement(input: {
     input.cycle.issuerAmountDue == null
       ? null
       : roundMoney(Number(input.cycle.issuerAmountDue));
-  paidTotal = roundMoney(paidTotal);
-  importedPaidTotal = roundMoney(importedPaidTotal);
+  settlementPaidTotal = roundMoney(settlementPaidTotal);
+  earlyPaidTotal = roundMoney(earlyPaidTotal);
+  settlementImportedPaidTotal = roundMoney(settlementImportedPaidTotal);
+  earlyImportedPaidTotal = roundMoney(earlyImportedPaidTotal);
+
+  // Always count every attributed payment in Pago (early + settlement).
+  const hasSettlementPayment = settlementPaidTotal > MONEY_EPSILON;
+  const paidTotal = roundMoney(settlementPaidTotal + earlyPaidTotal);
+  const importedPaidTotal = roundMoney(
+    settlementImportedPaidTotal + earlyImportedPaidTotal,
+  );
+  const countedPaymentCount = paymentCount + earlyPaymentCount;
 
   const isPersistedBill =
     input.cycle.source === "imported" || input.cycle.source === "manual";
 
   // Derived: purchase window only (never issuer amount_due).
   // Imported/manual: issuer amount_due is the bill total when present.
-  // Fallback: invent from linked payment only when an imported payment
-  // proves a real settled bill (amount_due cleared / missing).
-  // Residual-only manual credits must not invent "A pagar" — including when
-  // stray virada purchases from an adjacent cycle inflate the window.
+  // When a later settlement payment exceeds the CSV net, lift to that amount
+  // (real Nubank total after "pagamento antecipado"). Then, if there were also
+  // in-period payments, add them back into A pagar so 600 + 1613.81 = 2213.81.
+  // Residual-only manual credits must not invent "A pagar".
   let amountDueTotal: number;
   if (isPersistedBill) {
     if (issuerAmountDue != null && issuerAmountDue > MONEY_EPSILON) {
-      amountDueTotal = issuerAmountDue;
+      const nubankBillTotal =
+        settlementPaidTotal > issuerAmountDue + MONEY_EPSILON
+          ? settlementPaidTotal
+          : issuerAmountDue;
+      amountDueTotal =
+        hasSettlementPayment && earlyPaidTotal > MONEY_EPSILON
+          ? roundMoney(nubankBillTotal + earlyPaidTotal)
+          : nubankBillTotal;
     } else if (
       paidTotal > computedAmountDue + MONEY_EPSILON &&
       importedPaidTotal > MONEY_EPSILON
@@ -723,7 +752,7 @@ export function getStatementSettlement(input: {
       referenceDate: input.referenceDate,
     }),
     purchaseCount,
-    paymentCount,
+    paymentCount: countedPaymentCount,
     rolledInPurchaseCount: includeRolledIn ? rolledInPurchaseCount : 0,
     issuerPurchaseGap,
   };

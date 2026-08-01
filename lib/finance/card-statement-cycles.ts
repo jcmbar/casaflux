@@ -357,6 +357,8 @@ export async function fetchCardStatementCyclesForAccount(
  * - Keep a trusted `amount_due` when the incoming payload omits/nulls it,
  *   but never resurrect issuer totals from an orphan (import_batch_id null).
  * - Prefer a new non-null issuer total from the file when provided.
+ * - When both sides have a total, keep the higher one so a later settlement
+ *   payment can lift an understated CSV net up to the real Nubank bill.
  */
 export function mergeCardStatementCycleUpsertWithExisting(input: {
   incoming: CardStatementCycleUpsertInput;
@@ -379,13 +381,24 @@ export function mergeCardStatementCycleUpsertWithExisting(input: {
       : Number(input.existing.amountDue);
   const existingIsOrphan = !input.existing?.importBatchId;
 
+  let amountDue: number | null;
+  if (
+    incomingAmount != null &&
+    Number.isFinite(incomingAmount) &&
+    existingAmount != null &&
+    Number.isFinite(existingAmount)
+  ) {
+    amountDue = Math.max(incomingAmount, existingAmount);
+  } else if (incomingAmount != null && Number.isFinite(incomingAmount)) {
+    amountDue = incomingAmount;
+  } else if (existingIsOrphan) {
+    amountDue = null;
+  } else {
+    amountDue = existingAmount;
+  }
+
   return {
-    amountDue:
-      incomingAmount != null && Number.isFinite(incomingAmount)
-        ? incomingAmount
-        : existingIsOrphan
-          ? null
-          : existingAmount,
+    amountDue,
     importBatchId:
       input.existing?.importBatchId ?? input.incoming.importBatchId ?? null,
     notes: input.incoming.notes ?? input.existing?.notes ?? null,
