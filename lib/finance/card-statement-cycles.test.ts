@@ -90,6 +90,34 @@ describe("mergeCardStatementCycleUpsertWithExisting", () => {
       }).amountDue,
     ).toBe(4700);
   });
+
+  it("does not keep stale amount_due from an orphan cycle", () => {
+    expect(
+      mergeCardStatementCycleUpsertWithExisting({
+        incoming: {
+          accountId: "card-1",
+          ownerUserId: "user-1",
+          closingDate: "2026-05-25",
+          periodStart: "2026-04-26",
+          periodEnd: "2026-05-25",
+          dueDate: "2026-06-01",
+          amountDue: null,
+          source: "imported",
+          importBatchId: "batch-new",
+          notes: "Reimport",
+        },
+        existing: {
+          importBatchId: null,
+          amountDue: 4654.44,
+          notes: "Ciclo órfão",
+        },
+      }),
+    ).toEqual({
+      importBatchId: "batch-new",
+      amountDue: null,
+      notes: "Reimport",
+    });
+  });
 });
 
 describe("parseStatementDueDateFromFileName", () => {

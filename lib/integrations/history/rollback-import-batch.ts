@@ -37,7 +37,7 @@ export type RollbackImportBatchResult =
       deletedTransactions: number;
       deletedBatchRows: number;
       deletedCycles: number;
-      /** Cycles kept only when remaining activity exists, with import_batch_id cleared. */
+      /** Cycles kept only when remaining activity exists; issuer amount_due cleared. */
       unlinkedCycles: number;
       invoicePaymentRows: number;
       classificationMemoryRows: number;

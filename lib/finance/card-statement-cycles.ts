@@ -354,7 +354,8 @@ export async function fetchCardStatementCyclesForAccount(
  * Merge rules when a later import touches an existing invoice cycle:
  * - Keep the original `import_batch_id` so rolling back the new batch cannot
  *   cascade-delete a consolidated invoice owned by an earlier import.
- * - Keep a trusted `amount_due` when the incoming payload omits/nulls it.
+ * - Keep a trusted `amount_due` when the incoming payload omits/nulls it,
+ *   but never resurrect issuer totals from an orphan (import_batch_id null).
  * - Prefer a new non-null issuer total from the file when provided.
  */
 export function mergeCardStatementCycleUpsertWithExisting(input: {
@@ -376,12 +377,15 @@ export function mergeCardStatementCycleUpsertWithExisting(input: {
     input.existing?.amountDue == null
       ? null
       : Number(input.existing.amountDue);
+  const existingIsOrphan = !input.existing?.importBatchId;
 
   return {
     amountDue:
       incomingAmount != null && Number.isFinite(incomingAmount)
         ? incomingAmount
-        : existingAmount,
+        : existingIsOrphan
+          ? null
+          : existingAmount,
     importBatchId:
       input.existing?.importBatchId ?? input.incoming.importBatchId ?? null,
     notes: input.incoming.notes ?? input.existing?.notes ?? null,
