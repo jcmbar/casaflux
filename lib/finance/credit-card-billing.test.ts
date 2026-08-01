@@ -677,6 +677,51 @@ describe("statement payment cycle + settlement status", () => {
     expect(settlement.status).toBe("paid");
   });
 
+  it("does not invent A pagar from manual residuals when only virada purchases exist", () => {
+    // Mirrors orphan Feb cycle: expenses on previous closing (virada) belong
+    // to the prior bill, but includeRolledInPurchases still sees them.
+    const settlement = getStatementSettlement({
+      accountId: "card-1",
+      config,
+      cycle: {
+        ...julyCycle,
+        source: "imported",
+        issuerAmountDue: null,
+      },
+      transactions: [
+        {
+          accountId: "card-1",
+          date: "2026-06-20",
+          type: "expense",
+          amount: 50,
+        },
+        {
+          accountId: "card-1",
+          date: "2026-06-20",
+          type: "expense",
+          amount: 32.39,
+        },
+        {
+          accountId: "card-1",
+          date: "2026-07-27",
+          type: "income",
+          amount: 3740.58,
+          statementCycleId: "2026-07-20",
+          statementDueDate: julyCycle.dueDate,
+          invoicePaymentOrigin: "manual",
+        },
+      ],
+      referenceDate: "2026-08-01",
+      includeRolledInPurchases: true,
+    });
+
+    expect(settlement.rolledInPurchasesTotal).toBe(82.39);
+    expect(settlement.cyclePurchasesTotal).toBe(0);
+    expect(settlement.amountDueTotal).toBe(0);
+    expect(settlement.paidTotal).toBe(3740.58);
+    expect(settlement.remainingTotal).toBe(0);
+  });
+
   it("still uses imported payment as A pagar when amount_due is null and purchases are empty", () => {
     const settlement = getStatementSettlement({
       accountId: "card-1",

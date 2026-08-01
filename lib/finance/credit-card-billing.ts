@@ -673,19 +673,25 @@ export function getStatementSettlement(input: {
 
   // Derived: purchase window only (never issuer amount_due).
   // Imported/manual: issuer amount_due is the bill total when present.
-  // Fallback: purchase window, or linked payment when a real bill was settled
-  // without a stored issuer total (purchases and/or imported payments).
-  // Do not invent "A pagar" from residual-only manual credits.
+  // Fallback: invent from linked payment only when an imported payment
+  // proves a real settled bill (amount_due cleared / missing).
+  // Residual-only manual credits must not invent "A pagar" — including when
+  // stray virada purchases from an adjacent cycle inflate the window.
   let amountDueTotal: number;
   if (isPersistedBill) {
     if (issuerAmountDue != null && issuerAmountDue > MONEY_EPSILON) {
       amountDueTotal = issuerAmountDue;
     } else if (
       paidTotal > computedAmountDue + MONEY_EPSILON &&
-      (computedAmountDue > MONEY_EPSILON ||
-        importedPaidTotal > MONEY_EPSILON)
+      importedPaidTotal > MONEY_EPSILON
     ) {
       amountDueTotal = paidTotal;
+    } else if (
+      importedPaidTotal <= MONEY_EPSILON &&
+      paidTotal > MONEY_EPSILON &&
+      cyclePurchasesTotal <= MONEY_EPSILON
+    ) {
+      amountDueTotal = 0;
     } else {
       amountDueTotal = computedAmountDue;
     }
