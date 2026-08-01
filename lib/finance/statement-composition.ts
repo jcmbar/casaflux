@@ -8,6 +8,10 @@ import {
   type StatementCycle,
   type StatementSettlement,
 } from "@/lib/finance/credit-card-billing";
+import {
+  buildNubankStatementInvoiceBreakdown,
+  type NubankStatementInvoiceGroups,
+} from "@/lib/integrations/sources/nubank/statement-invoice";
 import type { Account } from "@/types/account";
 import type { Transaction } from "@/types/transaction";
 
@@ -32,6 +36,20 @@ export const STATEMENT_COMPOSITION_GROUP_HINTS: Record<
     "Parcelas e lançamentos da virada do fechamento anterior que o emissor ainda inclui neste total a pagar.",
 };
 
+export const STATEMENT_FINANCIAL_GROUP_LABELS: Record<
+  keyof NubankStatementInvoiceGroups,
+  string
+> = {
+  consumption: "Consumo",
+  fees: "Encargos",
+  carried: "Saldo herdado",
+  renegotiationInstallments: "Renegociação (parcelas)",
+  renegotiationCredits: "Renegociação (crédito)",
+  renegotiation: "Renegociação",
+  payments: "Pagamentos",
+  credits: "Créditos",
+};
+
 export type StatementCompositionLine = {
   id: string;
   date: string;
@@ -50,6 +68,9 @@ export type StatementComposition = {
   /** True when amount due equals cycle-only expenses (no rolled-in). */
   isCycleOnly: boolean;
   equationSummary: string;
+  /** Typed Nubank financial groups recalculated from cycle transactions. */
+  financialGroups: NubankStatementInvoiceGroups | null;
+  financialAmountDue: number | null;
 };
 
 export type StatementCompositionTransaction = Pick<
@@ -89,6 +110,70 @@ export function classifyStatementCompositionExpense(input: {
   }
 
   return null;
+}
+
+function isTransactionInCompositionWindow(input: {
+  transaction: StatementCompositionTransaction;
+  cardAccountId: string;
+  cycle: StatementCycle;
+  config: CreditCardBillingConfig;
+}): boolean {
+  const { transaction, cardAccountId, cycle, config } = input;
+  if (transaction.accountId !== cardAccountId) {
+    return false;
+  }
+  if (transaction.type !== "expense" && transaction.type !== "income") {
+    return false;
+  }
+  if (isDateInStatementCycle(transaction.date, cycle)) {
+    return true;
+  }
+  return isRolledIntoOpenStatementPurchase(transaction.date, {
+    cycle,
+    closingDay: config.statementClosingDay,
+  });
+}
+
+/**
+ * Recalculate Nubank-style financial groups from persisted card transactions.
+ */
+export function buildStatementFinancialGroups(input: {
+  cardAccountId: string;
+  config: CreditCardBillingConfig;
+  cycle: StatementCycle;
+  transactions: StatementCompositionTransaction[];
+}): {
+  groups: NubankStatementInvoiceGroups;
+  amountDue: number;
+} {
+  const rows = input.transactions
+    .filter((transaction) =>
+      isTransactionInCompositionWindow({
+        transaction,
+        cardAccountId: input.cardAccountId,
+        cycle: input.cycle,
+        config: input.config,
+      }),
+    )
+    .map((transaction) => {
+      const abs = Math.abs(Number(transaction.amount));
+      return {
+        date: transaction.date.slice(0, 10),
+        description: transaction.description,
+        amount: transaction.type === "income" ? -abs : abs,
+      };
+    });
+
+  const breakdown = buildNubankStatementInvoiceBreakdown({
+    rows,
+    statementDueDay: input.config.statementDueDay,
+    previousDueDate: null,
+  });
+
+  return {
+    groups: breakdown.groups,
+    amountDue: breakdown.amountDue,
+  };
 }
 
 /**
@@ -179,6 +264,20 @@ export function buildStatementComposition(input: {
     ? `Total a pagar = despesas do ciclo (${input.periodLabel}) + na virada do fechamento.`
     : `Total a pagar = despesas do ciclo (${input.periodLabel}). Não há lançamentos da virada nesta fatura.`;
 
+  const financial = buildStatementFinancialGroups({
+    cardAccountId: input.cardAccountId,
+    config: input.config,
+    cycle: input.cycle,
+    transactions: input.transactions,
+  });
+  const hasFinancialSignal =
+    Math.abs(financial.groups.fees) > 0.005 ||
+    Math.abs(financial.groups.carried) > 0.005 ||
+    Math.abs(financial.groups.renegotiation) > 0.005 ||
+    Math.abs(financial.groups.payments) > 0.005 ||
+    Math.abs(financial.groups.credits) > 0.005 ||
+    Math.abs(financial.groups.consumption) > 0.005;
+
   return {
     cyclePurchasesTotal,
     rolledInPurchasesTotal,
@@ -188,6 +287,8 @@ export function buildStatementComposition(input: {
     hasRolledIn,
     isCycleOnly,
     equationSummary,
+    financialGroups: hasFinancialSignal ? financial.groups : null,
+    financialAmountDue: hasFinancialSignal ? financial.amountDue : null,
   };
 }
 

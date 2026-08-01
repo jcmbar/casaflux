@@ -44,6 +44,8 @@ export type NormalizedImportMetadata = {
   linkedExternalId?: string;
   reversalPair?: boolean;
   cardAccountId?: string;
+  /** Fine-grained Nubank CC statement line kind. */
+  nubankStatementLineKind?: string;
   /** Bank accounting date when distinct from launch date (e.g. C6). */
   accountingDate?: string;
   /** Short title / histórico when kept separate from description detail. */

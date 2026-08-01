@@ -47,6 +47,7 @@ import { fetchAllTransactionsForAccounts } from "@/lib/finance/fetch-transaction
 import {
   STATEMENT_COMPOSITION_GROUP_HINTS,
   STATEMENT_COMPOSITION_GROUP_LABELS,
+  STATEMENT_FINANCIAL_GROUP_LABELS,
   type StatementComposition,
   type StatementCompositionLine,
 } from "@/lib/finance/statement-composition";
@@ -909,6 +910,26 @@ function StatementCompositionCard({
 }: {
   composition: StatementComposition;
 }) {
+  const financialRows =
+    composition.financialGroups == null
+      ? []
+      : (
+          [
+            "consumption",
+            "fees",
+            "carried",
+            "renegotiation",
+            "payments",
+            "credits",
+          ] as const
+        )
+          .map((key) => ({
+            key,
+            label: STATEMENT_FINANCIAL_GROUP_LABELS[key],
+            value: composition.financialGroups![key],
+          }))
+          .filter((row) => Math.abs(row.value) > 0.005);
+
   return (
     <Card
       className="border-border/50 shadow-sm"
@@ -926,6 +947,30 @@ function StatementCompositionCard({
         </p>
       </CardHeader>
       <CardContent className="space-y-5">
+        {financialRows.length > 0 ? (
+          <dl
+            className="grid gap-2 rounded-lg border border-border/50 bg-muted/15 p-3 text-sm"
+            data-testid="fatura-financial-groups"
+          >
+            {financialRows.map((row) => (
+              <CompositionSummaryRow
+                key={row.key}
+                label={row.label}
+                value={row.value}
+                testId={`fatura-financial-group-${row.key}`}
+              />
+            ))}
+            {composition.financialAmountDue != null ? (
+              <CompositionSummaryRow
+                label="Valor final (grupos)"
+                value={composition.financialAmountDue}
+                emphasize
+                testId="fatura-financial-amount-due"
+              />
+            ) : null}
+          </dl>
+        ) : null}
+
         <dl
           className="grid gap-2 rounded-lg border border-border/50 bg-muted/15 p-3 text-sm"
           data-testid="fatura-composition-summary"

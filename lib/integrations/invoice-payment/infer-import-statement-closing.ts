@@ -1,7 +1,9 @@
 import {
+  addDaysIso,
   addMonths,
   getClosingDateInMonth,
   getDueDateForClosingDate,
+  getPreviousClosingDate,
   parseIsoDate,
   type CreditCardBillingConfig,
 } from "@/lib/finance/credit-card-billing";
@@ -31,6 +33,11 @@ export type InferImportStatementClosingInput = {
    * When valid, always wins with high confidence.
    */
   userClosingDate?: string | null;
+  /**
+   * Max transaction date in the Nubank CC CSV.
+   * Preferred file-cycle closing when the user did not override.
+   */
+  statementActivityMaxDate?: string | null;
   /** Card billing days when configured. */
   billingConfig?: CreditCardBillingConfig | null;
   /** Imported/manual cycles for the selected card (newest first not required). */
@@ -113,10 +120,11 @@ function resolveEffectiveBillingConfig(input: {
  *
  * Priority:
  * 1. User-provided closing (high)
- * 2. Existing imported cycle with the same due (high)
- * 3. Closing that exactly reproduces the due via card/history days (high)
- * 4. Honest fallback from card closing day in the month before due (low)
- * 5. Not inferible (none)
+ * 2. Max activity date from the Nubank CC CSV (high if aligns with card day; else low)
+ * 3. Existing imported cycle with the same due (high)
+ * 4. Closing that exactly reproduces the due via card/history days (high)
+ * 5. Honest fallback from card closing day in the month before due (low)
+ * 6. Not inferible (none)
  */
 export function inferImportStatementClosing(
   input: InferImportStatementClosingInput,
@@ -149,6 +157,48 @@ export function inferImportStatementClosing(
   }
 
   const importedCycles = input.importedCycles ?? [];
+  const effectiveConfig = resolveEffectiveBillingConfig({
+    billingConfig: input.billingConfig,
+    importedCycles,
+  });
+
+  const activityClosing = normalizeIsoDate(input.statementActivityMaxDate);
+  if (activityClosing) {
+    if (activityClosing > dueDate) {
+      return {
+        confidence: "none",
+        closingDate: null,
+        reason:
+          "A última data do extrato é posterior ao vencimento; ajuste as datas.",
+      };
+    }
+
+    const closingDayOfMonth = Number(activityClosing.slice(8, 10));
+    const matchesConfiguredDay =
+      effectiveConfig != null &&
+      closingDayOfMonth === effectiveConfig.statementClosingDay;
+    const exactClosing = effectiveConfig
+      ? findExactClosingForDueDate(effectiveConfig, dueDate)
+      : null;
+    const matchesExact = exactClosing === activityClosing;
+
+    if (matchesConfiguredDay || matchesExact) {
+      return {
+        confidence: "high",
+        closingDate: activityClosing,
+        reason:
+          "Fechamento pela última data do extrato (alinhada ao cartão/vencimento).",
+      };
+    }
+
+    return {
+      confidence: "low",
+      closingDate: activityClosing,
+      reason:
+        "Fechamento pela última data do extrato (difere do dia cadastrado no cartão — confirme).",
+    };
+  }
+
   const importedMatch = findImportedCycleByDueDate(importedCycles, dueDate);
   if (importedMatch) {
     const closingDate = importedMatch.closingDate.slice(0, 10);
@@ -161,11 +211,6 @@ export function inferImportStatementClosing(
       };
     }
   }
-
-  const effectiveConfig = resolveEffectiveBillingConfig({
-    billingConfig: input.billingConfig,
-    importedCycles,
-  });
 
   if (!effectiveConfig) {
     return {
@@ -211,6 +256,8 @@ export function inferImportStatementClosing(
 export type MaterializedImportStatementFileCycle = {
   closingDate: string;
   dueDate: string;
+  periodStart?: string | null;
+  periodEnd?: string | null;
 };
 
 export type ResolveMaterializedImportStatementFileCycleResult =
@@ -237,6 +284,7 @@ export type ResolveMaterializedImportStatementFileCycleResult =
 export function resolveMaterializedImportStatementFileCycle(input: {
   dueDate: string;
   userClosingDate?: string | null;
+  statementActivityMaxDate?: string | null;
   billingConfig?: CreditCardBillingConfig | null;
   importedCycles?: readonly CardStatementCycleRecord[];
   /** Explicit opt-in to persist a low-confidence suggested closing. */
@@ -259,14 +307,39 @@ export function resolveMaterializedImportStatementFileCycle(input: {
   const inference = inferImportStatementClosing({
     dueDate,
     userClosingDate: input.userClosingDate,
+    statementActivityMaxDate: input.statementActivityMaxDate,
     billingConfig: input.billingConfig,
     importedCycles: input.importedCycles,
   });
 
+  const buildCycle = (
+    closingDate: string,
+  ): MaterializedImportStatementFileCycle => {
+    const closing = closingDate.slice(0, 10);
+    if (input.billingConfig) {
+      const previousClosing = getPreviousClosingDate(
+        closing,
+        input.billingConfig.statementClosingDay,
+      );
+      return {
+        closingDate: closing,
+        dueDate,
+        periodStart: addDaysIso(previousClosing, 1),
+        periodEnd: closing,
+      };
+    }
+
+    return {
+      closingDate: closing,
+      dueDate,
+      periodEnd: closing,
+    };
+  };
+
   if (inference.confidence === "high") {
     return {
       ok: true,
-      cycle: { closingDate: inference.closingDate, dueDate },
+      cycle: buildCycle(inference.closingDate),
       inference,
     };
   }
@@ -275,7 +348,7 @@ export function resolveMaterializedImportStatementFileCycle(input: {
     if (input.confirmLowConfidenceClosing) {
       return {
         ok: true,
-        cycle: { closingDate: inference.closingDate, dueDate },
+        cycle: buildCycle(inference.closingDate),
         inference,
       };
     }

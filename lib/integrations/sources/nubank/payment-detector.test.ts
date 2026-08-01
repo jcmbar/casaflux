@@ -40,25 +40,19 @@ describe("nubank payment-detector statement-total helpers", () => {
     ).toBe(false);
   });
 
-  it("excludes renegotiation and early-PIX rows from statement total", () => {
+  it("no longer excludes lines via the deprecated helper (typed breakdown owns totals)", () => {
     expect(
       shouldExcludeFromNubankCardStatementTotal(
         "Renegociação de pendências (02/Abril)",
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldExcludeFromNubankCardStatementTotal("Saldo em atraso"),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldExcludeFromNubankCardStatementTotal(
         "Desconto de antecipação de pagamento de pix (Jeniffer)",
       ),
-    ).toBe(true);
-    expect(
-      shouldExcludeFromNubankCardStatementTotal("Estorno de juros de rotativo"),
-    ).toBe(false);
-    expect(
-      shouldExcludeFromNubankCardStatementTotal("Pagamento recebido"),
     ).toBe(false);
   });
 });

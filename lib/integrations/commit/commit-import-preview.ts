@@ -187,6 +187,15 @@ export function resolveCommitStatementFileCycle(
   return resolveMaterializedImportStatementFileCycle({
     dueDate,
     userClosingDate,
+    statementActivityMaxDate: (() => {
+      let max: string | null = null;
+      for (const row of input.preview.rows) {
+        const date = row.date?.slice(0, 10) ?? "";
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+        if (max == null || date > max) max = date;
+      }
+      return max;
+    })(),
     billingConfig,
     importedCycles: input.importedStatementCycles,
     confirmLowConfidenceClosing: input.confirmLowConfidenceClosing,

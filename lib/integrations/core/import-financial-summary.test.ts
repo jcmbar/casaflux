@@ -32,44 +32,90 @@ describe("buildImportFinancialSummary", () => {
     ).toBeNull();
   });
 
-  it("highlights invoice total and payment credits for credit-card CSV", () => {
+  it("applies payments after previous due to the invoice total", () => {
     const rows = [
       buildRow({
         sourceLine: 1,
         kind: "card_purchase",
         direction: "out",
         amount: 100,
+        date: "2026-07-10",
       }),
       buildRow({
         sourceLine: 2,
         kind: "card_purchase",
         direction: "out",
         amount: 50,
+        date: "2026-07-12",
       }),
       buildRow({
         sourceLine: 3,
         kind: "card_purchase",
         direction: "in",
         amount: 10,
+        description: "Estorno parcial",
+        date: "2026-07-12",
       }),
+      // After previous due → reduces this bill.
       buildRow({
         sourceLine: 4,
         kind: "card_invoice_payment",
         direction: "in",
-        amount: 200,
+        amount: 40,
+        description: "Pagamento recebido",
+        date: "2026-07-15",
       }),
     ];
 
-    expect(
-      buildImportFinancialSummary({
-        rows,
-        source: "nubank_credit_card",
-      }),
-    ).toEqual({
-      invoiceTotal: 140,
-      paymentsTotal: 200,
+    const summary = buildImportFinancialSummary({
+      rows,
+      source: "nubank_credit_card",
+      statementDueDay: 1,
+    });
+
+    expect(summary).toMatchObject({
+      // 100 + 50 − 10 − 40
+      invoiceTotal: 100,
+      paymentsTotal: 40,
       paymentCount: 1,
+      paymentsAppliedToBill: 40,
       isCreditCardStatement: true,
+    });
+    expect(summary?.groups?.consumption).toBe(150);
+    expect(summary?.groups?.credits).toBe(10);
+  });
+
+  it("does not apply prior-due payments to the invoice total", () => {
+    const rows = [
+      buildRow({
+        sourceLine: 1,
+        kind: "card_purchase",
+        direction: "out",
+        amount: 200,
+        date: "2026-07-10",
+      }),
+      // On/before inferred previous due → prior settlement only.
+      buildRow({
+        sourceLine: 2,
+        kind: "card_invoice_payment",
+        direction: "in",
+        amount: 150,
+        description: "Pagamento recebido",
+        date: "2026-06-01",
+      }),
+    ];
+
+    const summary = buildImportFinancialSummary({
+      rows,
+      source: "nubank_credit_card",
+      statementDueDay: 1,
+    });
+
+    expect(summary).toMatchObject({
+      invoiceTotal: 200,
+      paymentsTotal: 150,
+      paymentsAppliedToBill: 0,
+      paymentsForPriorBill: 150,
     });
   });
 
@@ -89,15 +135,13 @@ describe("buildImportFinancialSummary", () => {
       }),
     ];
 
-    // Common credits stay in the statement net (purchase − credit = 0 here)
-    // and do not count as invoice payments.
     expect(
       buildImportFinancialSummary({
         rows,
         source: "nubank_credit_card",
         invoicePaymentModes: { 2: "common" },
       }),
-    ).toEqual({
+    ).toMatchObject({
       invoiceTotal: 0,
       paymentsTotal: 0,
       paymentCount: 0,
@@ -105,9 +149,7 @@ describe("buildImportFinancialSummary", () => {
     });
   });
 
-  it("ignores renegotiation package and early-PIX discount in invoice total", () => {
-    // Mirrors the Nu crédito 04.csv distortion: wipe credit + saldo/installment
-    // previously crushed Total da fatura to ~551 instead of ~1.5k+.
+  it("includes renegotiation and carried balances in the typed invoice total", () => {
     const rows = [
       buildRow({
         sourceLine: 1,
@@ -168,17 +210,20 @@ describe("buildImportFinancialSummary", () => {
       }),
     ];
 
-    expect(
-      buildImportFinancialSummary({
-        rows,
-        source: "nubank_credit_card",
-      }),
-    ).toEqual({
-      // 598.78 + 50 − 12.28 (estorno kept); renegotiation + early-PIX skipped
-      invoiceTotal: 636.5,
+    const summary = buildImportFinancialSummary({
+      rows,
+      source: "nubank_credit_card",
+    });
+
+    // Reneg wipe dominates even with payment applied → 0.
+    expect(summary).toMatchObject({
+      invoiceTotal: 0,
       paymentsTotal: 600,
       paymentCount: 1,
       isCreditCardStatement: true,
     });
+    expect(summary?.groups?.carried).toBe(1244.73);
+    expect(summary?.groups?.renegotiationInstallments).toBe(835.6);
+    expect(summary?.groups?.renegotiationCredits).toBe(3001.06);
   });
 });

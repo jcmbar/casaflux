@@ -1,8 +1,9 @@
+import {
+  extractInstallmentFromTitle,
+  classifyNubankStatementLine,
+} from "@/lib/integrations/sources/nubank/statement-line-kind";
+
 const INSTALLMENT_PATTERN = /Parcela\s+(\d+\/\d+)/i;
-const RENEGOTIATION_TITLE_PATTERN = /^renegocia[cç][aã]o de pend[eê]ncias/i;
-const OVERDUE_BALANCE_TITLE_PATTERN = /^saldo em atraso$/i;
-const EARLY_PIX_DISCOUNT_TITLE_PATTERN =
-  /^desconto de antecipa[cç][aã]o de pagamento de pix/i;
 
 export function isNubankInvoicePayment(title: string): boolean {
   return title.trim() === "Pagamento recebido";
@@ -16,45 +17,34 @@ export function isNubankIofFee(title: string): boolean {
   );
 }
 
-/**
- * Accounting wipe / re-book lines from Nubank debt renegotiation.
- * Including the credit wipe while also keeping "Saldo em atraso" and the new
- * installment crushes "Total da fatura" far below the app bill total.
- */
-export function isNubankRenegotiationPackageLine(title: string): boolean {
-  const normalized = title.trim();
-  return (
-    RENEGOTIATION_TITLE_PATTERN.test(normalized) ||
-    OVERDUE_BALANCE_TITLE_PATTERN.test(normalized)
-  );
-}
-
-/**
- * Early PIX payment discount — Nubank surfaces this under "Pagamento antecipado",
- * not as a merchant credit that should shrink the statement purchase total.
- */
-export function isNubankEarlyPaymentDiscount(title: string): boolean {
-  return EARLY_PIX_DISCOUNT_TITLE_PATTERN.test(title.trim());
-}
-
-/**
- * Rows that must not enter the CSV net used as issuer `amount_due` /
- * "Total da fatura" on import review.
- */
-export function shouldExcludeFromNubankCardStatementTotal(
-  title: string,
-): boolean {
-  return (
-    isNubankRenegotiationPackageLine(title) ||
-    isNubankEarlyPaymentDiscount(title)
-  );
-}
-
 export function extractInstallment(title: string): string | undefined {
-  const match = title.match(INSTALLMENT_PATTERN);
-  return match?.[1];
+  return extractInstallmentFromTitle(title) ?? undefined;
 }
 
 export function hasInstallment(title: string): boolean {
   return INSTALLMENT_PATTERN.test(title);
+}
+
+/** @deprecated Prefer classifyNubankStatementLine — kept for older call sites. */
+export function isNubankRenegotiationPackageLine(title: string): boolean {
+  const kind = classifyNubankStatementLine({ title, amount: 1 });
+  return (
+    kind === "RENEGOTIATION_INSTALLMENT" ||
+    kind === "PREVIOUS_BALANCE"
+  );
+}
+
+/** @deprecated Prefer classifyNubankStatementLine. */
+export function isNubankEarlyPaymentDiscount(title: string): boolean {
+  return /^desconto de antecipa[cç][aã]o de pagamento/i.test(title.trim());
+}
+
+/**
+ * @deprecated Totals now use buildNubankStatementInvoiceBreakdown.
+ * Always returns false so legacy call sites stop excluding renegotiation.
+ */
+export function shouldExcludeFromNubankCardStatementTotal(
+  _title: string,
+): boolean {
+  return false;
 }

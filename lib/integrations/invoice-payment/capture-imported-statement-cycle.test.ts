@@ -178,6 +178,197 @@ describe("buildImportedCardStatementCycleUpserts", () => {
     expect(fileBill?.amountDue).toBe(3598.42);
   });
 
+  it("persists January-like amount_due near 1847 by excluding prior settlement payment", () => {
+    const row = (
+      partial: Partial<ImportPreviewRow> &
+        Pick<
+          ImportPreviewRow,
+          "sourceLine" | "date" | "amount" | "description" | "direction"
+        >,
+    ): ImportPreviewRow => ({
+      source: "nubank_credit_card",
+      kind:
+        partial.description === "Pagamento recebido"
+          ? "card_invoice_payment"
+          : "card_purchase",
+      externalFingerprint: `fp-${partial.sourceLine}`,
+      externalId: null,
+      metadata: {},
+      reviewStatus: "ready",
+      historicalStatus: "new",
+      categoryStatus: "none",
+      ...partial,
+    });
+
+    const upserts = buildImportedCardStatementCycleUpserts({
+      rows: [
+        row({
+          sourceLine: 1,
+          date: "2025-12-20",
+          amount: 2410.89,
+          description: "Pagamento recebido",
+          direction: "in",
+        }),
+        row({
+          sourceLine: 2,
+          date: "2026-01-05",
+          amount: 900,
+          description: "Loja A",
+          direction: "out",
+        }),
+        row({
+          sourceLine: 3,
+          date: "2026-01-10",
+          amount: 500,
+          description: "Loja B Parcela 1/3",
+          direction: "out",
+        }),
+        row({
+          sourceLine: 4,
+          date: "2026-01-15",
+          amount: 12.3,
+          description: "IOF de compra internacional",
+          direction: "out",
+        }),
+        row({
+          sourceLine: 5,
+          date: "2026-01-18",
+          amount: 15,
+          description: "Estorno de taxa",
+          direction: "in",
+        }),
+        row({
+          sourceLine: 6,
+          date: "2026-01-20",
+          amount: 450,
+          description: "App X",
+          direction: "out",
+        }),
+      ],
+      billingConfig: {
+        statementClosingDay: 25,
+        statementDueDay: 1,
+      },
+      accountId: "card-1",
+      ownerUserId: "user-1",
+      fileCycle: {
+        closingDate: "2026-01-20",
+        dueDate: "2026-02-01",
+      },
+      invoicePaymentModes: { 1: "payment" },
+    });
+
+    const fileBill = upserts.find((item) => item.closingDate === "2026-01-20");
+    // 900 + 500 + 450 + 12.30 − 15 = 1847.30; Dec payment excluded as prior.
+    expect(fileBill?.amountDue).toBe(1847.3);
+  });
+
+  it("reduces persisted amount_due with early payments after previous due", () => {
+    const row = (
+      partial: Partial<ImportPreviewRow> &
+        Pick<
+          ImportPreviewRow,
+          "sourceLine" | "date" | "amount" | "description" | "direction"
+        >,
+    ): ImportPreviewRow => ({
+      source: "nubank_credit_card",
+      kind:
+        partial.description === "Pagamento recebido"
+          ? "card_invoice_payment"
+          : "card_purchase",
+      externalFingerprint: `fp-${partial.sourceLine}`,
+      externalId: null,
+      metadata: {},
+      reviewStatus: "ready",
+      historicalStatus: "new",
+      categoryStatus: "none",
+      ...partial,
+    });
+
+    const upserts = buildImportedCardStatementCycleUpserts({
+      rows: [
+        row({
+          sourceLine: 1,
+          date: "2026-01-10",
+          amount: 1000,
+          description: "Mercado",
+          direction: "out",
+        }),
+        row({
+          sourceLine: 2,
+          date: "2026-01-15",
+          amount: 200,
+          description: "Pagamento recebido",
+          direction: "in",
+        }),
+      ],
+      billingConfig: {
+        statementClosingDay: 25,
+        statementDueDay: 1,
+      },
+      accountId: "card-1",
+      ownerUserId: "user-1",
+      fileCycle: {
+        closingDate: "2026-01-25",
+        dueDate: "2026-02-01",
+      },
+      invoicePaymentModes: { 2: "payment" },
+    });
+
+    // previousDue from closing 25/01 → prior closing 25/12 → due 01/01;
+    // payment on 15/01 applies to this bill.
+    const fileBill = upserts.find((item) => item.closingDate === "2026-01-25");
+    expect(fileBill?.amountDue).toBe(800);
+  });
+
+  it("does not let a payment tagged to another due reduce the file amount_due", () => {
+    const purchase = (partial: {
+      sourceLine: number;
+      date: string;
+      amount: number;
+    }): ImportPreviewRow => ({
+      source: "nubank_credit_card",
+      description: `Compra ${partial.sourceLine}`,
+      direction: "out",
+      kind: "card_purchase",
+      externalFingerprint: `fp-${partial.sourceLine}`,
+      externalId: null,
+      metadata: {},
+      reviewStatus: "ready",
+      historicalStatus: "new",
+      categoryStatus: "none",
+      ...partial,
+    });
+
+    const upserts = buildImportedCardStatementCycleUpserts({
+      rows: [
+        purchase({ sourceLine: 1, date: "2026-05-10", amount: 1000 }),
+        paymentRow({
+          sourceLine: 2,
+          date: "2026-05-20",
+          amount: 400,
+        }),
+      ],
+      billingConfig: CONFIG,
+      accountId: "card-1",
+      ownerUserId: "user-1",
+      fileCycle: {
+        closingDate: "2026-05-25",
+        dueDate: "2026-06-01",
+      },
+      invoicePaymentModes: { 2: "payment" },
+      invoicePaymentCycleTargets: {
+        2: { target: "previous", targetDueDate: "2026-05-04" },
+      },
+    });
+
+    const fileBill = upserts.find((row) => row.closingDate === "2026-05-25");
+    expect(fileBill?.amountDue).toBe(1000);
+
+    const previous = upserts.find((row) => row.dueDate === "2026-05-04");
+    expect(previous?.amountDue).toBe(400);
+  });
+
   it("keeps the file closing when payment due matches the CSV cycle", () => {
     const upserts = buildImportedCardStatementCycleUpserts({
       rows: [

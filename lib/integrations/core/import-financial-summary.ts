@@ -1,21 +1,30 @@
 import { roundMoney } from "@/lib/finance/credit-card-billing";
-import { sumCardStatementPurchasesFromImportRows } from "@/lib/integrations/invoice-payment/capture-imported-statement-cycle";
+import { buildCardStatementInvoiceBreakdownFromImportRows } from "@/lib/integrations/invoice-payment/capture-imported-statement-cycle";
 import {
   getInvoicePaymentImportMode,
   type InvoicePaymentImportMode,
 } from "@/lib/integrations/invoice-payment/resolve-invoice-payment";
+import type { NubankStatementInvoiceGroups } from "@/lib/integrations/sources/nubank/statement-invoice";
 import type { ImportPreviewRow, ImportSource } from "@/lib/integrations/types";
 
 export type ImportFinancialSummary = {
   /**
-   * Net statement total for the CSV (purchases − merchant credits/estornos).
-   * Excludes invoice payments and Nubank renegotiation / early-PIX bookkeeping.
+   * Best estimate of this statement's official bill total from the CSV itself
+   * (typed groups + payments applied after the previous due).
+   * N+1 enrich may still refine a *prior* cycle's amount_due separately.
    */
   invoiceTotal: number;
-  /** Sum of credits treated as invoice payments. */
+  /** Sum of credits treated as invoice payments (all Pagamento recebido). */
   paymentsTotal: number;
   paymentCount: number;
+  /** Payments that reduced this file's invoiceTotal. */
+  paymentsAppliedToBill: number;
+  /** Payments treated as settlement of the previous bill. */
+  paymentsForPriorBill: number;
   isCreditCardStatement: boolean;
+  /** Financial groups when source is Nubank CC. */
+  groups: NubankStatementInvoiceGroups | null;
+  closingDate: string | null;
 };
 
 export function isCreditCardImportSource(
@@ -59,6 +68,7 @@ export function buildImportFinancialSummary(input: {
   rows: ImportPreviewRow[];
   source: ImportSource | null | undefined;
   invoicePaymentModes?: Record<number, InvoicePaymentImportMode>;
+  statementDueDay?: number | null;
 }): ImportFinancialSummary | null {
   if (!isCreditCardImportSource(input.source)) {
     return null;
@@ -66,11 +76,20 @@ export function buildImportFinancialSummary(input: {
 
   const modes = input.invoicePaymentModes ?? {};
   const payments = sumInvoicePaymentCreditsFromImportRows(input.rows, modes);
+  const breakdown = buildCardStatementInvoiceBreakdownFromImportRows(
+    input.rows,
+    modes,
+    { statementDueDay: input.statementDueDay },
+  );
 
   return {
-    invoiceTotal: sumCardStatementPurchasesFromImportRows(input.rows, modes),
+    invoiceTotal: breakdown.amountDue,
     paymentsTotal: payments.total,
     paymentCount: payments.count,
+    paymentsAppliedToBill: breakdown.paymentsAppliedToBill,
+    paymentsForPriorBill: breakdown.paymentsForPriorBill,
     isCreditCardStatement: true,
+    groups: breakdown.groups,
+    closingDate: breakdown.closingDate,
   };
 }

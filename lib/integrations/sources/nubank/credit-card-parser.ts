@@ -14,6 +14,10 @@ import {
   isNubankInvoicePayment,
   isNubankIofFee,
 } from "./payment-detector";
+import {
+  classifyNubankStatementLine,
+  type NubankStatementLineKind,
+} from "./statement-line-kind";
 import { isCreditCardInvoicePaymentCandidate } from "../../invoice-payment/resolve-invoice-payment";
 
 const EXPECTED_HEADER = ["date", "title", "amount"];
@@ -23,11 +27,13 @@ export type ParseNubankCreditCardOptions = {
   cardAccountId: string;
 };
 
-function classifyCreditCardRow(input: {
+function toNormalizedImportKind(input: {
   title: string;
   direction: "in" | "out";
+  lineKind: NubankStatementLineKind;
 }): NormalizedImportKind {
   if (
+    input.lineKind === "PAYMENT" ||
     isCreditCardInvoicePaymentCandidate({
       description: input.title,
       direction: input.direction,
@@ -44,10 +50,6 @@ function classifyCreditCardRow(input: {
 
   if (isNubankIofFee(input.title)) {
     return "card_fee";
-  }
-
-  if (extractInstallment(input.title)) {
-    return "card_purchase";
   }
 
   return "card_purchase";
@@ -116,7 +118,13 @@ export function parseNubankCreditCardCsv(
       const title = (titleRaw ?? "").trim();
       const { amount, direction } = parseNubankCreditCardAmount(amountRaw ?? "");
       const installment = extractInstallment(title);
-      const kind = classifyCreditCardRow({ title, direction });
+      const signedAmount =
+        direction === "in" ? -Math.abs(amount) : Math.abs(amount);
+      const lineKind = classifyNubankStatementLine({
+        title,
+        amount: signedAmount,
+      });
+      const kind = toNormalizedImportKind({ title, direction, lineKind });
 
       rows.push({
         source: "nubank_credit_card",
@@ -138,6 +146,7 @@ export function parseNubankCreditCardCsv(
           rawAmount: amountRaw?.trim(),
           installment,
           cardAccountId: options.cardAccountId,
+          nubankStatementLineKind: lineKind,
         },
         reviewStatus: kind === "card_invoice_payment" ? "needs_account" : "ready",
       });
@@ -145,7 +154,9 @@ export function parseNubankCreditCardCsv(
       errors.push({
         sourceLine,
         message:
-          error instanceof Error ? error.message : "Erro ao parsear linha do cartão.",
+          error instanceof Error
+            ? error.message
+            : "Erro ao parsear linha do cartão.",
       });
     }
   }

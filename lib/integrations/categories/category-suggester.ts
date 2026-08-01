@@ -10,6 +10,11 @@ import {
   normalizeImportText,
   normalizeMerchant,
 } from "./normalize-merchant";
+import {
+  classifyNubankStatementLine,
+  isNubankConsumptionLineKind,
+  type NubankStatementLineKind,
+} from "@/lib/integrations/sources/nubank/statement-line-kind";
 
 export type CategorySuggestionCatalogItem = {
   id: string;
@@ -325,14 +330,78 @@ export function resolveImportRowTransactionType(
   return "expense";
 }
 
+function resolveRowStatementLineKind(
+  row: ImportPreviewRow,
+): NubankStatementLineKind | null {
+  if (row.source !== "nubank_credit_card") {
+    return null;
+  }
+  const fromMeta = row.metadata?.nubankStatementLineKind;
+  if (typeof fromMeta === "string" && fromMeta.length > 0) {
+    return fromMeta as NubankStatementLineKind;
+  }
+  const signed =
+    row.direction === "in"
+      ? -Math.abs(Number(row.amount))
+      : Math.abs(Number(row.amount));
+  return classifyNubankStatementLine({
+    title: row.description,
+    amount: signed,
+  });
+}
+
+const FEE_CATEGORY_NAME_PATTERN =
+  /tarif|encargo|juros|iof|taxa|financ|cart[aã]o/i;
+
+function suggestFeeOrFinanceCategory(
+  categories: CategorySuggestionCatalogItem[],
+  transactionType: TransactionType,
+): ImportCategorySuggestion | null {
+  const match = categories.find(
+    (category) =>
+      category.type === transactionType &&
+      FEE_CATEGORY_NAME_PATTERN.test(category.name),
+  );
+  if (!match) {
+    return null;
+  }
+  return {
+    categoryId: match.id,
+    categoryName: match.name,
+    confidence: "medium",
+    source: "category_keyword",
+    basedOnCount: 1,
+    matchedKeyword: match.name,
+  };
+}
+
+/**
+ * Non-consumption Nubank lines should not land in merchant spend categories.
+ */
+export function shouldIsolateNubankFinancialLine(
+  kind: NubankStatementLineKind | null,
+): boolean {
+  if (!kind || kind === "UNKNOWN" || kind === "PAYMENT") {
+    return false;
+  }
+  return !isNubankConsumptionLineKind(kind);
+}
+
 export function suggestCategoryForImportRow(
   row: ImportPreviewRow,
   index: CategoryHistoryIndex,
   categories: CategorySuggestionCatalogItem[],
 ): ImportCategorySuggestion | null {
+  const transactionType = resolveImportRowTransactionType(row);
+  const lineKind = resolveRowStatementLineKind(row);
+
+  if (shouldIsolateNubankFinancialLine(lineKind)) {
+    return suggestFeeOrFinanceCategory(categories, transactionType);
+  }
+
   return suggestCategoryForDescription({
     description: row.description,
-    transactionType: resolveImportRowTransactionType(row),
+    transactionType,
     index,
     categories,
   });

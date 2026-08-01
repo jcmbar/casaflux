@@ -696,6 +696,20 @@ export function ImportReviewView() {
     [selectedCardAccount],
   );
 
+  const statementActivityMaxDate = useMemo(() => {
+    if (!requiresCardAccount || !activePreview) {
+      return null;
+    }
+    let max: string | null = null;
+    for (const row of activePreview.rows) {
+      if (row.historicalStatus === "already_imported") continue;
+      const date = row.date?.slice(0, 10) ?? "";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+      if (max == null || date > max) max = date;
+    }
+    return max;
+  }, [activePreview, requiresCardAccount]);
+
   const statementClosingInference = useMemo(() => {
     if (!requiresCardAccount || !statementDueDate) {
       return null;
@@ -704,6 +718,7 @@ export function ImportReviewView() {
     return inferImportStatementClosing({
       dueDate: statementDueDate,
       userClosingDate: statementClosingDate || null,
+      statementActivityMaxDate,
       billingConfig: cardBillingConfig,
       importedCycles: importedStatementCycles,
     });
@@ -711,6 +726,7 @@ export function ImportReviewView() {
     cardBillingConfig,
     importedStatementCycles,
     requiresCardAccount,
+    statementActivityMaxDate,
     statementClosingDate,
     statementDueDate,
   ]);
@@ -723,6 +739,7 @@ export function ImportReviewView() {
     const materialized = resolveMaterializedImportStatementFileCycle({
       dueDate: statementDueDate,
       userClosingDate: statementClosingDate || null,
+      statementActivityMaxDate,
       billingConfig: cardBillingConfig,
       importedCycles: importedStatementCycles,
       confirmLowConfidenceClosing,
@@ -734,6 +751,7 @@ export function ImportReviewView() {
     confirmLowConfidenceClosing,
     importedStatementCycles,
     requiresCardAccount,
+    statementActivityMaxDate,
     statementClosingDate,
     statementDueDate,
   ]);

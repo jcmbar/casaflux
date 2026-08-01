@@ -87,6 +87,32 @@ describe("inferImportStatementClosing", () => {
     });
   });
 
+  it("prefers last CSV activity date as closing (high when aligned to card day)", () => {
+    expect(
+      inferImportStatementClosing({
+        dueDate: "2026-06-01",
+        billingConfig: CONFIG,
+        statementActivityMaxDate: "2026-05-25",
+      }),
+    ).toMatchObject({
+      confidence: "high",
+      closingDate: "2026-05-25",
+    });
+  });
+
+  it("uses last CSV activity date with low confidence when it diverges from card day", () => {
+    expect(
+      inferImportStatementClosing({
+        dueDate: "2026-06-01",
+        billingConfig: CONFIG,
+        statementActivityMaxDate: "2026-05-20",
+      }),
+    ).toMatchObject({
+      confidence: "low",
+      closingDate: "2026-05-20",
+    });
+  });
+
   it("returns high when card days exactly reproduce the due", () => {
     // closing 25/05 + due day 1 → due 01/06
     expect(
@@ -154,6 +180,8 @@ describe("resolveMaterializedImportStatementFileCycle", () => {
     expect(result.cycle).toEqual({
       closingDate: "2026-05-25",
       dueDate: "2026-06-01",
+      periodStart: "2026-04-26",
+      periodEnd: "2026-05-25",
     });
     expect(result.inference.confidence).toBe("high");
   });

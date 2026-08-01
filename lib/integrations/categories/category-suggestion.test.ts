@@ -11,6 +11,7 @@ import { normalizeMerchant } from "./normalize-merchant";
 import {
   buildCategoryHistoryIndex,
   suggestCategoryForDescription,
+  suggestCategoryForImportRow,
   type CategoryHistoryTransaction,
 } from "./category-suggester";
 
@@ -248,5 +249,62 @@ describe("enrichPreviewWithCategorySuggestions", () => {
 
     expect(manual.categoryStatus).toBe("confirmed");
     expect(getConfirmedCategoryForCommit(manual)).toBe("cat-games");
+  });
+});
+
+describe("suggestCategoryForImportRow financial isolation", () => {
+  const index = buildCategoryHistoryIndex(HISTORY);
+  const categories = [
+    ...CATEGORIES,
+    { id: "cat-fees", name: "Tarifas e encargos", type: "expense" as const },
+  ];
+
+  it("does not suggest merchant spend categories for fees/carried/renegotiation", () => {
+    const feeSuggestion = suggestCategoryForImportRow(
+      {
+        source: "nubank_credit_card",
+        sourceLine: 1,
+        date: "2026-07-01",
+        description: "Juros de rotativo",
+        amount: 12,
+        direction: "out",
+        kind: "card_purchase",
+        externalFingerprint: "fp-1",
+        externalId: null,
+        metadata: { nubankStatementLineKind: "INTEREST" },
+        reviewStatus: "ready",
+        historicalStatus: "new",
+        categoryStatus: "none",
+      },
+      index,
+      categories,
+    );
+
+    expect(feeSuggestion?.categoryId).toBe("cat-fees");
+    expect(feeSuggestion?.categoryId).not.toBe("cat-streaming");
+  });
+
+  it("still suggests consumption categories for purchases", () => {
+    const purchase = suggestCategoryForImportRow(
+      {
+        source: "nubank_credit_card",
+        sourceLine: 2,
+        date: "2026-07-01",
+        description: "Netflix.Com",
+        amount: 40,
+        direction: "out",
+        kind: "card_purchase",
+        externalFingerprint: "fp-2",
+        externalId: null,
+        metadata: { nubankStatementLineKind: "PURCHASE" },
+        reviewStatus: "ready",
+        historicalStatus: "new",
+        categoryStatus: "none",
+      },
+      index,
+      categories,
+    );
+
+    expect(purchase?.categoryId).toBe("cat-streaming");
   });
 });

@@ -1,5 +1,12 @@
 import type { CreditCardBillingConfig } from "@/lib/finance/credit-card-billing";
-import { roundMoney } from "@/lib/finance/credit-card-billing";
+import {
+  addMonths,
+  getClosingDateInMonth,
+  getDueDateForClosingDate,
+  getPreviousClosingDate,
+  parseIsoDate,
+  roundMoney,
+} from "@/lib/finance/credit-card-billing";
 import {
   buildImportedStatementCycleDraft,
   type CardStatementCycleUpsertInput,
@@ -15,59 +22,216 @@ import {
   type InvoicePaymentCycleTargetSelection,
   type InvoicePaymentFileCycle,
 } from "@/lib/integrations/invoice-payment/invoice-payment-cycle-target";
-import { shouldExcludeFromNubankCardStatementTotal } from "@/lib/integrations/sources/nubank/payment-detector";
+import {
+  buildNubankStatementInvoiceBreakdown,
+  type NubankStatementInvoiceBreakdown,
+} from "@/lib/integrations/sources/nubank/statement-invoice";
+import {
+  classifyNubankStatementLine,
+  type NubankStatementLineKind,
+} from "@/lib/integrations/sources/nubank/statement-line-kind";
 import type { ImportPreviewRow } from "@/lib/integrations/types";
 
+function resolveRowLineKind(row: ImportPreviewRow): NubankStatementLineKind {
+  const fromMeta = row.metadata?.nubankStatementLineKind;
+  if (
+    typeof fromMeta === "string" &&
+    fromMeta.length > 0 &&
+    fromMeta !== "UNKNOWN"
+  ) {
+    return fromMeta as NubankStatementLineKind;
+  }
+  const signed =
+    row.direction === "in" ? -Math.abs(Number(row.amount)) : Math.abs(Number(row.amount));
+  return classifyNubankStatementLine({
+    title: row.description,
+    amount: signed,
+  });
+}
+
 /**
- * Net bill total from a credit-card CSV: purchases (out) minus non-payment
- * credits/estornos (in). Invoice-payment rows are excluded.
+ * Preliminary issuer bill total from a Nubank CC CSV (typed breakdown).
+ * Used as persisted `amount_due` / import-review "Total da fatura".
  *
- * Also skips Nubank renegotiation accounting (wipe credit + saldo em atraso +
- * new installment) and early-PIX discounts so the total stays closer to the
- * app's "Total da fatura" instead of being crushed by internal bookkeeping.
- *
- * Used as the persisted issuer `amount_due` for the imported statement file.
+ * Payments (`Pagamento recebido`) participate in the total:
+ * - on/before previous due (or explicitly tagged to another due) → prior settlement
+ * - after previous due → reduce this file's amountDue (early/current payments)
+ */
+export function buildCardStatementInvoiceBreakdownFromImportRows(
+  rows: ImportPreviewRow[],
+  invoicePaymentModes: Record<number, InvoicePaymentImportMode> = {},
+  options?: {
+    previousDueDate?: string | null;
+    statementDueDay?: number | null;
+    /** Due date of the statement file cycle being imported. */
+    fileDueDate?: string | null;
+    invoicePaymentCycleTargets?: Record<
+      number,
+      InvoicePaymentCycleTargetSelection
+    >;
+  },
+): NubankStatementInvoiceBreakdown {
+  const targets = options?.invoicePaymentCycleTargets ?? {};
+  const fileDue = options?.fileDueDate?.slice(0, 10) ?? null;
+
+  return buildNubankStatementInvoiceBreakdown({
+    previousDueDate: options?.previousDueDate,
+    statementDueDay: options?.statementDueDay,
+    rows: rows.map((row) => {
+      const mode = getInvoicePaymentImportMode(
+        invoicePaymentModes,
+        row.sourceLine,
+      );
+      const kind = resolveRowLineKind(row);
+      // "common" invoice-payment rows behave as merchant credits for the total.
+      const effectiveKind: NubankStatementLineKind =
+        row.kind === "card_invoice_payment" && mode === "common"
+          ? "CREDIT"
+          : kind;
+
+      const selection = getInvoicePaymentCycleTargetSelection(
+        targets,
+        row.sourceLine,
+      );
+      const targetDue = selection.targetDueDate?.slice(0, 10) ?? null;
+      // Explicit tag to another due → never reduce this file's amountDue.
+      const settlePriorBill =
+        row.kind === "card_invoice_payment" &&
+        mode === "payment" &&
+        Boolean(targetDue) &&
+        Boolean(fileDue) &&
+        targetDue !== fileDue;
+
+      return {
+        date: row.date,
+        description: row.description,
+        amount:
+          row.direction === "in"
+            ? -Math.abs(Number(row.amount))
+            : Math.abs(Number(row.amount)),
+        kind: effectiveKind,
+        include: row.historicalStatus === "new",
+        settlePriorBill,
+      };
+    }),
+  });
+}
+
+/**
+ * Net bill total from a credit-card CSV via typed Nubank statement breakdown.
  */
 export function sumCardStatementPurchasesFromImportRows(
   rows: ImportPreviewRow[],
   invoicePaymentModes: Record<number, InvoicePaymentImportMode> = {},
+  options?: {
+    previousDueDate?: string | null;
+    statementDueDay?: number | null;
+    fileDueDate?: string | null;
+    invoicePaymentCycleTargets?: Record<
+      number,
+      InvoicePaymentCycleTargetSelection
+    >;
+  },
 ): number {
-  let total = 0;
+  return buildCardStatementInvoiceBreakdownFromImportRows(
+    rows,
+    invoicePaymentModes,
+    options,
+  ).amountDue;
+}
 
-  for (const row of rows) {
-    if (row.historicalStatus !== "new") {
+function resolvePreviousDueDateForFileCycle(
+  billingConfig: CreditCardBillingConfig,
+  fileCycle: InvoicePaymentFileCycle | null,
+): string | null {
+  if (!fileCycle) return null;
+  const previousClosing = getPreviousClosingDate(
+    fileCycle.closingDate.slice(0, 10),
+    billingConfig.statementClosingDay,
+  );
+  return getDueDateForClosingDate(
+    previousClosing,
+    billingConfig.statementDueDay,
+  );
+}
+
+function buildPriorCycleEnrichmentUpserts(input: {
+  rows: ImportPreviewRow[];
+  billingConfig: CreditCardBillingConfig;
+  accountId: string;
+  ownerUserId: string;
+  familyId?: string | null;
+  importBatchId?: string | null;
+}): CardStatementCycleUpsertInput[] {
+  const byClosing = new Map<string, CardStatementCycleUpsertInput>();
+
+  for (const row of input.rows) {
+    if (row.historicalStatus !== "new") continue;
+
+    const kind = resolveRowLineKind(row);
+    if (kind !== "PREVIOUS_BALANCE" && kind !== "PENDING_PREVIOUS_MONTH") {
       continue;
     }
 
-    if (
-      row.kind === "card_invoice_payment" &&
-      getInvoicePaymentImportMode(invoicePaymentModes, row.sourceLine) ===
-        "payment"
-    ) {
-      continue;
-    }
+    const amount = roundMoney(Math.abs(Number(row.amount)));
+    if (!Number.isFinite(amount) || amount <= 0.005) continue;
 
-    if (shouldExcludeFromNubankCardStatementTotal(row.description)) {
-      continue;
-    }
+    // Carried line date is typically the prior bill's due date.
+    const dueDate = row.date.slice(0, 10);
+    const closingDate =
+      resolveClosingForDueDate(input.billingConfig, dueDate) ?? dueDate;
+    const cycleDraft = buildImportedStatementCycleDraft({
+      config: input.billingConfig,
+      closingDate,
+      dueDate,
+      amountDue: amount,
+    });
 
-    const amount = Math.abs(Number(row.amount));
-    if (!Number.isFinite(amount)) {
-      continue;
-    }
+    const existing = byClosing.get(cycleDraft.cycleId);
+    const nextAmount =
+      existing?.amountDue != null
+        ? Math.max(Number(existing.amountDue), amount)
+        : amount;
 
-    // Nubank CC: purchases/fees are "out"; estornos/credits are "in".
-    if (row.direction === "out") {
-      total += amount;
-      continue;
-    }
-
-    if (row.direction === "in") {
-      total -= amount;
-    }
+    byClosing.set(cycleDraft.cycleId, {
+      accountId: input.accountId,
+      ownerUserId: input.ownerUserId,
+      familyId: input.familyId ?? null,
+      closingDate: cycleDraft.closingDate,
+      periodStart: cycleDraft.periodStart,
+      periodEnd: cycleDraft.periodEnd,
+      dueDate: cycleDraft.dueDate,
+      amountDue: nextAmount,
+      source: "imported",
+      importBatchId: input.importBatchId ?? null,
+      notes: `Valor carregado do extrato (${kind}) em ${dueDate}.`,
+    });
   }
 
-  return roundMoney(Math.max(0, total));
+  return [...byClosing.values()];
+}
+
+function resolveClosingForDueDate(
+  config: CreditCardBillingConfig,
+  dueDate: string,
+): string | null {
+  const due = dueDate.slice(0, 10);
+  const { year, monthIndex } = parseIsoDate(due);
+
+  for (let offset = 0; offset <= 3; offset += 1) {
+    const month = addMonths(year, monthIndex, -offset);
+    const closing = getClosingDateInMonth(
+      month.year,
+      month.monthIndex,
+      config.statementClosingDay,
+    );
+    if (
+      getDueDateForClosingDate(closing, config.statementDueDay) === due
+    ) {
+      return closing;
+    }
+  }
+  return null;
 }
 
 /**
@@ -98,9 +262,18 @@ export function buildImportedCardStatementCycleUpserts(input: {
     ? input.fileCycle
     : null;
   const byClosing = new Map<string, CardStatementCycleUpsertInput>();
+  const previousDueDate = resolvePreviousDueDateForFileCycle(
+    input.billingConfig,
+    fileCycle,
+  );
   const fileAmountDue =
     input.fileAmountDue == null
-      ? sumCardStatementPurchasesFromImportRows(input.rows, modes)
+      ? sumCardStatementPurchasesFromImportRows(input.rows, modes, {
+          previousDueDate,
+          statementDueDay: input.billingConfig.statementDueDay,
+          fileDueDate: fileCycle?.dueDate ?? null,
+          invoicePaymentCycleTargets: targets,
+        })
       : roundMoney(Number(input.fileAmountDue));
   const trustedFileAmountDue =
     fileAmountDue > 0.005 ? fileAmountDue : null;
@@ -268,6 +441,34 @@ export function buildImportedCardStatementCycleUpserts(input: {
         });
       }
     }
+  }
+
+  // Enrich prior cycles from carried-balance lines (Saldo em atraso / pendente).
+  for (const enrichment of buildPriorCycleEnrichmentUpserts({
+    rows: input.rows,
+    billingConfig: input.billingConfig,
+    accountId: input.accountId,
+    ownerUserId: input.ownerUserId,
+    familyId: input.familyId,
+    importBatchId: input.importBatchId,
+  })) {
+    const existing = byClosing.get(enrichment.closingDate);
+    if (!existing) {
+      byClosing.set(enrichment.closingDate, enrichment);
+      continue;
+    }
+    const existingDue =
+      existing.amountDue == null ? null : Number(existing.amountDue);
+    const enrichDue =
+      enrichment.amountDue == null ? null : Number(enrichment.amountDue);
+    byClosing.set(enrichment.closingDate, {
+      ...existing,
+      amountDue:
+        existingDue != null && enrichDue != null
+          ? Math.max(existingDue, enrichDue)
+          : (enrichDue ?? existingDue),
+      notes: enrichment.notes ?? existing.notes,
+    });
   }
 
   return [...byClosing.values()];
