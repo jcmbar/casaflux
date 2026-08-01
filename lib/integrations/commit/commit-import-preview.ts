@@ -17,6 +17,7 @@ import { buildImportRowIdentityKey } from "../history/row-identity";
 import type {
   InvoicePaymentCycleResolveContext,
   InvoicePaymentCycleTargetSelection,
+  InvoicePaymentFileCycle,
 } from "../invoice-payment/invoice-payment-cycle-target";
 import { hydrateInvoicePaymentCycleTargetSelection } from "../invoice-payment/invoice-payment-cycle-target";
 import { resolveMaterializedImportStatementFileCycle } from "../invoice-payment/infer-import-statement-closing";
@@ -77,13 +78,10 @@ export type CommitImportPreviewInput = {
     "type" | "statement_closing_day" | "statement_due_day"
   > | null;
   /**
-   * Real closing/due of the imported CC statement file.
-   * Prefer due + optional closing + confirmation so closing can be materialized.
+   * Real closing/due/period of the imported CC statement file.
+   * Identity is dueDate; period comes from the CSV when available.
    */
-  statementFileCycle?: {
-    closingDate: string;
-    dueDate: string;
-  } | null;
+  statementFileCycle?: InvoicePaymentFileCycle | null;
   statementDueDate?: string | null;
   statementClosingDate?: string | null;
   confirmLowConfidenceClosing?: boolean;

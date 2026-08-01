@@ -9,6 +9,7 @@ import {
   resolveInvoicePaymentCycleTarget,
   type InvoicePaymentCycleResolveContext,
   type InvoicePaymentCycleTargetSelection,
+  type InvoicePaymentFileCycle,
 } from "../invoice-payment/invoice-payment-cycle-target";
 import {
   getInvoicePaymentImportMode,
@@ -196,13 +197,9 @@ export function getCommitImportValidationError(input: {
   source: string | null;
   invoicePaymentModes?: Record<number, InvoicePaymentImportMode>;
   /**
-   * Legacy full cycle. Prefer `statementDueDate` + `statementClosingDate` +
-   * billing/history inputs so closing can be materialized via inference.
+   * Full file cycle (due + period). Prefer `statementDueDate` when only due is known.
    */
-  statementFileCycle?: {
-    closingDate: string;
-    dueDate: string;
-  } | null;
+  statementFileCycle?: InvoicePaymentFileCycle | null;
   statementDueDate?: string | null;
   statementClosingDate?: string | null;
   confirmLowConfidenceClosing?: boolean;
