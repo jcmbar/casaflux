@@ -13,6 +13,8 @@ export type CreateTransactionInput = {
   userId: string;
   familyId: string | null;
   statementCycleId?: string | null;
+  statementDueDate?: string | null;
+  invoicePaymentOrigin?: "manual" | "imported" | null;
 };
 
 export type CreateTransactionResult =
@@ -25,11 +27,9 @@ export function notifyTransactionsChanged() {
   }
 }
 
-export async function createTransaction(
-  supabase: SupabaseClient,
-  input: CreateTransactionInput,
-): Promise<CreateTransactionResult> {
-  const { error } = await supabase.from("transactions").insert({
+/** Builds the insert row for createTransaction (exported for unit tests). */
+export function buildCreateTransactionInsertRow(input: CreateTransactionInput) {
+  return {
     description: input.description,
     amount: input.amount,
     type: input.type,
@@ -39,7 +39,18 @@ export async function createTransaction(
     created_by: input.userId,
     family_id: input.familyId,
     statement_cycle_id: input.statementCycleId ?? null,
-  });
+    statement_due_date: input.statementDueDate ?? null,
+    invoice_payment_origin: input.invoicePaymentOrigin ?? null,
+  };
+}
+
+export async function createTransaction(
+  supabase: SupabaseClient,
+  input: CreateTransactionInput,
+): Promise<CreateTransactionResult> {
+  const { error } = await supabase
+    .from("transactions")
+    .insert(buildCreateTransactionInsertRow(input));
 
   if (error) {
     console.error(error);

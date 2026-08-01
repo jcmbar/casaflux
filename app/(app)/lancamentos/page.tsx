@@ -148,11 +148,24 @@ import {
 import { sumByType } from "@/lib/finance/dashboard-stats";
 import { formatAccountSelectLabel } from "@/lib/finance/account-identity";
 import {
+  fetchCardStatementCyclesForAccount,
+  type CardStatementCycleRecord,
+} from "@/lib/finance/card-statement-cycles";
+import {
   getCreditCardBillingConfig,
   getTransactionStatementRelation,
   hasCreditCardBillingConfig,
   STATEMENT_CYCLE_RELATION_LABELS,
 } from "@/lib/finance/credit-card-billing";
+import {
+  buildInvoicePaymentDueDateOptions,
+} from "@/lib/integrations/invoice-payment/invoice-payment-cycle-target";
+import {
+  EMPTY_MANUAL_CARD_INVOICE_PAYMENT_FORM_FIELDS,
+  getManualCardInvoicePaymentValidationError,
+  inferManualCardInvoicePaymentFormFields,
+  resolveManualCardInvoicePaymentPersistFields,
+} from "@/lib/finance/manual-card-invoice-payment";
 import {
   isInvoicePaymentCycleEditableRow,
 } from "@/lib/finance/update-invoice-payment-cycle";
@@ -253,6 +266,10 @@ type FormState = {
   occurrencesLimit: string;
   autoConfirm: boolean;
   includeInProjection: boolean;
+  /** Mark card income as invoice payment (no bank debit twin). */
+  isInvoicePayment: boolean;
+  invoiceDueDate: string;
+  invoiceCycleId: string;
 };
 
 type PredictionFormState = {
@@ -574,7 +591,11 @@ function LancamentosPageContent() {
     occurrencesLimit: "",
     autoConfirm: false,
     includeInProjection: true,
+    ...EMPTY_MANUAL_CARD_INVOICE_PAYMENT_FORM_FIELDS,
   });
+  const [formInvoiceCycles, setFormInvoiceCycles] = useState<
+    CardStatementCycleRecord[]
+  >([]);
 
   const scope = useMemo(
     () =>
@@ -1429,6 +1450,78 @@ function LancamentosPageContent() {
     };
   }, [accounts, editingId, transactions]);
 
+  const formSelectedAccount = useMemo(
+    () => accounts.find((account) => account.id === form.accountId) ?? null,
+    [accounts, form.accountId],
+  );
+
+  const formCardBillingConfig = useMemo(
+    () =>
+      formSelectedAccount
+        ? getCreditCardBillingConfig(formSelectedAccount)
+        : null,
+    [formSelectedAccount],
+  );
+
+  const showManualInvoicePaymentOption =
+    form.type === "income" &&
+    !form.isRecurring &&
+    !isEditingRecurrence &&
+    formSelectedAccount?.type === "credit_card" &&
+    Boolean(formCardBillingConfig);
+
+  const formInvoiceDueDateOptions = useMemo(() => {
+    if (!formCardBillingConfig || !form.date) {
+      return [];
+    }
+    return buildInvoicePaymentDueDateOptions(
+      formCardBillingConfig,
+      form.date,
+      { importedCycles: formInvoiceCycles },
+    );
+  }, [form.date, formCardBillingConfig, formInvoiceCycles]);
+
+  useEffect(() => {
+    if (!showManualInvoicePaymentOption || !form.accountId) {
+      setFormInvoiceCycles([]);
+      return;
+    }
+
+    let cancelled = false;
+    void fetchCardStatementCyclesForAccount(supabase, form.accountId).then(
+      (result) => {
+        if (cancelled) return;
+        setFormInvoiceCycles(result.cycles);
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [form.accountId, showManualInvoicePaymentOption, supabase]);
+
+  useEffect(() => {
+    if (showManualInvoicePaymentOption) {
+      return;
+    }
+    if (
+      !form.isInvoicePayment &&
+      !form.invoiceDueDate &&
+      !form.invoiceCycleId
+    ) {
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      ...EMPTY_MANUAL_CARD_INVOICE_PAYMENT_FORM_FIELDS,
+    }));
+  }, [
+    form.invoiceCycleId,
+    form.invoiceDueDate,
+    form.isInvoicePayment,
+    showManualInvoicePaymentOption,
+  ]);
+
   const normalizedCategories = useMemo(
     () =>
       categories.map((category) => ({
@@ -1650,7 +1743,9 @@ function LancamentosPageContent() {
       occurrencesLimit: "",
       autoConfirm: false,
       includeInProjection: true,
+      ...EMPTY_MANUAL_CARD_INVOICE_PAYMENT_FORM_FIELDS,
     });
+    setFormInvoiceCycles([]);
   }
 
   function focusRecurrenceOrigin(recurrenceId: string) {
@@ -1687,6 +1782,7 @@ function LancamentosPageContent() {
           : "",
       autoConfirm: recurrence.autoConfirm,
       includeInProjection: recurrence.includeInProjection,
+      ...EMPTY_MANUAL_CARD_INVOICE_PAYMENT_FORM_FIELDS,
     });
     setOpen(true);
   }
@@ -1756,6 +1852,9 @@ function LancamentosPageContent() {
         accountId: nextFrom,
         toAccountId: nextTo,
         isRecurring: type === "transfer" ? false : current.isRecurring,
+        ...(type === "income"
+          ? {}
+          : EMPTY_MANUAL_CARD_INVOICE_PAYMENT_FORM_FIELDS),
       };
     });
   }
@@ -1785,6 +1884,12 @@ function LancamentosPageContent() {
       occurrencesLimit: "",
       autoConfirm: false,
       includeInProjection: true,
+      ...inferManualCardInvoicePaymentFormFields({
+        type: transaction.type,
+        invoicePaymentOrigin: transaction.invoicePaymentOrigin ?? null,
+        statementDueDate: transaction.statementDueDate ?? null,
+        statementCycleId: transaction.statementCycleId,
+      }),
     });
     setOpen(true);
   }
@@ -2215,6 +2320,43 @@ function LancamentosPageContent() {
       return;
     }
 
+    const invoicePaymentFields = resolveManualCardInvoicePaymentPersistFields({
+      isInvoicePayment:
+        form.type === "income" &&
+        selectedAccount.type === "credit_card" &&
+        form.isInvoicePayment,
+      invoiceDueDate:
+        form.invoiceDueDate ||
+        editingInvoicePaymentRetarget?.currentStatementDueDate ||
+        "",
+      invoiceCycleId:
+        form.invoiceCycleId ||
+        editingInvoicePaymentRetarget?.currentStatementCycleId ||
+        "",
+    });
+
+    if (
+      form.type === "income" &&
+      selectedAccount.type === "credit_card" &&
+      form.isInvoicePayment
+    ) {
+      const invoiceError = getManualCardInvoicePaymentValidationError({
+        isInvoicePayment: true,
+        invoiceDueDate:
+          form.invoiceDueDate ||
+          editingInvoicePaymentRetarget?.currentStatementDueDate ||
+          "",
+        invoiceCycleId:
+          form.invoiceCycleId ||
+          editingInvoicePaymentRetarget?.currentStatementCycleId ||
+          "",
+      });
+      if (invoiceError) {
+        toast.error(invoiceError);
+        return;
+      }
+    }
+
     setSaving(true);
 
     const payload = {
@@ -2226,6 +2368,9 @@ function LancamentosPageContent() {
       transaction_date: form.date,
       created_by: user.id,
       family_id: selectedAccount.family_id,
+      statement_cycle_id: invoicePaymentFields.statementCycleId,
+      statement_due_date: invoicePaymentFields.statementDueDate,
+      invoice_payment_origin: invoicePaymentFields.invoicePaymentOrigin,
     };
 
     if (isEditingRecurrence && editingRecurrenceId) {
@@ -2307,6 +2452,9 @@ function LancamentosPageContent() {
           category_id: payload.category_id,
           account_id: payload.account_id,
           transaction_date: payload.transaction_date,
+          statement_cycle_id: payload.statement_cycle_id,
+          statement_due_date: payload.statement_due_date,
+          invoice_payment_origin: payload.invoice_payment_origin,
         })
         .eq("id", editingId);
 
@@ -2352,6 +2500,9 @@ function LancamentosPageContent() {
         transactionDate: payload.transaction_date,
         userId: user.id,
         familyId: selectedAccount.family_id,
+        statementCycleId: payload.statement_cycle_id,
+        statementDueDate: payload.statement_due_date,
+        invoicePaymentOrigin: payload.invoice_payment_origin,
       });
 
       if (!result.ok) {
@@ -3180,6 +3331,7 @@ function LancamentosPageContent() {
                         setForm((current) => ({
                           ...current,
                           accountId: event.target.value,
+                          ...EMPTY_MANUAL_CARD_INVOICE_PAYMENT_FORM_FIELDS,
                         }))
                       }
                     >
@@ -3215,6 +3367,89 @@ function LancamentosPageContent() {
                 </div>
               )}
 
+              {showManualInvoicePaymentOption ? (
+                <div
+                  className="space-y-3 rounded-xl border border-border/50 bg-muted/20 p-4"
+                  data-testid="manual-invoice-payment-fields"
+                >
+                  <label className="flex items-start gap-3">
+                    <input
+                      id="is-invoice-payment"
+                      type="checkbox"
+                      checked={form.isInvoicePayment}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setForm((current) => {
+                          if (!checked) {
+                            return {
+                              ...current,
+                              ...EMPTY_MANUAL_CARD_INVOICE_PAYMENT_FORM_FIELDS,
+                            };
+                          }
+                          const recommended =
+                            formInvoiceDueDateOptions.find(
+                              (option) => option.recommended,
+                            ) ?? formInvoiceDueDateOptions[0];
+                          return {
+                            ...current,
+                            isInvoicePayment: true,
+                            invoiceDueDate:
+                              current.invoiceDueDate ||
+                              recommended?.dueDate ||
+                              "",
+                            invoiceCycleId:
+                              current.invoiceCycleId ||
+                              recommended?.cycleId ||
+                              "",
+                          };
+                        });
+                      }}
+                      className="mt-0.5 size-4 rounded border-input accent-primary"
+                      data-testid="manual-invoice-payment-checkbox"
+                    />
+                    <span className="space-y-0.5">
+                      <span className="block text-sm font-medium">
+                        Contar como pagamento de fatura
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        Aparece na fatura escolhida e reduz o valor a pagar. Não
+                        debita conta bancária — use “Pagar fatura” para o fluxo
+                        completo.
+                      </span>
+                    </span>
+                  </label>
+
+                  {form.isInvoicePayment && !editingInvoicePaymentRetarget ? (
+                    <FormSelect
+                      id="invoice-due-date"
+                      label="Fatura"
+                      value={form.invoiceDueDate}
+                      onChange={(event) => {
+                        const dueDate = event.target.value;
+                        const option = formInvoiceDueDateOptions.find(
+                          (item) => item.dueDate === dueDate,
+                        );
+                        setForm((current) => ({
+                          ...current,
+                          invoiceDueDate: dueDate,
+                          invoiceCycleId: option?.cycleId ?? "",
+                        }));
+                      }}
+                      required
+                      data-testid="manual-invoice-payment-due-date"
+                    >
+                      <option value="">Selecione a fatura</option>
+                      {formInvoiceDueDateOptions.map((option) => (
+                        <option key={option.dueDate} value={option.dueDate}>
+                          {option.summaryLine}
+                          {option.recommended ? " · sugerida" : ""}
+                        </option>
+                      ))}
+                    </FormSelect>
+                  ) : null}
+                </div>
+              ) : null}
+
               {isEditing && editingInvoicePaymentRetarget ? (
                 <InvoicePaymentCycleRetargetControl
                   transactionId={editingInvoicePaymentRetarget.transactionId}
@@ -3231,7 +3466,14 @@ function LancamentosPageContent() {
                   settlementTransactions={
                     editingInvoicePaymentRetarget.settlementTransactions
                   }
-                  onUpdated={() => {
+                  importedCycles={formInvoiceCycles}
+                  onUpdated={(result) => {
+                    setForm((current) => ({
+                      ...current,
+                      isInvoicePayment: true,
+                      invoiceDueDate: result.statementDueDate,
+                      invoiceCycleId: result.statementCycleId,
+                    }));
                     void loadData();
                   }}
                 />
