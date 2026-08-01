@@ -104,4 +104,81 @@ describe("buildImportFinancialSummary", () => {
       isCreditCardStatement: true,
     });
   });
+
+  it("ignores renegotiation package and early-PIX discount in invoice total", () => {
+    // Mirrors the Nu crédito 04.csv distortion: wipe credit + saldo/installment
+    // previously crushed Total da fatura to ~551 instead of ~1.5k+.
+    const rows = [
+      buildRow({
+        sourceLine: 1,
+        kind: "card_purchase",
+        direction: "out",
+        amount: 598.78,
+        description: "Jeniffer Calmon Muniz Calvo",
+      }),
+      buildRow({
+        sourceLine: 2,
+        kind: "card_purchase",
+        direction: "in",
+        amount: 12.28,
+        description: "Estorno de juros de rotativo",
+      }),
+      buildRow({
+        sourceLine: 3,
+        kind: "card_purchase",
+        direction: "in",
+        amount: 3001.06,
+        description: "Renegociação de pendências (02/Abril)",
+      }),
+      buildRow({
+        sourceLine: 4,
+        kind: "card_purchase",
+        direction: "out",
+        amount: 835.6,
+        description: "Renegociação de pendências (02/Abril) - 1/5",
+      }),
+      buildRow({
+        sourceLine: 5,
+        kind: "card_purchase",
+        direction: "out",
+        amount: 1244.73,
+        description: "Saldo em atraso",
+      }),
+      buildRow({
+        sourceLine: 6,
+        kind: "card_purchase",
+        direction: "in",
+        amount: 52.26,
+        description:
+          "Desconto de antecipação de pagamento de pix (Jeniffer Calmon Muniz Calvo)",
+      }),
+      buildRow({
+        sourceLine: 7,
+        kind: "card_invoice_payment",
+        direction: "in",
+        amount: 600,
+        description: "Pagamento recebido",
+      }),
+      buildRow({
+        sourceLine: 8,
+        kind: "card_purchase",
+        direction: "out",
+        amount: 50,
+        description: "Vivo Easy*Vivo Easy",
+      }),
+    ];
+
+    expect(
+      buildImportFinancialSummary({
+        rows,
+        source: "nubank_credit_card",
+      }),
+    ).toEqual({
+      // 598.78 + 50 − 12.28 (estorno kept); renegotiation + early-PIX skipped
+      invoiceTotal: 636.5,
+      paymentsTotal: 600,
+      paymentCount: 1,
+      isCreditCardStatement: true,
+    });
+  });
 });

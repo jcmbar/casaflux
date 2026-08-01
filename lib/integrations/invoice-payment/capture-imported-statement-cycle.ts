@@ -15,11 +15,17 @@ import {
   type InvoicePaymentCycleTargetSelection,
   type InvoicePaymentFileCycle,
 } from "@/lib/integrations/invoice-payment/invoice-payment-cycle-target";
+import { shouldExcludeFromNubankCardStatementTotal } from "@/lib/integrations/sources/nubank/payment-detector";
 import type { ImportPreviewRow } from "@/lib/integrations/types";
 
 /**
  * Net bill total from a credit-card CSV: purchases (out) minus non-payment
  * credits/estornos (in). Invoice-payment rows are excluded.
+ *
+ * Also skips Nubank renegotiation accounting (wipe credit + saldo em atraso +
+ * new installment) and early-PIX discounts so the total stays closer to the
+ * app's "Total da fatura" instead of being crushed by internal bookkeeping.
+ *
  * Used as the persisted issuer `amount_due` for the imported statement file.
  */
 export function sumCardStatementPurchasesFromImportRows(
@@ -38,6 +44,10 @@ export function sumCardStatementPurchasesFromImportRows(
       getInvoicePaymentImportMode(invoicePaymentModes, row.sourceLine) ===
         "payment"
     ) {
+      continue;
+    }
+
+    if (shouldExcludeFromNubankCardStatementTotal(row.description)) {
       continue;
     }
 

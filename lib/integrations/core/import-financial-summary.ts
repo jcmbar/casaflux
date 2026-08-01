@@ -7,7 +7,10 @@ import {
 import type { ImportPreviewRow, ImportSource } from "@/lib/integrations/types";
 
 export type ImportFinancialSummary = {
-  /** Net purchases for the statement file (excludes invoice payments). */
+  /**
+   * Net statement total for the CSV (purchases − merchant credits/estornos).
+   * Excludes invoice payments and Nubank renegotiation / early-PIX bookkeeping.
+   */
   invoiceTotal: number;
   /** Sum of credits treated as invoice payments. */
   paymentsTotal: number;
